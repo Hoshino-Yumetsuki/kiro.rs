@@ -5,6 +5,7 @@
 ### Changed
 - **上游兼容性与请求头对齐** — MCP 请求按认证类型补充 `x-amzn-kiro-profile-arn`，对齐 Token 刷新与额度查询的 `User-Agent` / `x-amz-user-agent` 生成逻辑，升级 provider UA 版本并同步默认 Kiro/Node 版本；同时保持 IDC / Builder ID 场景不发送 `profileArn` 以避免 403 (`src/kiro/provider.rs`, `src/kiro/token_manager.rs`, `src/model/config.rs`)
 - **前端依赖锁文件纳管与 Anthropic 模块整洁度提升** — 取消忽略 `admin-ui/pnpm-lock.yaml` 以保证 pnpm 依赖可复现，并将 `converter` / `handlers` / `stream` 的内部上下文与 usage 参数收口，清理 clippy 基线而不改变现有行为 (`.gitignore`, `admin-ui/pnpm-lock.yaml`, `src/anthropic/converter.rs`, `src/anthropic/handlers.rs`, `src/anthropic/stream.rs`)
+- **新增 Opus 4.7 模型列表与映射支持** — `/v1/models` 现已暴露 `claude-opus-4-7` 及其 `thinking` / `agentic` 变体，并在 Anthropic→Kiro 模型映射中补齐 `claude-opus-4-7` / `claude-opus-4.7` 解析与对应回归测试，保持与现有 Opus 4.6 用法一致 (`src/anthropic/handlers.rs`, `src/anthropic/converter.rs`)
 
 ## [v1.1.19] - 2026-04-04
 
