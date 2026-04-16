@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [v1.1.20] - 2026-04-16
 
 ### Changed
 - **上游兼容性与请求头对齐** — MCP 请求按认证类型补充 `x-amzn-kiro-profile-arn`，对齐 Token 刷新与额度查询的 `User-Agent` / `x-amz-user-agent` 生成逻辑，升级 provider UA 版本并同步默认 Kiro/Node 版本；同时保持 IDC / Builder ID 场景不发送 `profileArn` 以避免 403 (`src/kiro/provider.rs`, `src/kiro/token_manager.rs`, `src/model/config.rs`)
