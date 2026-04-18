@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [v1.1.23] - 2026-04-18
 
 ### Changed
 - **Admin UI 支持即时配置 Prompt Cache 与凭据节流** — 全局配置弹窗新增 `credentialRpm`、`promptCacheTtlSeconds`（仅支持 5 分钟/1 小时两档）与 `promptCacheAccountingEnabled` 的前端回显与保存；Admin `/config/global` 同步暴露这三个字段，并将 Prompt Cache 改为共享运行时热更新，保存后新请求立即按最新 TTL 与记账开关生效 (`admin-ui/src/components/global-config-dialog.tsx`, `admin-ui/src/types/api.ts`, `src/admin/types.rs`, `src/admin/service.rs`, `src/anthropic/middleware.rs`, `src/anthropic/handlers.rs`, `src/anthropic/router.rs`, `src/main.rs`)
