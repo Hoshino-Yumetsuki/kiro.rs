@@ -1,5 +1,10 @@
 # Changelog
 
+## [v1.1.29] - 2026-05-08
+
+### Fixed
+- **前端依赖升级与构建兼容性修复** — 升级全部前端依赖至最新版本（React 19.2.6、TypeScript 6.0.3、Vite 8.0.11、Tailwind CSS 4.2.4 等），修复 pnpm build scripts 审批导致的安装失败，适配 TypeScript 6.0 废弃警告，新增 CSS 类型声明文件 (`admin-ui/package.json`, `admin-ui/tsconfig.json`, `admin-ui/src/vite-env.d.ts`, `Dockerfile`)
+
 ## [v1.1.28] - 2026-05-08
 
 ### Fixed
