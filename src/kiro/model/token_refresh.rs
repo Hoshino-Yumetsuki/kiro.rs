@@ -42,5 +42,6 @@ pub struct IdcRefreshResponse {
     #[serde(default)]
     pub expires_in: Option<i64>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub profile_arn: Option<String>,
 }
