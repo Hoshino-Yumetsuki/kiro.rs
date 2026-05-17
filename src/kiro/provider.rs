@@ -288,8 +288,7 @@ impl KiroProvider {
             };
 
             let config = self.token_manager.config();
-            let machine_id = machine_id::generate_from_credentials(&ctx.credentials, &config)
-                .ok_or_else(|| anyhow::anyhow!("无法生成 machine_id，请检查凭证配置"))?;
+            let machine_id = machine_id::generate_from_credentials(&ctx.credentials, &config);
             let endpoint = match self.endpoint_for(&ctx.credentials) {
                 Ok(endpoint) => endpoint,
                 Err(e) => {
@@ -554,8 +553,7 @@ impl KiroProvider {
             };
 
             let config = self.token_manager.config();
-            let machine_id = machine_id::generate_from_credentials(&ctx.credentials, &config)
-                .ok_or_else(|| anyhow::anyhow!("无法生成 machine_id，请检查凭证配置"))?;
+            let machine_id = machine_id::generate_from_credentials(&ctx.credentials, &config);
             let endpoint = match self.endpoint_for(&ctx.credentials) {
                 Ok(endpoint) => endpoint,
                 Err(e) => {

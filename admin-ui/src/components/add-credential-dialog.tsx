@@ -66,7 +66,6 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
         toast.error('请输入 Refresh Token')
         return
       }
-
       if (authMethod === 'idc' && (!clientId.trim() || !clientSecret.trim())) {
         toast.error('IdC/Builder-ID/IAM 认证需要填写 Client ID 和 Client Secret')
         return
@@ -159,6 +158,40 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
                 <option value="api_key">API Key</option>
               </select>
             </div>
+
+            {/* Kiro API Key (API Key 模式) */}
+            {isApiKey && (
+              <div className="space-y-2">
+                <label htmlFor="kiroApiKey" className="text-sm font-medium">
+                  Kiro API Key <span className="text-red-500">*</span>
+                </label>
+                <Input
+                  id="kiroApiKey"
+                  type="password"
+                  placeholder="格式: ksk_xxxxxxxx"
+                  value={kiroApiKey}
+                  onChange={(e) => setKiroApiKey(e.target.value)}
+                  disabled={isPending}
+                />
+              </div>
+            )}
+
+            {/* Refresh Token (OAuth 模式) */}
+            {!isApiKey && (
+              <div className="space-y-2">
+                <label htmlFor="refreshToken" className="text-sm font-medium">
+                  Refresh Token <span className="text-red-500">*</span>
+                </label>
+                <Input
+                  id="refreshToken"
+                  type="password"
+                  placeholder="请输入 Refresh Token"
+                  value={refreshToken}
+                  onChange={(e) => setRefreshToken(e.target.value)}
+                  disabled={isPending}
+                />
+              </div>
+            )}
 
             {/* Region 配置 */}
             <div className="space-y-2">

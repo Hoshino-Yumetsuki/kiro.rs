@@ -20,6 +20,8 @@ export interface CredentialStatusItem {
   email?: string
   refreshTokenHash?: string
   subscriptionTitle?: string | null
+  apiKeyHash?: string
+  maskedApiKey?: string
 
   // ===== 统计（可持久化） =====
   callsTotal: number

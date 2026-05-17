@@ -77,6 +77,7 @@ pub struct McpArguments {
 
 /// MCP 响应
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct McpResponse {
     pub error: Option<McpError>,
     #[allow(dead_code)]
@@ -95,6 +96,7 @@ pub struct McpError {
 
 /// MCP 结果
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct McpResult {
     pub content: Vec<McpContent>,
     #[serde(rename = "isError")]

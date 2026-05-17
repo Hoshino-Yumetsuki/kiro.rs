@@ -61,17 +61,21 @@ async fn main() {
     if let Ok(kiro_api_key) = std::env::var("KIRO_API_KEY")
         && !kiro_api_key.trim().is_empty()
     {
-        tracing::info!("检测到 KIRO_API_KEY 环境变量，添加 API Key 凭据（最高优先级）");
-        credentials_list.insert(
-            0,
-            KiroCredentials {
-                kiro_api_key: Some(kiro_api_key),
-                auth_method: Some("api_key".to_string()),
-                priority: u32::MIN,
-                runtime_only: true,
-                ..Default::default()
-            },
-        );
+        if kiro_api_key.is_empty() {
+            tracing::warn!("KIRO_API_KEY 环境变量已设置但为空，视为未配置");
+        } else {
+            tracing::info!("检测到 KIRO_API_KEY 环境变量，添加 API Key 凭据（最高优先级）");
+            credentials_list.insert(
+                0,
+                KiroCredentials {
+                    kiro_api_key: Some(kiro_api_key),
+                    auth_method: Some("api_key".to_string()),
+                    priority: u32::MIN,
+                    runtime_only: true,
+                    ..Default::default()
+                },
+            );
+        }
     }
 
     tracing::info!("已加载 {} 个凭据配置", credentials_list.len());
@@ -193,7 +197,7 @@ async fn main() {
         config.read().prompt_cache_accounting_enabled,
     )));
 
-    // 构建 Anthropic API 路由（从第一个凭据获取 profile_arn）
+    // 构建 Anthropic API 路由（profile_arn 由 provider 层根据实际凭据动态注入）
     let anthropic_app = anthropic::create_router_with_provider(
         &api_key,
         Some(kiro_provider.clone()),

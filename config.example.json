@@ -9,6 +9,7 @@
   "credentialRpm": 5,
   "promptCacheTtlSeconds": 300,
   "promptCacheAccountingEnabled": true,
+  "extractThinking": true,
   "compression": {
     "maxRequestBodyBytes": 4718592
   }

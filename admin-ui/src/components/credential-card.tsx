@@ -228,6 +228,20 @@ export function CredentialCard({
                 {credential.disabled && (
                   <Badge variant="destructive">已禁用</Badge>
                 )}
+                {credential.disabled && credential.disabledReason && (
+                  <Badge variant="outline">{credential.disabledReason}</Badge>
+                )}
+                {credential.authMethod && (
+                  <Badge variant="secondary">
+                    {credential.authMethod === 'api_key' ? 'API Key' :
+                     credential.authMethod === 'idc' ? 'IdC' :
+                     credential.authMethod === 'social' ? 'Social' :
+                     credential.authMethod}
+                  </Badge>
+                )}
+                {credential.endpoint && (
+                  <Badge variant="outline">{credential.endpoint}</Badge>
+                )}
               </CardTitle>
             </div>
             <div className="flex items-center gap-2">
@@ -297,6 +311,12 @@ export function CredentialCard({
               )}
             </div>
             <div>
+              <span className="text-muted-foreground">刷新失败：</span>
+              <span className={credential.refreshFailureCount > 0 ? 'text-red-500 font-medium' : ''}>
+                {credential.refreshFailureCount}
+              </span>
+            </div>
+            <div>
               <span className="text-muted-foreground">订阅等级：</span>
               <span className="font-medium">
                 {loadingBalance ? (
@@ -316,6 +336,12 @@ export function CredentialCard({
               <div className="col-span-2">
                 <span className="text-muted-foreground">禁用原因：</span>
                 <span className="font-medium">{credential.disabledReason}</span>
+              </div>
+            )}
+            {credential.maskedApiKey && (
+              <div className="col-span-2">
+                <span className="text-muted-foreground">API Key：</span>
+                <span className="font-mono font-medium">{credential.maskedApiKey}</span>
               </div>
             )}
             <div className="col-span-2">
@@ -476,10 +502,20 @@ export function CredentialCard({
               size="sm"
               variant="outline"
               onClick={handleReset}
-              disabled={resetFailure.isPending || credential.failureCount === 0}
+              disabled={resetFailure.isPending || (credential.failureCount === 0 && credential.refreshFailureCount === 0)}
             >
               <RefreshCw className="h-4 w-4 mr-1" />
               重置失败
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleForceRefresh}
+              disabled={forceRefresh.isPending || credential.disabled || credential.authMethod === 'api_key'}
+              title={credential.authMethod === 'api_key' ? 'API Key 凭据无需刷新 Token' : credential.disabled ? '已禁用的凭据无法刷新 Token' : '强制刷新 Token'}
+            >
+              <RefreshCw className={`h-4 w-4 mr-1 ${forceRefresh.isPending ? 'animate-spin' : ''}`} />
+              刷新 Token
             </Button>
             <Button
               size="sm"

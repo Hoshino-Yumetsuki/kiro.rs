@@ -277,8 +277,7 @@ async fn refresh_social_token(
 
     let refresh_url = format!("https://prod.{}.auth.desktop.kiro.dev/refreshToken", region);
     let refresh_domain = format!("prod.{}.auth.desktop.kiro.dev", region);
-    let machine_id = machine_id::generate_from_credentials(credentials, config)
-        .ok_or_else(|| anyhow::anyhow!("无法生成 machineId"))?;
+    let machine_id = machine_id::generate_from_credentials(credentials, config);
     let kiro_version = &config.kiro_version;
 
     let client = build_client(proxy, 60, config.tls_backend)?;
@@ -458,8 +457,7 @@ pub(crate) async fn get_usage_limits(
         "正在获取使用额度信息..."
     );
 
-    let machine_id = machine_id::generate_from_credentials(credentials, config)
-        .ok_or_else(|| anyhow::anyhow!("无法生成 machineId"))?;
+    let machine_id = machine_id::generate_from_credentials(credentials, config);
     let endpoint = endpoint_for_credentials(credentials, config)?;
     let ctx = RequestContext {
         credentials,
@@ -849,10 +847,9 @@ impl MultiTokenManager {
                     }
                     id
                 });
-                if cred.machine_id.is_none()
-                    && let Some(machine_id) =
-                        machine_id::generate_from_credentials(&cred, config_ref)
-                {
+                if cred.machine_id.is_none() {
+                    let machine_id =
+                        machine_id::generate_from_credentials(&cred, config_ref);
                     cred.machine_id = Some(machine_id);
                     if !cred.runtime_only {
                         has_new_machine_ids = true;

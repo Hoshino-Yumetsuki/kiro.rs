@@ -1,5 +1,6 @@
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -101,6 +102,20 @@ pub struct Config {
     /// 默认端点名称（凭据未显式指定 endpoint 时使用）
     #[serde(default = "default_endpoint")]
     pub default_endpoint: String,
+
+    /// 是否开启非流式响应的 thinking 块提取（默认 true）
+    ///
+    /// 启用后，非流式响应中的 `<thinking>...</thinking>` 标签会被解析为
+    /// 独立的 `{"type": "thinking", ...}` 内容块,与流式响应行为一致。
+    #[serde(default = "default_extract_thinking")]
+    pub extract_thinking: bool,
+
+    /// 端点特定的配置
+    ///
+    /// 键为端点名（如 "ide" / "cli"），值为该端点自由定义的参数对象。
+    /// 未在此表出现的端点沿用实现内置默认值。
+    #[serde(default)]
+    pub endpoints: HashMap<String, serde_json::Value>,
 
     /// 配置文件路径（运行时元数据，不写入 JSON）
     #[serde(skip)]
@@ -282,6 +297,10 @@ impl Default for CompressionConfig {
     }
 }
 
+fn default_extract_thinking() -> bool {
+    true
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -306,7 +325,9 @@ impl Default for Config {
             compression: CompressionConfig::default(),
             prompt_cache_ttl_seconds: default_prompt_cache_ttl_seconds(),
             prompt_cache_accounting_enabled: default_true(),
+            extract_thinking: default_extract_thinking(),
             default_endpoint: default_endpoint(),
+            endpoints: HashMap::new(),
             config_path: None,
         }
     }

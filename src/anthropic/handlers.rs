@@ -1767,7 +1767,8 @@ mod tests {
     use super::*;
     use crate::anthropic::types::{Message, SystemMessage};
     use crate::kiro::model::requests::conversation::{
-        ConversationState, CurrentMessage, KiroImage, Message as KiroMessage, UserInputMessage,
+        ConversationState, CurrentMessage, HistoryUserMessage, KiroImage,
+        Message as KiroMessage, UserInputMessage,
     };
 
     fn sample_messages_request() -> MessagesRequest {
@@ -1991,7 +1992,7 @@ mod tests {
                     UserInputMessage::new("current", "model")
                         .with_images(vec![KiroImage::from_base64("png", big.clone())]),
                 ))
-                .with_history(vec![KiroMessage::user("history", "model")]),
+                .with_history(vec![KiroMessage::User(HistoryUserMessage::new("history", "model"))]),
             profile_arn: None,
         };
         if let KiroMessage::User(user) = &mut kiro_request.conversation_state.history[0] {

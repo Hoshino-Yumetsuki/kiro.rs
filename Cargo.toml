@@ -11,11 +11,13 @@ strip = true
 default = []
 # 显式启用才允许打印潜在敏感信息（仅用于排障）
 sensitive-logs = []
+# 使用 native-tls 替代 rustls（通过 config.json tlsBackend 切换）
+native-tls = ["reqwest/native-tls-vendored"]
 
 [dependencies]
 axum = "0.8"
-tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
-reqwest = { version = "0.12", default-features = false, features = ["stream", "json", "socks", "rustls-tls"] }
+tokio = { version = "1.0", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["stream", "json", "socks", "rustls-tls-webpki-roots", "rustls-tls-native-roots", "http2", "system-proxy", "charset"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_cbor = "0.11"   # CBOR 编解码（Web Portal API）
