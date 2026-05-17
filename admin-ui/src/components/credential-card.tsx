@@ -511,10 +511,10 @@ export function CredentialCard({
               size="sm"
               variant="outline"
               onClick={handleForceRefresh}
-              disabled={forceRefresh.isPending || credential.disabled || credential.authMethod === 'api_key'}
+              disabled={forceRefreshToken.isPending || credential.disabled || credential.authMethod === 'api_key'}
               title={credential.authMethod === 'api_key' ? 'API Key 凭据无需刷新 Token' : credential.disabled ? '已禁用的凭据无法刷新 Token' : '强制刷新 Token'}
             >
-              <RefreshCw className={`h-4 w-4 mr-1 ${forceRefresh.isPending ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-4 w-4 mr-1 ${forceRefreshToken.isPending ? 'animate-spin' : ''}`} />
               刷新 Token
             </Button>
             <Button

@@ -230,7 +230,7 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
               authMethod: 'api_key',
               kiroApiKey: cred.kiroApiKey?.trim(),
               priority: cred.priority || 0,
-              authRegion: cred.authRegion?.trim() || cred.region?.trim() || undefined,
+              region: cred.authRegion?.trim() || cred.region?.trim() || undefined,
               apiRegion: cred.apiRegion?.trim() || undefined,
               machineId: cred.machineId?.trim() || undefined,
               endpoint: cred.endpoint?.trim() || undefined,
@@ -276,7 +276,7 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
           const addedCred = await addCredential({
             refreshToken: token,
             authMethod,
-            authRegion: cred.authRegion?.trim() || cred.region?.trim() || undefined,
+            region: cred.authRegion?.trim() || cred.region?.trim() || undefined,
             apiRegion: cred.apiRegion?.trim() || undefined,
             clientId,
             clientSecret,
@@ -426,7 +426,7 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
               value={jsonInput}
               onChange={(e) => setJsonInput(e.target.value)}
               disabled={importing}
-              className="flex min-h-[200px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 font-mono"
+              className="flex min-h-50 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 font-mono"
             />
             <p className="text-xs text-muted-foreground">
               💡 导入时自动验活，失败的凭据会被排除
@@ -468,7 +468,7 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
               </div>
 
               {/* 结果列表 */}
-              <div className="border rounded-md divide-y max-h-[300px] overflow-y-auto">
+              <div className="border rounded-md divide-y max-h-75 overflow-y-auto">
                 {results.map((result) => (
                   <div key={result.index} className="p-3">
                     <div className="flex items-start gap-3">

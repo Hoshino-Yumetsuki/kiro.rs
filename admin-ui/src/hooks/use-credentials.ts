@@ -148,17 +148,6 @@ export function useResetFailure() {
   })
 }
 
-// 强制刷新 Token
-export function useForceRefreshToken() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (id: number) => forceRefreshToken(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['credentials'] })
-    },
-  })
-}
-
 // 添加新凭据
 export function useAddCredential() {
   const queryClient = useQueryClient()
