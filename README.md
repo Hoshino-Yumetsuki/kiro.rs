@@ -203,6 +203,7 @@ docker-compose up
 | `promptCacheTtlSeconds` | number | `300` | 本地 Prompt Cache TTL（秒） |
 | `promptCacheAccountingEnabled` | boolean | `true` | 是否启用本地 Prompt Cache usage 记账；关闭后不再输出或扣减 cache token |
 | `extractThinking` | boolean | `true` | 非流式响应的 thinking 块提取。启用后 `<thinking>` 标签会被解析为独立的 `thinking` 内容块 |
+| `enableCredentialCooldown` | boolean | `true` | 是否启用凭据冷却机制。禁用后 429 限流不会触发冷却，仍会尝试故障转移 |
 | `defaultEndpoint` | string | `ide` | 默认 Kiro 端点。凭据未显式指定 `endpoint` 时使用。当前支持：`ide` |
 
 完整配置示例：

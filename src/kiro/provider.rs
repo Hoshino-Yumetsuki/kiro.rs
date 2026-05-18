@@ -885,6 +885,15 @@ impl KiroProvider {
         body: &str,
         retry_after: Option<Duration>,
     ) -> Duration {
+        let config = self.token_manager.config();
+        if !config.enable_credential_cooldown {
+            tracing::warn!(
+                credential_id = %credential_id,
+                "凭据触发 429 限流，但冷却已禁用，将尝试切换其他凭据"
+            );
+            return Duration::from_secs(0);
+        }
+
         let cooldown = self.token_manager.set_credential_cooldown_with_duration(
             credential_id,
             crate::kiro::cooldown::CooldownReason::RateLimitExceeded,

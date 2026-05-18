@@ -110,6 +110,12 @@ pub struct Config {
     #[serde(default = "default_extract_thinking")]
     pub extract_thinking: bool,
 
+    /// 是否启用凭据冷却机制（默认 true）
+    ///
+    /// 禁用后，429 限流响应不会触发凭据冷却，仍会尝试故障转移到其他凭据。
+    #[serde(default = "default_true")]
+    pub enable_credential_cooldown: bool,
+
     /// 端点特定的配置
     ///
     /// 键为端点名（如 "ide" / "cli"），值为该端点自由定义的参数对象。
@@ -326,6 +332,7 @@ impl Default for Config {
             prompt_cache_ttl_seconds: default_prompt_cache_ttl_seconds(),
             prompt_cache_accounting_enabled: default_true(),
             extract_thinking: default_extract_thinking(),
+            enable_credential_cooldown: default_true(),
             default_endpoint: default_endpoint(),
             endpoints: HashMap::new(),
             config_path: None,
