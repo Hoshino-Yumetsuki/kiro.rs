@@ -3,7 +3,7 @@ name: Build and Push to GHCR
 on:
   push:
     branches:
-      - main
+      - master
   workflow_dispatch:
 
 env:
