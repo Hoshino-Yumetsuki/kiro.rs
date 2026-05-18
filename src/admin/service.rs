@@ -818,6 +818,7 @@ impl AdminService {
             prompt_cache_ttl_seconds: config.prompt_cache_ttl_seconds,
             prompt_cache_accounting_enabled: config.prompt_cache_accounting_enabled,
             default_endpoint: config.default_endpoint.clone(),
+            enable_credential_cooldown: config.enable_credential_cooldown,
             compression: super::types::CompressionConfigResponse {
                 enabled: c.enabled,
                 whitespace_compression: c.whitespace_compression,
@@ -889,6 +890,10 @@ impl AdminService {
                     )));
                 }
                 config.default_endpoint = trimmed.to_string();
+            }
+
+            if let Some(enabled) = req.enable_credential_cooldown {
+                config.enable_credential_cooldown = enabled;
             }
 
             if let Some(c) = &req.compression {
@@ -1053,6 +1058,7 @@ mod tests {
             prompt_cache_ttl_seconds: None,
             prompt_cache_accounting_enabled: None,
             default_endpoint: Some("cli".to_string()),
+            enable_credential_cooldown: None,
             compression: None,
         };
 
@@ -1077,6 +1083,7 @@ mod tests {
             prompt_cache_ttl_seconds: None,
             prompt_cache_accounting_enabled: None,
             default_endpoint: Some("".to_string()),
+            enable_credential_cooldown: None,
             compression: None,
         };
 
@@ -1100,6 +1107,7 @@ mod tests {
             prompt_cache_ttl_seconds: None,
             prompt_cache_accounting_enabled: None,
             default_endpoint: Some("   ".to_string()),
+            enable_credential_cooldown: None,
             compression: None,
         };
 
@@ -1123,6 +1131,7 @@ mod tests {
             prompt_cache_ttl_seconds: None,
             prompt_cache_accounting_enabled: None,
             default_endpoint: Some("unknown".to_string()),
+            enable_credential_cooldown: None,
             compression: None,
         };
 
@@ -1143,6 +1152,7 @@ mod tests {
             prompt_cache_ttl_seconds: None,
             prompt_cache_accounting_enabled: None,
             default_endpoint: Some("  cli  ".to_string()),
+            enable_credential_cooldown: None,
             compression: None,
         };
 

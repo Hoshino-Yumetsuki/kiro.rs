@@ -34,6 +34,7 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
   const [promptCacheTtlSeconds, setPromptCacheTtlSeconds] = useState('300')
   const [promptCacheAccountingEnabled, setPromptCacheAccountingEnabled] = useState(true)
   const [defaultEndpoint, setDefaultEndpoint] = useState('ide')
+  const [enableCredentialCooldown, setEnableCredentialCooldown] = useState(true)
 
   // 代理设置
   const [proxyUrl, setProxyUrl] = useState('')
@@ -63,6 +64,7 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
       setPromptCacheTtlSeconds(globalConfig.promptCacheTtlSeconds.toString())
       setPromptCacheAccountingEnabled(globalConfig.promptCacheAccountingEnabled)
       setDefaultEndpoint(globalConfig.defaultEndpoint || 'ide')
+      setEnableCredentialCooldown(globalConfig.enableCredentialCooldown)
       const c = globalConfig.compression
       setCEnabled(c.enabled)
       setCWhitespace(c.whitespaceCompression)
@@ -113,6 +115,11 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
 
     if (defaultEndpoint !== (globalConfig?.defaultEndpoint || 'ide')) {
       globalPayload.defaultEndpoint = defaultEndpoint
+      hasGlobalChanges = true
+    }
+
+    if (enableCredentialCooldown !== (globalConfig?.enableCredentialCooldown ?? true)) {
+      globalPayload.enableCredentialCooldown = enableCredentialCooldown
       hasGlobalChanges = true
     }
 
@@ -241,6 +248,13 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
                   <option value="cli">cli</option>
                 </select>
                 <p className="text-xs text-muted-foreground">凭据未显式指定 endpoint 时使用此默认值</p>
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">凭据冷却机制</label>
+                  <p className="text-xs text-muted-foreground">禁用后 429 限流不会触发冷却，仍会尝试故障转移</p>
+                </div>
+                <Switch checked={enableCredentialCooldown} onCheckedChange={setEnableCredentialCooldown} disabled={isPending} />
               </div>
             </div>
 

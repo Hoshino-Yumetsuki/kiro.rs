@@ -391,7 +391,7 @@ impl AdminErrorResponse {
 pub struct GlobalConfigResponse {
     /// AWS Region
     pub region: String,
-    /// 单凭据目标请求速率（RPM），None 表示无限制
+    /// 单凭据目标请求速率（RPM），None 表示不限制
     pub credential_rpm: Option<u32>,
     /// Prompt Cache TTL（秒）
     pub prompt_cache_ttl_seconds: u64,
@@ -399,6 +399,8 @@ pub struct GlobalConfigResponse {
     pub prompt_cache_accounting_enabled: bool,
     /// 默认端点名称（凭据未显式指定 endpoint 时使用）
     pub default_endpoint: String,
+    /// 是否启用凭据冷却机制
+    pub enable_credential_cooldown: bool,
     /// 压缩配置
     pub compression: CompressionConfigResponse,
 }
@@ -426,7 +428,7 @@ pub struct CompressionConfigResponse {
 pub struct UpdateGlobalConfigRequest {
     /// AWS Region（可选）
     pub region: Option<String>,
-    /// 单凭据目标请求速率（RPM，可选）
+    /// 单凭据目标请求速率（RPM）（可选）
     pub credential_rpm: Option<Option<u32>>,
     /// Prompt Cache TTL（秒，可选，仅支持 300 或 3600）
     pub prompt_cache_ttl_seconds: Option<u64>,
@@ -434,6 +436,8 @@ pub struct UpdateGlobalConfigRequest {
     pub prompt_cache_accounting_enabled: Option<bool>,
     /// 默认端点名称（可选）
     pub default_endpoint: Option<String>,
+    /// 是否启用凭据冷却机制（可选）
+    pub enable_credential_cooldown: Option<bool>,
     /// 压缩配置（可选）
     pub compression: Option<UpdateCompressionConfigRequest>,
 }

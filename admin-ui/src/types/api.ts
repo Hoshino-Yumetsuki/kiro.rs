@@ -363,6 +363,7 @@ export interface GlobalConfigResponse {
   promptCacheTtlSeconds: number
   promptCacheAccountingEnabled: boolean
   defaultEndpoint: string
+  enableCredentialCooldown: boolean
   compression: CompressionConfigResponse
 }
 
@@ -386,5 +387,6 @@ export interface UpdateGlobalConfigRequest {
   promptCacheTtlSeconds?: number
   promptCacheAccountingEnabled?: boolean
   defaultEndpoint?: string
+  enableCredentialCooldown?: boolean
   compression?: UpdateCompressionConfigRequest
 }
