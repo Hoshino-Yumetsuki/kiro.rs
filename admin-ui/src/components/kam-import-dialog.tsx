@@ -374,8 +374,8 @@ export function KamImportDialog({ open, onOpenChange }: KamImportDialogProps) {
   const getStatusText = (result: VerificationResult) => {
     switch (result.status) {
       case 'pending': return '等待中'
-      case 'checking': return '检查重复...'
-      case 'verifying': return '验活中...'
+      case 'checking': return '检查重复…'
+      case 'verifying': return '验活中…'
       case 'verified': return '验活成功'
       case 'duplicate': return '重复凭据'
       case 'skipped': return '已跳过（error 状态）'
@@ -521,7 +521,7 @@ export function KamImportDialog({ open, onOpenChange }: KamImportDialogProps) {
             onClick={() => { onOpenChange(false); resetForm() }}
             disabled={importing}
           >
-            {importing ? '导入中...' : results.length > 0 ? '关闭' : '取消'}
+            {importing ? '导入中…' : results.length > 0 ? '关闭' : '取消'}
           </Button>
           {results.length === 0 && (
             <Button

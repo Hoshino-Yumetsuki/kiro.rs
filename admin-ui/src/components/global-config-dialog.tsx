@@ -203,7 +203,7 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
         </DialogHeader>
 
         {isLoading ? (
-          <div className="py-8 text-center text-muted-foreground">加载中...</div>
+          <div className="py-8 text-center text-muted-foreground">加载中…</div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* 基本设置 */}
@@ -233,7 +233,7 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
                   <label className="text-sm font-medium">Prompt Cache 记账</label>
                   <p className="text-xs text-muted-foreground">关闭后立即停止输出和扣减本地 cache token</p>
                 </div>
-                <Switch checked={promptCacheAccountingEnabled} onCheckedChange={setPromptCacheAccountingEnabled} disabled={isPending} />
+                <Switch checked={promptCacheAccountingEnabled} onCheckedChange={setPromptCacheAccountingEnabled} disabled={isPending} aria-label="Prompt Cache 记账" />
               </div>
               <div className="space-y-1">
                 <label htmlFor="gcDefaultEndpoint" className="text-sm font-medium">默认 Endpoint</label>
@@ -269,8 +269,14 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
               <div className="space-y-1">
                 <label className="text-sm font-medium">代理认证（可选）</label>
                 <div className="grid grid-cols-2 gap-2">
-                  <Input placeholder="用户名" value={proxyUsername} onChange={(e) => setProxyUsername(e.target.value)} disabled={isPending} />
-                  <Input type="password" placeholder="密码" value={proxyPassword} onChange={(e) => setProxyPassword(e.target.value)} disabled={isPending} />
+                  <div>
+                    <label htmlFor="gcProxyUsername" className="sr-only">代理用户名</label>
+                    <Input id="gcProxyUsername" placeholder="用户名" value={proxyUsername} onChange={(e) => setProxyUsername(e.target.value)} disabled={isPending} />
+                  </div>
+                  <div>
+                    <label htmlFor="gcProxyPassword" className="sr-only">代理密码</label>
+                    <Input id="gcProxyPassword" type="password" placeholder="密码" value={proxyPassword} onChange={(e) => setProxyPassword(e.target.value)} disabled={isPending} />
+                  </div>
                 </div>
                 {proxyConfig?.hasCredentials && <p className="text-xs text-muted-foreground">已配置认证，留空保持不变</p>}
               </div>
@@ -281,11 +287,11 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
               <h3 className="text-sm font-semibold text-muted-foreground">压缩配置</h3>
               <div className="flex items-center justify-between">
                 <label className="text-sm font-medium">启用压缩</label>
-                <Switch checked={cEnabled} onCheckedChange={setCEnabled} disabled={isPending} />
+                <Switch checked={cEnabled} onCheckedChange={setCEnabled} disabled={isPending} aria-label="启用压缩" />
               </div>
               <div className="flex items-center justify-between">
                 <label className="text-sm font-medium">空白压缩</label>
-                <Switch checked={cWhitespace} onCheckedChange={setCWhitespace} disabled={isPending} />
+                <Switch checked={cWhitespace} onCheckedChange={setCWhitespace} disabled={isPending} aria-label="空白压缩" />
               </div>
               <div className="space-y-1">
                 <label htmlFor="gcThinking" className="text-sm font-medium">Thinking 策略</label>
@@ -317,7 +323,7 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
 
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isPending}>取消</Button>
-              <Button type="submit" disabled={isPending}>{isPending ? '保存中...' : '保存'}</Button>
+              <Button type="submit" disabled={isPending}>{isPending ? `保存中…` : '保存'}</Button>
             </DialogFooter>
           </form>
         )}
