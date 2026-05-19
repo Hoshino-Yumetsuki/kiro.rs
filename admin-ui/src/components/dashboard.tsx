@@ -5,6 +5,14 @@ import { toast } from 'sonner'
 import { storage } from '@/lib/storage'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { CredentialCard } from '@/components/credential-card'
 import { BalanceDialog } from '@/components/balance-dialog'
 import { AddCredentialDialog } from '@/components/add-credential-dialog'
@@ -42,6 +50,10 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [loadingBalanceIds, setLoadingBalanceIds] = useState<Set<number>>(new Set())
   const [queryingInfo, setQueryingInfo] = useState(false)
   const [queryInfoProgress, setQueryInfoProgress] = useState({ current: 0, total: 0 })
+  const [batchDeleteDialogOpen, setBatchDeleteDialogOpen] = useState(false)
+  const [clearAllDialogOpen, setClearAllDialogOpen] = useState(false)
+  const [pendingBatchDeleteIds, setPendingBatchDeleteIds] = useState<number[]>([])
+  const [pendingClearAllCount, setPendingClearAllCount] = useState(0)
   const cancelVerifyRef = useRef(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [sortField, setSortField] = useState<SortField>('default')
@@ -206,12 +218,14 @@ export function Dashboard({ onLogout }: DashboardProps) {
       return
     }
 
-    const skippedCount = selectedIds.size - disabledIds.length
-    const skippedText = skippedCount > 0 ? `（将跳过 ${skippedCount} 个未禁用凭据）` : ''
+    setPendingBatchDeleteIds(disabledIds)
+    setBatchDeleteDialogOpen(true)
+  }
 
-    if (!confirm(`确定要删除 ${disabledIds.length} 个已禁用凭据吗？此操作无法撤销。${skippedText}`)) {
-      return
-    }
+  const confirmBatchDelete = async () => {
+    const disabledIds = pendingBatchDeleteIds
+    const skippedCount = selectedIds.size - disabledIds.length
+    setBatchDeleteDialogOpen(false)
 
     let successCount = 0
     let failCount = 0
@@ -344,9 +358,13 @@ export function Dashboard({ onLogout }: DashboardProps) {
       return
     }
 
-    if (!confirm(`确定要清除所有 ${disabledCredentials.length} 个已禁用凭据吗？此操作无法撤销。`)) {
-      return
-    }
+    setPendingClearAllCount(disabledCredentials.length)
+    setClearAllDialogOpen(true)
+  }
+
+  const confirmClearAll = async () => {
+    const disabledCredentials = data?.credentials.filter(credential => credential.disabled) ?? []
+    setClearAllDialogOpen(false)
 
     let successCount = 0
     let failCount = 0
@@ -532,10 +550,10 @@ export function Dashboard({ onLogout }: DashboardProps) {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="min-h-screen flex items-center justify-center bg-background" aria-live="polite" aria-busy="true">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-muted-foreground">加载中...</p>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4" aria-hidden="true"></div>
+          <p className="text-muted-foreground">加载中…</p>
         </div>
       </div>
     )
@@ -564,18 +582,18 @@ export function Dashboard({ onLogout }: DashboardProps) {
       <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60">
         <div className="container flex h-14 items-center justify-between px-4 md:px-8">
           <div className="flex items-center gap-2">
-            <Server className="h-5 w-5" />
+            <Server className="h-5 w-5" aria-hidden="true" />
             <span className="font-semibold">Kiro Admin</span>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" onClick={toggleDarkMode}>
-              {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+            <Button variant="ghost" size="icon" onClick={toggleDarkMode} aria-label={darkMode ? '切换到浅色模式' : '切换到深色模式'}>
+              {darkMode ? <Sun className="h-5 w-5" aria-hidden="true" /> : <Moon className="h-5 w-5" aria-hidden="true" />}
             </Button>
-            <Button variant="ghost" size="icon" onClick={handleRefresh}>
-              <RefreshCw className="h-5 w-5" />
+            <Button variant="ghost" size="icon" onClick={handleRefresh} aria-label="刷新凭据列表">
+              <RefreshCw className="h-5 w-5" aria-hidden="true" />
             </Button>
-            <Button variant="ghost" size="icon" onClick={handleLogout}>
-              <LogOut className="h-5 w-5" />
+            <Button variant="ghost" size="icon" onClick={handleLogout} aria-label="退出登录">
+              <LogOut className="h-5 w-5" aria-hidden="true" />
             </Button>
           </div>
         </div>
@@ -608,10 +626,14 @@ export function Dashboard({ onLogout }: DashboardProps) {
           <Card
             className="cursor-pointer hover:border-primary/50 transition-colors"
             onClick={() => setGlobalConfigDialogOpen(true)}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setGlobalConfigDialogOpen(true) } }}
+            role="button"
+            tabIndex={0}
+            aria-label="打开全局配置"
           >
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1.5">
-                <Globe className="h-4 w-4" />
+                <Globe className="h-4 w-4" aria-hidden="true" />
                 全局配置
               </CardTitle>
             </CardHeader>
@@ -649,8 +671,8 @@ export function Dashboard({ onLogout }: DashboardProps) {
                       {label}
                       {active && field !== 'default' && (
                         sortOrder === 'asc'
-                          ? <ArrowUp className="h-3 w-3 ml-0.5" />
-                          : <ArrowDown className="h-3 w-3 ml-0.5" />
+                          ? <ArrowUp className="h-3 w-3 ml-0.5" aria-hidden="true" />
+                          : <ArrowDown className="h-3 w-3 ml-0.5" aria-hidden="true" />
                       )}
                     </Button>
                   )
@@ -669,15 +691,15 @@ export function Dashboard({ onLogout }: DashboardProps) {
               {selectedIds.size > 0 && (
                 <>
                   <Button onClick={handleBatchVerify} size="sm" variant="outline">
-                    <CheckCircle2 className="h-4 w-4 mr-2" />
+                    <CheckCircle2 className="h-4 w-4 mr-2" aria-hidden="true" />
                     批量验活
                   </Button>
                   <Button onClick={handleBatchForceRefresh} size="sm" variant="outline">
-                    <RefreshCw className="h-4 w-4 mr-2" />
+                    <RefreshCw className="h-4 w-4 mr-2" aria-hidden="true" />
                     批量刷新
                   </Button>
                   <Button onClick={handleBatchResetFailure} size="sm" variant="outline">
-                    <RotateCcw className="h-4 w-4 mr-2" />
+                    <RotateCcw className="h-4 w-4 mr-2" aria-hidden="true" />
                     恢复异常
                   </Button>
                   <Button
@@ -687,15 +709,15 @@ export function Dashboard({ onLogout }: DashboardProps) {
                     disabled={selectedDisabledCount === 0}
                     title={selectedDisabledCount === 0 ? '只能删除已禁用凭据' : undefined}
                   >
-                    <Trash2 className="h-4 w-4 mr-2" />
+                    <Trash2 className="h-4 w-4 mr-2" aria-hidden="true" />
                     批量删除
                   </Button>
                 </>
               )}
               {verifying && !verifyDialogOpen && (
                 <Button onClick={() => setVerifyDialogOpen(true)} size="sm" variant="secondary">
-                  <CheckCircle2 className="h-4 w-4 mr-2 animate-spin" />
-                  验活中... {verifyProgress.current}/{verifyProgress.total}
+                  <CheckCircle2 className="h-4 w-4 mr-2 animate-spin" aria-hidden="true" />
+                  验活中… {verifyProgress.current}/{verifyProgress.total}
                 </Button>
               )}
               {data?.credentials && data.credentials.length > 0 && (
@@ -705,8 +727,8 @@ export function Dashboard({ onLogout }: DashboardProps) {
                   variant="outline"
                   disabled={queryingInfo}
                 >
-                  <RefreshCw className={`h-4 w-4 mr-2 ${queryingInfo ? 'animate-spin' : ''}`} />
-                  {queryingInfo ? `查询中... ${queryInfoProgress.current}/${queryInfoProgress.total}` : '查询信息'}
+                  <RefreshCw className={`h-4 w-4 mr-2 ${queryingInfo ? 'animate-spin' : ''}`} aria-hidden="true" />
+                  {queryingInfo ? `查询中… ${queryInfoProgress.current}/${queryInfoProgress.total}` : '查询信息'}
                 </Button>
               )}
               {data?.credentials && data.credentials.length > 0 && (
@@ -718,16 +740,16 @@ export function Dashboard({ onLogout }: DashboardProps) {
                   disabled={disabledCredentialCount === 0}
                   title={disabledCredentialCount === 0 ? '没有可清除的已禁用凭据' : undefined}
                 >
-                  <Trash2 className="h-4 w-4 mr-2" />
+                  <Trash2 className="h-4 w-4 mr-2" aria-hidden="true" />
                   清除已禁用
                 </Button>
               )}
               <Button variant="outline" onClick={() => setImportDialogOpen(true)} size="sm">
-                <Upload className="h-4 w-4 mr-2" />
+                <Upload className="h-4 w-4 mr-2" aria-hidden="true" />
                 导入凭据
               </Button>
               <Button onClick={() => setAddDialogOpen(true)} size="sm">
-                <Plus className="h-4 w-4 mr-2" />
+                <Plus className="h-4 w-4 mr-2" aria-hidden="true" />
                 添加凭据
               </Button>
             </div>
@@ -833,6 +855,39 @@ export function Dashboard({ onLogout }: DashboardProps) {
         results={verifyResults}
         onCancel={handleCancelVerify}
       />
+
+      {/* 批量删除确认对话框 */}
+      <Dialog open={batchDeleteDialogOpen} onOpenChange={setBatchDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>确认批量删除</DialogTitle>
+            <DialogDescription>
+              确定要删除 {pendingBatchDeleteIds.length} 个已禁用凭据吗？此操作无法撤销。
+              {selectedIds.size - pendingBatchDeleteIds.length > 0 && `（将跳过 ${selectedIds.size - pendingBatchDeleteIds.length} 个未禁用凭据）`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBatchDeleteDialogOpen(false)}>取消</Button>
+            <Button variant="destructive" onClick={confirmBatchDelete}>确认删除</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 清除已禁用确认对话框 */}
+      <Dialog open={clearAllDialogOpen} onOpenChange={setClearAllDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>确认清除已禁用凭据</DialogTitle>
+            <DialogDescription>
+              确定要清除所有 {pendingClearAllCount} 个已禁用凭据吗？此操作无法撤销。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setClearAllDialogOpen(false)}>取消</Button>
+            <Button variant="destructive" onClick={confirmClearAll}>确认清除</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

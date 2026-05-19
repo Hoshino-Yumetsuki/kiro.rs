@@ -43,12 +43,16 @@ export function LoginPage({ onLogin }: LoginPageProps) {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
+              <label htmlFor="adminApiKey" className="sr-only">Admin API Key</label>
               <Input
+                id="adminApiKey"
                 type="password"
                 placeholder="Admin API Key"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 className="text-center"
+                autoComplete="current-password"
+                spellCheck={false}
               />
             </div>
             <Button type="submit" className="w-full" disabled={!apiKey.trim()}>

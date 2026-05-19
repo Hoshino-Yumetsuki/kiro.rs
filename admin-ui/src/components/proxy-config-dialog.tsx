@@ -59,7 +59,7 @@ export function ProxyConfigDialog({ open, onOpenChange }: ProxyConfigDialogProps
         </DialogHeader>
 
         {isLoading ? (
-          <div className="py-8 text-center text-muted-foreground">加载中...</div>
+          <div className="py-8 text-center text-muted-foreground">加载中…</div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
@@ -114,7 +114,7 @@ export function ProxyConfigDialog({ open, onOpenChange }: ProxyConfigDialogProps
                 取消
               </Button>
               <Button type="submit" disabled={isPending}>
-                {isPending ? '保存中...' : '保存'}
+                {isPending ? `保存中…` : '保存'}
               </Button>
             </DialogFooter>
           </form>

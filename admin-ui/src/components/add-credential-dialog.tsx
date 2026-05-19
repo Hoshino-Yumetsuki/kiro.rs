@@ -110,37 +110,6 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
 
         <form onSubmit={handleSubmit} className="flex flex-col min-h-0 flex-1">
           <div className="space-y-4 py-4 overflow-y-auto flex-1 pr-1">
-            {/* 凭据密钥 */}
-            {isApiKey ? (
-              <div className="space-y-2">
-                <label htmlFor="kiroApiKey" className="text-sm font-medium">
-                  Kiro API Key <span className="text-red-500">*</span>
-                </label>
-                <Input
-                  id="kiroApiKey"
-                  type="password"
-                  placeholder="格式: ksk_xxxxxxxx"
-                  value={kiroApiKey}
-                  onChange={(e) => setKiroApiKey(e.target.value)}
-                  disabled={isPending}
-                />
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <label htmlFor="refreshToken" className="text-sm font-medium">
-                  Refresh Token <span className="text-red-500">*</span>
-                </label>
-                <Input
-                  id="refreshToken"
-                  type="password"
-                  placeholder="请输入 Refresh Token"
-                  value={refreshToken}
-                  onChange={(e) => setRefreshToken(e.target.value)}
-                  disabled={isPending}
-                />
-              </div>
-            )}
-
             {/* 认证方式 */}
             <div className="space-y-2">
               <label htmlFor="authMethod" className="text-sm font-medium">
@@ -198,6 +167,7 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
               <label className="text-sm font-medium">Region 配置</label>
               <div className="grid grid-cols-2 gap-2">
                 <div>
+                  <label htmlFor="region" className="sr-only">Region</label>
                   <Input
                     id="region"
                     placeholder="Region"
@@ -207,6 +177,7 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
                   />
                 </div>
                 <div>
+                  <label htmlFor="apiRegion" className="sr-only">API Region</label>
                   <Input
                     id="apiRegion"
                     placeholder="API Region（可选覆盖）"
@@ -312,6 +283,7 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
             {/* 代理配置 */}
             <div className="space-y-2">
               <label className="text-sm font-medium">代理配置</label>
+              <label htmlFor="proxyUrl" className="sr-only">代理 URL</label>
               <Input
                 id="proxyUrl"
                 placeholder='代理 URL（留空使用全局配置，"direct" 不使用代理）'
@@ -320,21 +292,27 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
                 disabled={isPending}
               />
               <div className="grid grid-cols-2 gap-2">
-                <Input
-                  id="proxyUsername"
-                  placeholder="代理用户名"
-                  value={proxyUsername}
-                  onChange={(e) => setProxyUsername(e.target.value)}
-                  disabled={isPending}
-                />
-                <Input
-                  id="proxyPassword"
-                  type="password"
-                  placeholder="代理密码"
-                  value={proxyPassword}
-                  onChange={(e) => setProxyPassword(e.target.value)}
-                  disabled={isPending}
-                />
+                <div>
+                  <label htmlFor="proxyUsername" className="sr-only">代理用户名</label>
+                  <Input
+                    id="proxyUsername"
+                    placeholder="代理用户名"
+                    value={proxyUsername}
+                    onChange={(e) => setProxyUsername(e.target.value)}
+                    disabled={isPending}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="proxyPassword" className="sr-only">代理密码</label>
+                  <Input
+                    id="proxyPassword"
+                    type="password"
+                    placeholder="代理密码"
+                    value={proxyPassword}
+                    onChange={(e) => setProxyPassword(e.target.value)}
+                    disabled={isPending}
+                  />
+                </div>
               </div>
               <p className="text-xs text-muted-foreground">
                 留空使用全局代理。输入 "direct" 可显式不使用代理
@@ -352,7 +330,7 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
               取消
             </Button>
             <Button type="submit" disabled={isPending}>
-              {isPending ? '添加中...' : '添加'}
+              {isPending ? `添加中…` : '添加'}
             </Button>
           </DialogFooter>
         </form>

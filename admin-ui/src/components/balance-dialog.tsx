@@ -24,8 +24,8 @@ export function BalanceDialog({ credentialId, open, onOpenChange, forceRefresh }
     return new Date(timestamp * 1000).toLocaleString('zh-CN')
   }
 
-  const formatNumber = (num: number) => {
-    return num.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const formatCurrency = (num: number) => {
+    return new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(num)
   }
 
   return (
@@ -38,8 +38,8 @@ export function BalanceDialog({ credentialId, open, onOpenChange, forceRefresh }
         </DialogHeader>
 
         {showLoading && (
-          <div className="flex items-center justify-center py-8">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+          <div className="flex items-center justify-center py-8" aria-live="polite" aria-busy="true">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" aria-hidden="true"></div>
           </div>
         )}
 
@@ -48,7 +48,7 @@ export function BalanceDialog({ credentialId, open, onOpenChange, forceRefresh }
           return (
             <div className="py-6 space-y-3">
               <div className="flex items-center justify-center gap-2 text-red-500">
-                <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
                 </svg>
                 <span className="font-medium">{parsed.title}</span>
@@ -74,8 +74,8 @@ export function BalanceDialog({ credentialId, open, onOpenChange, forceRefresh }
             {/* 使用进度 */}
             <div className="space-y-2">
               <div className="flex justify-between text-sm">
-                <span>已使用: ${formatNumber(balance.currentUsage)}</span>
-                <span>限额: ${formatNumber(balance.usageLimit)}</span>
+                <span>已使用: {formatCurrency(balance.currentUsage)}</span>
+                <span>限额: {formatCurrency(balance.usageLimit)}</span>
               </div>
               <Progress value={balance.usagePercentage} />
               <div className="text-center text-sm text-muted-foreground">
@@ -88,7 +88,7 @@ export function BalanceDialog({ credentialId, open, onOpenChange, forceRefresh }
               <div>
                 <span className="text-muted-foreground">剩余额度：</span>
                 <span className="font-medium text-green-600">
-                  ${formatNumber(balance.remaining)}
+                  {formatCurrency(balance.remaining)}
                 </span>
               </div>
               <div>

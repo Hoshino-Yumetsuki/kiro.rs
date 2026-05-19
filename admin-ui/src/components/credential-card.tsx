@@ -222,6 +222,7 @@ export function CredentialCard({
               <Checkbox
                 checked={selected}
                 onCheckedChange={onToggleSelect}
+                aria-label={`选择凭据 ${credential.email || `#${credential.id}`}`}
               />
               <CardTitle className="text-lg flex items-center gap-2">
                 {credential.email || `凭据 #${credential.id}`}
@@ -250,6 +251,7 @@ export function CredentialCard({
                 checked={!credential.disabled}
                 onCheckedChange={handleToggleDisabled}
                 disabled={setDisabled.isPending}
+                aria-label={`${credential.email || `凭据 #${credential.id}`} 启用状态`}
               />
             </div>
           </div>
@@ -267,6 +269,7 @@ export function CredentialCard({
                     onChange={(e) => setPriorityValue(e.target.value)}
                     className="w-16 h-7 text-sm"
                     min="0"
+                    aria-label="优先级"
                   />
                   <Button
                     size="sm"
@@ -290,13 +293,14 @@ export function CredentialCard({
                   </Button>
                 </div>
               ) : (
-                <span
-                  className="font-medium cursor-pointer hover:underline ml-1"
+                <button
+                  type="button"
+                  className="font-medium cursor-pointer hover:underline ml-1 text-left bg-transparent border-0 p-0"
                   onClick={() => setEditingPriority(true)}
                 >
                   {credential.priority}
                   <span className="text-xs text-muted-foreground ml-1">(点击编辑)</span>
-                </span>
+                </button>
               )}
             </div>
             <div>
@@ -320,7 +324,7 @@ export function CredentialCard({
               <span className="text-muted-foreground">订阅等级：</span>
               <span className="font-medium">
                 {loadingBalance ? (
-                  <Loader2 className="inline w-3 h-3 animate-spin" />
+                  <Loader2 className="inline w-3 h-3 animate-spin" aria-hidden="true" />
                 ) : balance?.subscriptionTitle ?? cachedBalance?.subscriptionTitle ?? credential.subscriptionTitle ?? '未知'}
               </span>
             </div>
@@ -348,25 +352,25 @@ export function CredentialCard({
               <span className="text-muted-foreground">余额：</span>
               {loadingBalance ? (
                 <span className="text-sm ml-1">
-                  <Loader2 className="inline w-3 h-3 animate-spin" /> 加载中...
+                  <Loader2 className="inline w-3 h-3 animate-spin" aria-hidden="true" /> 加载中…
                 </span>
               ) : balance ? (
                 <span className="font-medium ml-1">
-                  {balance.remaining.toFixed(2)} / {balance.usageLimit.toFixed(2)}
+                  {new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(balance.remaining)} / {new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(balance.usageLimit)}
                   <span className="text-xs text-muted-foreground ml-1">
                     ({(100 - balance.usagePercentage).toFixed(1)}% 剩余)
                   </span>
                 </span>
               ) : cachedBalance && cachedBalance.ttlSecs > 0 && cachedBalance.usageLimit > 0 ? (
                 <span className="font-medium ml-1">
-                  {cachedBalance.remaining.toFixed(2)} / {cachedBalance.usageLimit.toFixed(2)}
+                  {new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(cachedBalance.remaining)} / {new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(cachedBalance.usageLimit)}
                   <span className="text-xs text-muted-foreground ml-1">
                     ({(100 - cachedBalance.usagePercentage).toFixed(1)}% 剩余, {formatCacheAge(cachedBalance.cachedAt)}缓存)
                   </span>
                 </span>
               ) : cachedBalance && cachedBalance.ttlSecs > 0 ? (
                 <span className="font-medium ml-1">
-                  ${cachedBalance.remaining.toFixed(2)}
+                  {new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(cachedBalance.remaining)}
                   <span className="text-xs text-muted-foreground ml-1">
                     ({formatCacheAge(cachedBalance.cachedAt)}缓存)
                   </span>
@@ -389,6 +393,7 @@ export function CredentialCard({
                     value={endpointValue}
                     onChange={(e) => setEndpointValue(e.target.value)}
                     className="flex h-7 rounded-md border border-input bg-background px-2 py-1 text-sm"
+                    aria-label="Endpoint"
                   >
                     <option value="">默认值</option>
                     <option value="ide">ide</option>
@@ -416,8 +421,9 @@ export function CredentialCard({
                   </Button>
                 </div>
               ) : (
-                <span
-                  className="font-medium cursor-pointer hover:underline ml-1"
+                <button
+                  type="button"
+                  className="font-medium cursor-pointer hover:underline ml-1 text-left bg-transparent border-0 p-0"
                   onClick={() => {
                     setEndpointValue(credential.endpoint ?? '')
                     setEditingEndpoint(true)
@@ -428,7 +434,7 @@ export function CredentialCard({
                     (生效: {credential.effectiveEndpoint})
                   </span>
                   <span className="text-xs text-muted-foreground ml-1">(点击编辑)</span>
-                </span>
+                </button>
               )}
             </div>
             {/* Region 配置 */}
@@ -441,12 +447,14 @@ export function CredentialCard({
                     value={regionValue}
                     onChange={(e) => setRegionValue(e.target.value)}
                     className="w-32 h-7 text-sm"
+                    aria-label="Region"
                   />
                   <Input
                     placeholder="API Region（可选）"
                     value={apiRegionValue}
                     onChange={(e) => setApiRegionValue(e.target.value)}
                     className="w-36 h-7 text-sm"
+                    aria-label="API Region"
                   />
                   <Button
                     size="sm"
@@ -471,8 +479,9 @@ export function CredentialCard({
                   </Button>
                 </div>
               ) : (
-                <span
-                  className="font-medium cursor-pointer hover:underline ml-1"
+                <button
+                  type="button"
+                  className="font-medium cursor-pointer hover:underline ml-1 text-left bg-transparent border-0 p-0"
                   onClick={() => {
                     setRegionValue(credential.region ?? '')
                     setApiRegionValue(credential.apiRegion ?? '')
@@ -486,7 +495,7 @@ export function CredentialCard({
                     </span>
                   )}
                   <span className="text-xs text-muted-foreground ml-1">(点击编辑)</span>
-                </span>
+                </button>
               )}
             </div>
             {credential.hasProfileArn && (
@@ -504,7 +513,7 @@ export function CredentialCard({
               onClick={handleReset}
               disabled={resetFailure.isPending || (credential.failureCount === 0 && credential.refreshFailureCount === 0)}
             >
-              <RefreshCw className="h-4 w-4 mr-1" />
+              <RefreshCw className="h-4 w-4 mr-1" aria-hidden="true" />
               重置失败
             </Button>
             <Button
@@ -514,7 +523,7 @@ export function CredentialCard({
               disabled={forceRefreshToken.isPending || credential.disabled || credential.authMethod === 'api_key'}
               title={credential.authMethod === 'api_key' ? 'API Key 凭据无需刷新 Token' : credential.disabled ? '已禁用的凭据无法刷新 Token' : '强制刷新 Token'}
             >
-              <RefreshCw className={`h-4 w-4 mr-1 ${forceRefreshToken.isPending ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-4 w-4 mr-1 ${forceRefreshToken.isPending ? 'animate-spin' : ''}`} aria-hidden="true" />
               刷新 Token
             </Button>
             <Button
@@ -532,7 +541,7 @@ export function CredentialCard({
               }}
               disabled={setPriority.isPending || credential.priority === 0}
             >
-              <ChevronUp className="h-4 w-4 mr-1" />
+              <ChevronUp className="h-4 w-4 mr-1" aria-hidden="true" />
               提高优先级
             </Button>
             <Button
@@ -550,24 +559,15 @@ export function CredentialCard({
               }}
               disabled={setPriority.isPending}
             >
-              <ChevronDown className="h-4 w-4 mr-1" />
+              <ChevronDown className="h-4 w-4 mr-1" aria-hidden="true" />
               降低优先级
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleForceRefresh}
-              disabled={forceRefreshToken.isPending}
-            >
-              <RefreshCw className={`h-4 w-4 mr-1 ${forceRefreshToken.isPending ? 'animate-spin' : ''}`} />
-              刷新 Token
             </Button>
             <Button
               size="sm"
               variant="default"
               onClick={handleViewBalance}
             >
-              <Wallet className="h-4 w-4 mr-1" />
+              <Wallet className="h-4 w-4 mr-1" aria-hidden="true" />
               查看余额
             </Button>
             <Button
@@ -577,7 +577,7 @@ export function CredentialCard({
               disabled={!credential.disabled}
               title={!credential.disabled ? '需要先禁用凭据才能删除' : undefined}
             >
-              <Trash2 className="h-4 w-4 mr-1" />
+              <Trash2 className="h-4 w-4 mr-1" aria-hidden="true" />
               删除
             </Button>
           </div>

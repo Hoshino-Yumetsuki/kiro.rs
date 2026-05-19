@@ -405,7 +405,7 @@ export function ImportTokenJsonDialog({ open, onOpenChange }: ImportTokenJsonDia
   const getVerifyStatusText = (result: VerifyItemResult) => {
     switch (result.status) {
       case 'pending': return '等待中'
-      case 'verifying': return '验活中...'
+      case 'verifying': return '验活中…'
       case 'verified': return '验活成功'
       case 'failed': return '验活失败'
       case 'rolled_back': return '验活失败（已排除）'
@@ -426,7 +426,7 @@ export function ImportTokenJsonDialog({ open, onOpenChange }: ImportTokenJsonDia
             {step === 'input' && '粘贴或上传 JSON 文件以批量导入凭据'}
             {step === 'preview' && '预览导入结果，确认后执行导入'}
             {step === 'result' && '导入完成'}
-            {step === 'verifying' && '正在验活导入的凭据...'}
+            {step === 'verifying' && '正在验活导入的凭据…'}
           </DialogDescription>
         </DialogHeader>
 
@@ -475,8 +475,9 @@ export function ImportTokenJsonDialog({ open, onOpenChange }: ImportTokenJsonDia
 
               {/* 文本输入 */}
               <div className="space-y-2">
-                <label className="text-sm font-medium">直接粘贴 JSON</label>
+                <label htmlFor="importJsonText" className="text-sm font-medium">直接粘贴 JSON</label>
                 <textarea
+                  id="importJsonText"
                   className="w-full h-48 p-3 text-sm font-mono border rounded-md bg-background resize-none focus:outline-none focus:ring-2 focus:ring-ring"
                   placeholder={'粘贴 Kiro Account Manager 导出的 JSON\n\n支持 KAM 1.8.3+ 新版平铺格式：\n[\n  {\n    "email": "...",\n    "refreshToken": "...",\n    "clientId": "...",\n    "clientSecret": "...",\n    "region": "us-east-1"\n  }\n]\n\n也支持旧版嵌套格式：\n{\n  "version": "1.5.0",\n  "accounts": [\n    {\n      "email": "...",\n      "credentials": {\n        "refreshToken": "...",\n        "clientId": "...",\n        "clientSecret": "...",\n        "region": "us-east-1"\n      }\n    }\n  ]\n}'}
                   value={jsonText}
@@ -692,7 +693,7 @@ export function ImportTokenJsonDialog({ open, onOpenChange }: ImportTokenJsonDia
                 {isPending ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    解析中...
+                    解析中…
                   </>
                 ) : (
                   '预览'
@@ -713,7 +714,7 @@ export function ImportTokenJsonDialog({ open, onOpenChange }: ImportTokenJsonDia
                 {isPending ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    导入中...
+                    导入中…
                   </>
                 ) : enableVerify ? (
                   `导入并验活 (${previewSummary?.added ?? 0})`
@@ -730,7 +731,7 @@ export function ImportTokenJsonDialog({ open, onOpenChange }: ImportTokenJsonDia
 
           {step === 'verifying' && (
             <Button onClick={handleClose} disabled={isVerifying}>
-              {isVerifying ? '验活中...' : '完成'}
+              {isVerifying ? '验活中…' : '完成'}
             </Button>
           )}
         </DialogFooter>
