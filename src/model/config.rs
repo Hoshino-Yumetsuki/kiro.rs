@@ -177,28 +177,8 @@ fn default_thinking_strategy() -> String {
     "discard".to_string()
 }
 
-fn default_8000() -> usize {
-    8000
-}
-
-fn default_80() -> usize {
-    80
-}
-
-fn default_40() -> usize {
-    40
-}
-
-fn default_6000() -> usize {
-    6000
-}
-
 fn default_4000() -> usize {
     4000
-}
-
-fn default_tool_definition_size_threshold() -> usize {
-    20 * 1024
 }
 
 fn default_tool_definition_min_description_chars() -> usize {
@@ -207,14 +187,6 @@ fn default_tool_definition_min_description_chars() -> usize {
 
 fn default_tool_name_max_chars() -> usize {
     63
-}
-
-fn default_80_turns() -> usize {
-    80
-}
-
-fn default_400k() -> usize {
-    400_000
 }
 
 fn default_image_max_long_edge() -> u32 {
@@ -243,18 +215,6 @@ fn default_adaptive_compression_max_iters() -> usize {
     32
 }
 
-fn default_adaptive_min_tool_result_max_chars() -> usize {
-    512
-}
-
-fn default_adaptive_min_tool_use_input_max_chars() -> usize {
-    256
-}
-
-fn default_adaptive_history_preserve_messages() -> usize {
-    2
-}
-
 /// 输入压缩配置
 ///
 /// 控制请求体在协议转换后、发送到上游前的多层压缩策略。
@@ -271,39 +231,18 @@ pub struct CompressionConfig {
     /// thinking 块处理策略: "discard" | "truncate" | "keep"
     #[serde(default = "default_thinking_strategy")]
     pub thinking_strategy: String,
-    /// tool_result 截断阈值（字符数），默认 8000
-    #[serde(default = "default_8000")]
-    pub tool_result_max_chars: usize,
-    /// 智能截断保留头部行数，默认 80
-    #[serde(default = "default_80")]
-    pub tool_result_head_lines: usize,
-    /// 智能截断保留尾部行数，默认 40
-    #[serde(default = "default_40")]
-    pub tool_result_tail_lines: usize,
-    /// tool_use input 截断阈值（字符数），默认 6000
-    #[serde(default = "default_6000")]
-    pub tool_use_input_max_chars: usize,
-    /// 工具描述截断阈值（字符数），覆盖原 10000 硬编码，默认 4000
+    /// 工具描述截断阈值（字符数），转换时硬截断，默认 4000
     #[serde(default = "default_4000")]
     pub tool_description_max_chars: usize,
-    /// 工具定义总大小超阈值后的 schema/description 压缩，默认 true
+    /// 工具定义总大小超阈值后的 schema 简化 + desc 截断开关，默认 true
     #[serde(default = "default_true")]
     pub tool_definition_compression: bool,
-    /// 工具定义压缩触发阈值（字节，0=不压缩），默认 20KB
-    #[serde(default = "default_tool_definition_size_threshold")]
-    pub tool_definition_size_threshold: usize,
     /// 工具定义压缩时 description 最少保留字符数，默认 50
     #[serde(default = "default_tool_definition_min_description_chars")]
     pub tool_definition_min_description_chars: usize,
     /// Kiro 工具名最大长度（字符数，0=不缩短），默认 63
     #[serde(default = "default_tool_name_max_chars")]
     pub tool_name_max_chars: usize,
-    /// 历史最大轮数，默认 80（0=不限）
-    #[serde(default = "default_80_turns")]
-    pub max_history_turns: usize,
-    /// 历史最大字符数，默认 400000（0=不限）
-    #[serde(default = "default_400k")]
-    pub max_history_chars: usize,
     /// 图片长边最大像素，默认 4000（Anthropic 硬限制 8000，留安全余量；窄长图受益于更大长边）
     #[serde(default = "default_image_max_long_edge")]
     pub image_max_long_edge: u32,
@@ -316,36 +255,15 @@ pub struct CompressionConfig {
     /// 触发多图限制的图片数量阈值，默认 20
     #[serde(default = "default_image_multi_threshold")]
     pub image_multi_threshold: usize,
-    /// 请求体最大字节数，超过则直接拒绝（0 = 不限制）
+    /// 请求体最大字节数，超过则触发自适应压缩（0 = 不限制）
     #[serde(default = "default_max_request_body_bytes")]
     pub max_request_body_bytes: usize,
-    /// 请求体超限后的自适应二次压缩，默认 true
+    /// 请求体超限后的自适应压缩，默认 true
     #[serde(default = "default_true")]
     pub adaptive_compression: bool,
     /// 自适应压缩最大迭代次数，默认 32
     #[serde(default = "default_adaptive_compression_max_iters")]
     pub adaptive_compression_max_iters: usize,
-    /// 自适应压缩是否继续降低 tool_result 截断阈值，默认 true
-    #[serde(default = "default_true")]
-    pub adaptive_tool_result_compression: bool,
-    /// 自适应 tool_result 截断最低阈值，默认 512
-    #[serde(default = "default_adaptive_min_tool_result_max_chars")]
-    pub adaptive_min_tool_result_max_chars: usize,
-    /// 自适应压缩是否继续降低 tool_use input 截断阈值，默认 true
-    #[serde(default = "default_true")]
-    pub adaptive_tool_use_input_compression: bool,
-    /// 自适应 tool_use input 截断最低阈值，默认 256
-    #[serde(default = "default_adaptive_min_tool_use_input_max_chars")]
-    pub adaptive_min_tool_use_input_max_chars: usize,
-    /// 自适应压缩是否移除历史图片，默认 true
-    #[serde(default = "default_true")]
-    pub adaptive_history_image_removal: bool,
-    /// 自适应压缩是否移除最旧历史轮次，默认 true
-    #[serde(default = "default_true")]
-    pub adaptive_history_removal: bool,
-    /// 自适应历史移除时保留的前置消息数，默认 2
-    #[serde(default = "default_adaptive_history_preserve_messages")]
-    pub adaptive_history_preserve_messages: usize,
 }
 
 impl Default for CompressionConfig {
@@ -354,17 +272,10 @@ impl Default for CompressionConfig {
             enabled: true,
             whitespace_compression: true,
             thinking_strategy: default_thinking_strategy(),
-            tool_result_max_chars: default_8000(),
-            tool_result_head_lines: default_80(),
-            tool_result_tail_lines: default_40(),
-            tool_use_input_max_chars: default_6000(),
             tool_description_max_chars: default_4000(),
             tool_definition_compression: true,
-            tool_definition_size_threshold: default_tool_definition_size_threshold(),
             tool_definition_min_description_chars: default_tool_definition_min_description_chars(),
             tool_name_max_chars: default_tool_name_max_chars(),
-            max_history_turns: default_80_turns(),
-            max_history_chars: default_400k(),
             image_max_long_edge: default_image_max_long_edge(),
             image_max_pixels_single: default_image_max_pixels_single(),
             image_max_pixels_multi: default_image_max_pixels_multi(),
@@ -372,13 +283,6 @@ impl Default for CompressionConfig {
             max_request_body_bytes: default_max_request_body_bytes(),
             adaptive_compression: true,
             adaptive_compression_max_iters: default_adaptive_compression_max_iters(),
-            adaptive_tool_result_compression: true,
-            adaptive_min_tool_result_max_chars: default_adaptive_min_tool_result_max_chars(),
-            adaptive_tool_use_input_compression: true,
-            adaptive_min_tool_use_input_max_chars: default_adaptive_min_tool_use_input_max_chars(),
-            adaptive_history_image_removal: true,
-            adaptive_history_removal: true,
-            adaptive_history_preserve_messages: default_adaptive_history_preserve_messages(),
         }
     }
 }

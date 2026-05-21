@@ -38,6 +38,8 @@ impl CompressionStats {
 /// 压缩管道入口
 ///
 /// 按顺序执行各层压缩，返回统计信息。
+/// 注意：tool_result/tool_use/history 压缩已移至自适应循环，此函数仅保留空白和 thinking 压缩。
+#[allow(dead_code)]
 pub fn compress(state: &mut ConversationState, config: &CompressionConfig) -> CompressionStats {
     let mut stats = CompressionStats::default();
 
@@ -55,33 +57,7 @@ pub fn compress(state: &mut ConversationState, config: &CompressionConfig) -> Co
         stats.thinking_saved = compress_thinking_pass(state, &config.thinking_strategy);
     }
 
-    // 3. tool_result 智能截断
-    if config.tool_result_max_chars > 0 {
-        stats.tool_result_saved = compress_tool_results_pass(
-            state,
-            config.tool_result_max_chars,
-            config.tool_result_head_lines,
-            config.tool_result_tail_lines,
-        );
-    }
-
-    // 4. tool_use input 截断
-    if config.tool_use_input_max_chars > 0 {
-        stats.tool_use_input_saved =
-            compress_tool_use_inputs_pass(state, config.tool_use_input_max_chars);
-    }
-
-    // 5. 历史截断（最后手段）
-    if config.max_history_turns > 0 || config.max_history_chars > 0 {
-        let (turns, bytes) =
-            compress_history_pass(state, config.max_history_turns, config.max_history_chars);
-        stats.history_turns_removed = turns;
-        stats.history_bytes_saved = bytes;
-    }
-
-    // 历史截断会破坏 tool_use(tool_uses) 与 tool_result(tool_results) 的跨消息配对：
-    // assistant(tool_use) → user(tool_result)。
-    // 若留下孤立 tool_use/tool_result，上游会返回 400 "Improperly formed request"。
+    // 修复 tool_use/tool_result 配对和空 content
     let (removed_tool_uses, removed_tool_results) = repair_tool_pairing_pass(state);
     if removed_tool_uses > 0 || removed_tool_results > 0 {
         tracing::debug!(
@@ -127,7 +103,7 @@ fn compress_whitespace(text: &str) -> String {
 }
 
 /// 对 ConversationState 中所有文本字段执行空白压缩
-fn compress_whitespace_pass(state: &mut ConversationState) -> usize {
+pub fn compress_whitespace_pass(state: &mut ConversationState) -> usize {
     let mut saved = 0usize;
 
     for msg in &mut state.history {
@@ -168,7 +144,7 @@ fn compress_string_field(field: &mut String) -> usize {
 // ============ thinking 压缩 ============
 
 /// 处理 history 中 assistant 消息的 `<thinking>...</thinking>` 块
-fn compress_thinking_pass(state: &mut ConversationState, strategy: &str) -> usize {
+pub fn compress_thinking_pass(state: &mut ConversationState, strategy: &str) -> usize {
     let mut saved = 0usize;
 
     for msg in &mut state.history {
@@ -242,6 +218,7 @@ fn truncate_thinking_blocks(text: &str, max_chars: usize) -> String {
 // ============ tool_result 智能截断 ============
 
 /// 按行智能截断，保留头尾行
+#[allow(dead_code)]
 fn smart_truncate_by_lines(
     text: &str,
     max_chars: usize,
@@ -295,6 +272,7 @@ fn smart_truncate_by_lines(
 }
 
 /// 遍历所有 tool_result 的 text 字段，执行智能截断
+#[allow(dead_code)]
 fn compress_tool_results_pass(
     state: &mut ConversationState,
     max_chars: usize,
@@ -334,6 +312,7 @@ fn compress_tool_results_pass(
 }
 
 /// 截断单个 tool_result 的 content 数组中的 text 字段
+#[allow(dead_code)]
 fn truncate_tool_result_content(
     content: &mut [serde_json::Map<String, serde_json::Value>],
     max_chars: usize,
@@ -358,6 +337,7 @@ fn truncate_tool_result_content(
 // ============ tool_use input 截断 ============
 
 /// 遍历 history 中 assistant 消息的 tool_use input，截断大字符串字段
+#[allow(dead_code)]
 fn compress_tool_use_inputs_pass(state: &mut ConversationState, max_chars: usize) -> usize {
     let mut saved = 0usize;
 
@@ -378,6 +358,7 @@ fn compress_tool_use_inputs_pass(state: &mut ConversationState, max_chars: usize
 }
 
 /// 递归截断 JSON 值中的大字符串
+#[allow(dead_code)]
 fn truncate_json_value_strings(value: &mut serde_json::Value, max_chars: usize) -> usize {
     let mut saved = 0usize;
 
@@ -427,6 +408,7 @@ fn truncate_json_value_strings(value: &mut serde_json::Value, max_chars: usize) 
 /// 历史截断：保留前 2 条（系统消息对），从前往后成对移除
 ///
 /// 返回 (移除的轮数, 移除的字节数)
+#[allow(dead_code)]
 fn compress_history_pass(
     state: &mut ConversationState,
     max_turns: usize,
@@ -490,6 +472,7 @@ fn compress_history_pass(
 /// - 移除 history 中孤立的 tool_use（其 tool_use_id 在 history/current 的 tool_result 中不存在）
 ///
 /// 返回 (移除的 tool_use 数, 移除的 tool_result 数)。
+#[allow(dead_code)]
 fn repair_tool_pairing_pass(state: &mut ConversationState) -> (usize, usize) {
     use std::collections::HashSet;
 
@@ -573,6 +556,7 @@ fn repair_tool_pairing_pass(state: &mut ConversationState) -> (usize, usize) {
 /// - history assistant_response_message.content（仅当无 tool_uses 时兜底）
 /// - current_message.user_input_message.content（最终必要兜底）
 /// - history/current tool_result content 数组中空 text 项（优先删除，必要时兜底）
+#[allow(dead_code)]
 fn repair_non_empty_content_pass(state: &mut ConversationState) -> usize {
     let mut repaired = 0usize;
 
@@ -639,6 +623,7 @@ fn repair_non_empty_content_pass(state: &mut ConversationState) -> usize {
 
 /// 修复 tool_result content 数组中 text 字段为空字符串的条目。
 /// 策略：优先删除空 text 项；若删除后 content 变空数组则兜底补 "."。
+#[allow(dead_code)]
 fn repair_tool_result_text_fields(
     results: &mut [crate::kiro::model::requests::tool::ToolResult],
 ) -> usize {
@@ -671,6 +656,7 @@ fn repair_tool_result_text_fields(
     repaired
 }
 
+#[allow(dead_code)]
 fn repair_content_field(field: &mut String) -> bool {
     if field.trim().is_empty() {
         *field = ".".to_string();
@@ -945,11 +931,7 @@ mod tests {
             )))
             .with_history(vec![assistant_msg, user_with_tool_result]);
 
-        let config = CompressionConfig {
-            max_history_turns: 0,
-            max_history_chars: 0,
-            ..Default::default()
-        };
+        let config = CompressionConfig::default();
 
         let _stats = compress(&mut state, &config);
 
@@ -1039,14 +1021,8 @@ mod tests {
             ))
             .with_history(Vec::new());
 
-        let config = CompressionConfig {
-            tool_result_max_chars: 100,
-            tool_result_head_lines: 3,
-            tool_result_tail_lines: 2,
-            ..Default::default()
-        };
-        let stats = compress(&mut state, &config);
-        assert!(stats.tool_result_saved > 0);
+        let saved = compress_tool_results_pass(&mut state, 100, 3, 2);
+        assert!(saved > 0);
     }
 
     #[test]
@@ -1072,12 +1048,8 @@ mod tests {
                 }),
             ]);
 
-        let config = CompressionConfig {
-            tool_use_input_max_chars: 100,
-            ..Default::default()
-        };
-        let stats = compress(&mut state, &config);
-        assert!(stats.tool_use_input_saved > 0);
+        let saved = compress_tool_use_inputs_pass(&mut state, 100);
+        assert!(saved > 0);
     }
 
     #[test]
@@ -1102,12 +1074,8 @@ mod tests {
                 }),
             ]);
 
-        let config = CompressionConfig {
-            tool_use_input_max_chars: 100,
-            ..Default::default()
-        };
-        let stats = compress(&mut state, &config);
-        assert!(stats.tool_use_input_saved > 0);
+        let saved = compress_tool_use_inputs_pass(&mut state, 100);
+        assert!(saved > 0);
 
         if let Message::Assistant(a) = &state.history[1]
             && let Some(tool_uses) = &a.assistant_response_message.tool_uses
@@ -1144,12 +1112,8 @@ mod tests {
                 }),
             ]);
 
-        let config = CompressionConfig {
-            tool_use_input_max_chars: 100,
-            ..Default::default()
-        };
-        let stats = compress(&mut state, &config);
-        assert_eq!(stats.tool_use_input_saved, 0);
+        let saved = compress_tool_use_inputs_pass(&mut state, 100);
+        assert_eq!(saved, 0);
 
         if let Message::Assistant(a) = &state.history[1]
             && let Some(tool_uses) = &a.assistant_response_message.tool_uses
@@ -1170,12 +1134,8 @@ mod tests {
         }
         let mut state = make_simple_state(history_content, "current");
 
-        let config = CompressionConfig {
-            max_history_turns: 2,
-            ..Default::default()
-        };
-        let stats = compress(&mut state, &config);
-        assert!(stats.history_turns_removed > 0);
+        let (turns_removed, _bytes) = compress_history_pass(&mut state, 2, 0);
+        assert!(turns_removed > 0);
         // 应保留 system pair (2) + 2 轮 (4) = 6 条
         assert_eq!(state.history.len(), 6);
         // 第一对应该是 system pair
@@ -1229,13 +1189,8 @@ mod tests {
 
         // 将历史限制到 1 轮（2+2=4 条），触发截断：会移除 user1+assistant1。
         // 若不修复，user2 中的 tool_result 会变成 orphan，导致上游 400。
-        let config = CompressionConfig {
-            max_history_turns: 1,
-            max_history_chars: 0,
-            ..Default::default()
-        };
-
-        let _stats = compress(&mut state, &config);
+        compress_history_pass(&mut state, 1, 0);
+        repair_tool_pairing_pass(&mut state);
 
         // history 中不应存在 tool_result（因为对应 tool_use 已被截断移除）
         for msg in &state.history {
