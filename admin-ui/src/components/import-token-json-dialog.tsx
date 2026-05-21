@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { useImportTokenJson, useDeleteCredential } from '@/hooks/use-credentials'
 import { getCredentialBalance, setCredentialDisabled } from '@/api/credentials'
+import { formatKiroUsageWithUsd } from '@/lib/format'
 import { extractErrorMessage } from '@/lib/utils'
 import type { TokenJsonItem, ImportItemResult, ImportSummary } from '@/types/api'
 
@@ -309,7 +310,7 @@ export function ImportTokenJsonDialog({ open, onOpenChange }: ImportTokenJsonDia
         const balance = await getCredentialBalance(credId)
         successCount++
         setVerifyResults(prev => prev.map((r, idx) =>
-          idx === i ? { ...r, status: 'verified', usage: `${balance.currentUsage}/${balance.usageLimit}` } : r
+          idx === i ? { ...r, status: 'verified', usage: formatKiroUsageWithUsd(balance.currentUsage, balance.usageLimit) } : r
         ))
       } catch (error) {
         failCount++

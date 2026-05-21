@@ -22,6 +22,7 @@ import { ProxyConfigDialog } from '@/components/proxy-config-dialog'
 import { GlobalConfigDialog } from '@/components/global-config-dialog'
 import { useCredentials, useCachedBalances, useDeleteCredential, useResetFailure, useForceRefreshToken, useProxyConfig, useGlobalConfig } from '@/hooks/use-credentials'
 import { getCredentialBalance } from '@/api/credentials'
+import { formatKiroUsageWithUsd } from '@/lib/format'
 import { extractErrorMessage } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import type { BalanceResponse } from '@/types/api'
@@ -509,7 +510,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
           newResults.set(id, {
             id,
             status: 'success',
-            usage: `${balance.currentUsage}/${balance.usageLimit}`
+            usage: formatKiroUsageWithUsd(balance.currentUsage, balance.usageLimit)
           })
           return newResults
         })

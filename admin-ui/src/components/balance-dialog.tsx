@@ -1,11 +1,13 @@
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Progress } from '@/components/ui/progress'
 import { useCredentialBalance } from '@/hooks/use-credentials'
+import { formatKiroCredits, formatKiroCreditsAsUsd } from '@/lib/format'
 import { parseError } from '@/lib/utils'
 
 interface BalanceDialogProps {
@@ -24,10 +26,6 @@ export function BalanceDialog({ credentialId, open, onOpenChange, forceRefresh }
     return new Date(timestamp * 1000).toLocaleString('zh-CN')
   }
 
-  const formatCurrency = (num: number) => {
-    return new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(num)
-  }
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -35,6 +33,9 @@ export function BalanceDialog({ credentialId, open, onOpenChange, forceRefresh }
           <DialogTitle>
             凭据 #{credentialId} 余额信息
           </DialogTitle>
+          <DialogDescription>
+            以 Kiro credits 为主，美元金额按 1 credit = $0.04 估算。
+          </DialogDescription>
         </DialogHeader>
 
         {showLoading && (
@@ -73,9 +74,17 @@ export function BalanceDialog({ credentialId, open, onOpenChange, forceRefresh }
 
             {/* 使用进度 */}
             <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span>已使用: {formatCurrency(balance.currentUsage)}</span>
-                <span>限额: {formatCurrency(balance.usageLimit)}</span>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <div className="text-muted-foreground">已使用</div>
+                  <div className="font-medium tabular-nums">{formatKiroCredits(balance.currentUsage)}</div>
+                  <div className="text-xs text-muted-foreground tabular-nums">≈ {formatKiroCreditsAsUsd(balance.currentUsage)}</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-muted-foreground">限额</div>
+                  <div className="font-medium tabular-nums">{formatKiroCredits(balance.usageLimit)}</div>
+                  <div className="text-xs text-muted-foreground tabular-nums">≈ {formatKiroCreditsAsUsd(balance.usageLimit)}</div>
+                </div>
               </div>
               <Progress value={balance.usagePercentage} />
               <div className="text-center text-sm text-muted-foreground">
@@ -87,9 +96,12 @@ export function BalanceDialog({ credentialId, open, onOpenChange, forceRefresh }
             <div className="grid grid-cols-2 gap-4 pt-4 border-t text-sm">
               <div>
                 <span className="text-muted-foreground">剩余额度：</span>
-                <span className="font-medium text-green-600">
-                  {formatCurrency(balance.remaining)}
-                </span>
+                <div className="font-medium text-green-600 tabular-nums">
+                  {formatKiroCredits(balance.remaining)}
+                </div>
+                <div className="text-xs text-muted-foreground tabular-nums">
+                  ≈ {formatKiroCreditsAsUsd(balance.remaining)}
+                </div>
               </div>
               <div>
                 <span className="text-muted-foreground">下次重置：</span>

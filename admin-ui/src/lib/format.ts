@@ -25,6 +25,32 @@ export function formatTokensPair(inputTokens: number, outputTokens: number): str
   return `${formatCompactNumber(inputTokens)} in / ${formatCompactNumber(outputTokens)} out`
 }
 
+const KIRO_CREDIT_USD_RATE = 0.04
+
+export function formatKiroCredits(credits: number): string {
+  return `${credits.toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })} credits`
+}
+
+export function formatKiroCreditsAsUsd(credits: number): string {
+  return new Intl.NumberFormat('zh-CN', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(credits * KIRO_CREDIT_USD_RATE)
+}
+
+export function formatKiroCreditsWithUsd(credits: number): string {
+  return `${formatKiroCredits(credits)} (≈ ${formatKiroCreditsAsUsd(credits)})`
+}
+
+export function formatKiroUsageWithUsd(currentUsage: number, usageLimit: number): string {
+  return `${formatKiroCredits(currentUsage)} / ${formatKiroCredits(usageLimit)} (≈ ${formatKiroCreditsAsUsd(currentUsage)} / ${formatKiroCreditsAsUsd(usageLimit)})`
+}
+
 export function formatExpiry(expiresAt: string | null): string {
   if (!expiresAt) return '未知'
   const date = new Date(expiresAt)
