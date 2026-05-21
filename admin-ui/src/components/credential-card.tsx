@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { RefreshCw, ChevronUp, ChevronDown, Wallet, Trash2, Loader2 } from 'lucide-react'
+import { RefreshCw, RotateCcw, Wallet, Trash2, Loader2, Pencil } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -217,35 +217,34 @@ export function CredentialCard({
     <>
       <Card>
         <CardHeader className="pb-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
               <Checkbox
                 checked={selected}
                 onCheckedChange={onToggleSelect}
                 aria-label={`选择凭据 ${credential.email || `#${credential.id}`}`}
               />
-              <CardTitle className="text-lg flex items-center gap-2">
-                {credential.email || `凭据 #${credential.id}`}
-                {credential.disabled && (
-                  <Badge variant="destructive">已禁用</Badge>
-                )}
-                {credential.disabled && credential.disabledReason && (
-                  <Badge variant="outline">{credential.disabledReason}</Badge>
-                )}
-                {credential.authMethod && (
-                  <Badge variant="secondary">
-                    {credential.authMethod === 'api_key' ? 'API Key' :
-                     credential.authMethod === 'idc' ? 'IdC' :
-                     credential.authMethod === 'social' ? 'Social' :
-                     credential.authMethod}
-                  </Badge>
-                )}
-                {credential.endpoint && (
-                  <Badge variant="outline">{credential.endpoint}</Badge>
-                )}
+              <CardTitle className="text-lg flex items-center gap-2 min-w-0 flex-1">
+                <span className="truncate">{credential.email || `凭据 #${credential.id}`}</span>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  {credential.disabled && (
+                    <Badge variant="destructive">已禁用</Badge>
+                  )}
+                  {credential.disabled && credential.disabledReason && (
+                    <Badge variant="outline">{credential.disabledReason}</Badge>
+                  )}
+                  {credential.authMethod && (
+                    <Badge variant="secondary">
+                      {credential.authMethod === 'api_key' ? 'API Key' :
+                       credential.authMethod === 'idc' ? 'IdC' :
+                       credential.authMethod === 'social' ? 'Social' :
+                       credential.authMethod}
+                    </Badge>
+                  )}
+                </div>
               </CardTitle>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-shrink-0">
               <span className="text-sm text-muted-foreground">启用</span>
               <Switch
                 checked={!credential.disabled}
@@ -295,11 +294,12 @@ export function CredentialCard({
               ) : (
                 <button
                   type="button"
-                  className="font-medium cursor-pointer hover:underline ml-1 text-left bg-transparent border-0 p-0"
+                  className="group inline-flex items-center gap-1 font-medium ml-1 text-left bg-transparent border-0 p-0 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
                   onClick={() => setEditingPriority(true)}
+                  aria-label={`编辑优先级（当前 ${credential.priority}）`}
                 >
                   {credential.priority}
-                  <span className="text-xs text-muted-foreground ml-1">(点击编辑)</span>
+                  <Pencil className="h-3 w-3 text-muted-foreground opacity-50 group-hover:opacity-100 transition-opacity" aria-hidden="true" />
                 </button>
               )}
             </div>
@@ -313,12 +313,6 @@ export function CredentialCard({
                   刷新 {credential.refreshFailureCount}
                 </span>
               )}
-            </div>
-            <div>
-              <span className="text-muted-foreground">刷新失败：</span>
-              <span className={credential.refreshFailureCount > 0 ? 'text-red-500 font-medium' : ''}>
-                {credential.refreshFailureCount}
-              </span>
             </div>
             <div>
               <span className="text-muted-foreground">订阅等级：</span>
@@ -423,17 +417,18 @@ export function CredentialCard({
               ) : (
                 <button
                   type="button"
-                  className="font-medium cursor-pointer hover:underline ml-1 text-left bg-transparent border-0 p-0"
+                  className="group inline-flex items-center gap-1 font-medium ml-1 text-left bg-transparent border-0 p-0 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
                   onClick={() => {
                     setEndpointValue(credential.endpoint ?? '')
                     setEditingEndpoint(true)
                   }}
+                  aria-label={`编辑 Endpoint（当前 ${credential.endpoint || '默认值'}，生效 ${credential.effectiveEndpoint}）`}
                 >
-                  {credential.endpoint || '默认值'}
-                  <span className="text-xs text-muted-foreground ml-1">
+                  <span>{credential.endpoint || '默认值'}</span>
+                  <span className="text-xs text-muted-foreground font-normal">
                     (生效: {credential.effectiveEndpoint})
                   </span>
-                  <span className="text-xs text-muted-foreground ml-1">(点击编辑)</span>
+                  <Pencil className="h-3 w-3 text-muted-foreground opacity-50 group-hover:opacity-100 transition-opacity" aria-hidden="true" />
                 </button>
               )}
             </div>
@@ -481,20 +476,21 @@ export function CredentialCard({
               ) : (
                 <button
                   type="button"
-                  className="font-medium cursor-pointer hover:underline ml-1 text-left bg-transparent border-0 p-0"
+                  className="group inline-flex items-center gap-1 font-medium ml-1 text-left bg-transparent border-0 p-0 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
                   onClick={() => {
                     setRegionValue(credential.region ?? '')
                     setApiRegionValue(credential.apiRegion ?? '')
                     setEditingRegion(true)
                   }}
+                  aria-label={`编辑 Region（当前 ${credential.region || '全局默认'}${credential.apiRegion ? `, API ${credential.apiRegion}` : ''}）`}
                 >
-                  {credential.region || '全局默认'}
+                  <span>{credential.region || '全局默认'}</span>
                   {credential.apiRegion && (
-                    <span className="text-muted-foreground ml-1">
+                    <span className="text-muted-foreground font-normal">
                       / API: {credential.apiRegion}
                     </span>
                   )}
-                  <span className="text-xs text-muted-foreground ml-1">(点击编辑)</span>
+                  <Pencil className="h-3 w-3 text-muted-foreground opacity-50 group-hover:opacity-100 transition-opacity" aria-hidden="true" />
                 </button>
               )}
             </div>
@@ -513,7 +509,7 @@ export function CredentialCard({
               onClick={handleReset}
               disabled={resetFailure.isPending || (credential.failureCount === 0 && credential.refreshFailureCount === 0)}
             >
-              <RefreshCw className="h-4 w-4 mr-1" aria-hidden="true" />
+              <RotateCcw className="h-4 w-4 mr-1" aria-hidden="true" />
               重置失败
             </Button>
             <Button
@@ -525,42 +521,6 @@ export function CredentialCard({
             >
               <RefreshCw className={`h-4 w-4 mr-1 ${forceRefreshToken.isPending ? 'animate-spin' : ''}`} aria-hidden="true" />
               刷新 Token
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                const newPriority = Math.max(0, credential.priority - 1)
-                setPriority.mutate(
-                  { id: credential.id, priority: newPriority },
-                  {
-                    onSuccess: (res) => toast.success(res.message),
-                    onError: (err) => toast.error('操作失败: ' + (err as Error).message),
-                  }
-                )
-              }}
-              disabled={setPriority.isPending || credential.priority === 0}
-            >
-              <ChevronUp className="h-4 w-4 mr-1" aria-hidden="true" />
-              提高优先级
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                const newPriority = credential.priority + 1
-                setPriority.mutate(
-                  { id: credential.id, priority: newPriority },
-                  {
-                    onSuccess: (res) => toast.success(res.message),
-                    onError: (err) => toast.error('操作失败: ' + (err as Error).message),
-                  }
-                )
-              }}
-              disabled={setPriority.isPending}
-            >
-              <ChevronDown className="h-4 w-4 mr-1" aria-hidden="true" />
-              降低优先级
             </Button>
             <Button
               size="sm"

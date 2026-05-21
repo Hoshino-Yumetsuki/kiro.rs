@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, Trash2, RotateCcw, CheckCircle2, Globe, ArrowUp, ArrowDown } from 'lucide-react'
+import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, Trash2, RotateCcw, CheckCircle2, Globe, ArrowUp, ArrowDown, Wallet, Eraser } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { storage } from '@/lib/storage'
@@ -727,7 +727,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
                   variant="outline"
                   disabled={queryingInfo}
                 >
-                  <RefreshCw className={`h-4 w-4 mr-2 ${queryingInfo ? 'animate-spin' : ''}`} aria-hidden="true" />
+                  <Wallet className={`h-4 w-4 mr-2 ${queryingInfo ? 'animate-pulse' : ''}`} aria-hidden="true" />
                   {queryingInfo ? `查询中… ${queryInfoProgress.current}/${queryInfoProgress.total}` : '查询信息'}
                 </Button>
               )}
@@ -740,7 +740,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
                   disabled={disabledCredentialCount === 0}
                   title={disabledCredentialCount === 0 ? '没有可清除的已禁用凭据' : undefined}
                 >
-                  <Trash2 className="h-4 w-4 mr-2" aria-hidden="true" />
+                  <Eraser className="h-4 w-4 mr-2" aria-hidden="true" />
                   清除已禁用
                 </Button>
               )}
