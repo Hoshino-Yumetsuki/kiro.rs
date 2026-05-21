@@ -352,9 +352,28 @@ export interface CompressionConfigResponse {
   toolResultTailLines: number
   toolUseInputMaxChars: number
   toolDescriptionMaxChars: number
+  toolDefinitionCompression: boolean
+  toolDefinitionSizeThreshold: number
+  toolDefinitionMinDescriptionChars: number
+  toolNameMaxChars: number
   maxHistoryTurns: number
   maxHistoryChars: number
+  imageMaxLongEdge: number
+  imageMaxPixelsSingle: number
+  imageMaxPixelsMulti: number
+  imageMultiThreshold: number
   maxRequestBodyBytes: number
+  adaptiveCompression: boolean
+  adaptiveCompressionMaxIters: number
+  adaptiveToolResultCompression: boolean
+  adaptiveMinToolResultMaxChars: number
+  adaptiveToolUseInputCompression: boolean
+  adaptiveMinToolUseInputMaxChars: number
+  adaptiveMessageContentCompression: boolean
+  adaptiveMinMessageContentMaxChars: number
+  adaptiveHistoryImageRemoval: boolean
+  adaptiveHistoryRemoval: boolean
+  adaptiveHistoryPreserveMessages: number
 }
 
 export interface GlobalConfigResponse {
@@ -376,9 +395,28 @@ export interface UpdateCompressionConfigRequest {
   toolResultTailLines?: number
   toolUseInputMaxChars?: number
   toolDescriptionMaxChars?: number
+  toolDefinitionCompression?: boolean
+  toolDefinitionSizeThreshold?: number
+  toolDefinitionMinDescriptionChars?: number
+  toolNameMaxChars?: number
   maxHistoryTurns?: number
   maxHistoryChars?: number
+  imageMaxLongEdge?: number
+  imageMaxPixelsSingle?: number
+  imageMaxPixelsMulti?: number
+  imageMultiThreshold?: number
   maxRequestBodyBytes?: number
+  adaptiveCompression?: boolean
+  adaptiveCompressionMaxIters?: number
+  adaptiveToolResultCompression?: boolean
+  adaptiveMinToolResultMaxChars?: number
+  adaptiveToolUseInputCompression?: boolean
+  adaptiveMinToolUseInputMaxChars?: number
+  adaptiveMessageContentCompression?: boolean
+  adaptiveMinMessageContentMaxChars?: number
+  adaptiveHistoryImageRemoval?: boolean
+  adaptiveHistoryRemoval?: boolean
+  adaptiveHistoryPreserveMessages?: number
 }
 
 export interface UpdateGlobalConfigRequest {
