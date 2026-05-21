@@ -687,6 +687,7 @@ fn repair_content_field(field: &mut String) -> bool {
 /// 截断策略：保留头部内容，尾部截断并附加省略标记。
 ///
 /// 返回节省的字节数。
+#[allow(dead_code)]
 pub fn compress_long_messages_pass(state: &mut ConversationState, max_chars: usize) -> usize {
     if max_chars == 0 {
         return 0;

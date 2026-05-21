@@ -251,10 +251,6 @@ fn default_adaptive_min_tool_use_input_max_chars() -> usize {
     256
 }
 
-fn default_adaptive_min_message_content_max_chars() -> usize {
-    8192
-}
-
 fn default_adaptive_history_preserve_messages() -> usize {
     2
 }
@@ -341,12 +337,6 @@ pub struct CompressionConfig {
     /// 自适应 tool_use input 截断最低阈值，默认 256
     #[serde(default = "default_adaptive_min_tool_use_input_max_chars")]
     pub adaptive_min_tool_use_input_max_chars: usize,
-    /// 自适应压缩是否截断超长用户消息，默认 true
-    #[serde(default = "default_true")]
-    pub adaptive_message_content_compression: bool,
-    /// 自适应用户消息截断最低阈值，默认 8192
-    #[serde(default = "default_adaptive_min_message_content_max_chars")]
-    pub adaptive_min_message_content_max_chars: usize,
     /// 自适应压缩是否移除历史图片，默认 true
     #[serde(default = "default_true")]
     pub adaptive_history_image_removal: bool,
@@ -386,9 +376,6 @@ impl Default for CompressionConfig {
             adaptive_min_tool_result_max_chars: default_adaptive_min_tool_result_max_chars(),
             adaptive_tool_use_input_compression: true,
             adaptive_min_tool_use_input_max_chars: default_adaptive_min_tool_use_input_max_chars(),
-            adaptive_message_content_compression: true,
-            adaptive_min_message_content_max_chars: default_adaptive_min_message_content_max_chars(
-            ),
             adaptive_history_image_removal: true,
             adaptive_history_removal: true,
             adaptive_history_preserve_messages: default_adaptive_history_preserve_messages(),

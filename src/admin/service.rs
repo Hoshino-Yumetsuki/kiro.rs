@@ -845,8 +845,6 @@ impl AdminService {
                 adaptive_min_tool_result_max_chars: c.adaptive_min_tool_result_max_chars,
                 adaptive_tool_use_input_compression: c.adaptive_tool_use_input_compression,
                 adaptive_min_tool_use_input_max_chars: c.adaptive_min_tool_use_input_max_chars,
-                adaptive_message_content_compression: c.adaptive_message_content_compression,
-                adaptive_min_message_content_max_chars: c.adaptive_min_message_content_max_chars,
                 adaptive_history_image_removal: c.adaptive_history_image_removal,
                 adaptive_history_removal: c.adaptive_history_removal,
                 adaptive_history_preserve_messages: c.adaptive_history_preserve_messages,
@@ -1045,12 +1043,6 @@ impl AdminService {
         }
         if let Some(v) = src.adaptive_min_tool_use_input_max_chars {
             target.adaptive_min_tool_use_input_max_chars = v;
-        }
-        if let Some(v) = src.adaptive_message_content_compression {
-            target.adaptive_message_content_compression = v;
-        }
-        if let Some(v) = src.adaptive_min_message_content_max_chars {
-            target.adaptive_min_message_content_max_chars = v;
         }
         if let Some(v) = src.adaptive_history_image_removal {
             target.adaptive_history_image_removal = v;

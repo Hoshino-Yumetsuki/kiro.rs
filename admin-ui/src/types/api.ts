@@ -369,8 +369,6 @@ export interface CompressionConfigResponse {
   adaptiveMinToolResultMaxChars: number
   adaptiveToolUseInputCompression: boolean
   adaptiveMinToolUseInputMaxChars: number
-  adaptiveMessageContentCompression: boolean
-  adaptiveMinMessageContentMaxChars: number
   adaptiveHistoryImageRemoval: boolean
   adaptiveHistoryRemoval: boolean
   adaptiveHistoryPreserveMessages: number
@@ -412,8 +410,6 @@ export interface UpdateCompressionConfigRequest {
   adaptiveMinToolResultMaxChars?: number
   adaptiveToolUseInputCompression?: boolean
   adaptiveMinToolUseInputMaxChars?: number
-  adaptiveMessageContentCompression?: boolean
-  adaptiveMinMessageContentMaxChars?: number
   adaptiveHistoryImageRemoval?: boolean
   adaptiveHistoryRemoval?: boolean
   adaptiveHistoryPreserveMessages?: number
