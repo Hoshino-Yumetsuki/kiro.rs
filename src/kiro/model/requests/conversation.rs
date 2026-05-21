@@ -74,6 +74,7 @@ impl ConversationState {
     }
 
     /// 移除历史用户消息中的所有图片，返回移除的图片数量
+    #[allow(dead_code)]
     pub fn remove_history_images(&mut self) -> usize {
         let mut removed = 0;
         for msg in &mut self.history {

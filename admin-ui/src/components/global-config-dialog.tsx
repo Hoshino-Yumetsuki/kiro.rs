@@ -45,31 +45,17 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
   const [cEnabled, setCEnabled] = useState(true)
   const [cWhitespace, setCWhitespace] = useState(true)
   const [cThinkingStrategy, setCThinkingStrategy] = useState('discard')
-  const [cToolResultMaxChars, setCToolResultMaxChars] = useState('')
-  const [cToolResultHeadLines, setCToolResultHeadLines] = useState('')
-  const [cToolResultTailLines, setCToolResultTailLines] = useState('')
-  const [cToolUseInputMaxChars, setCToolUseInputMaxChars] = useState('')
   const [cToolDescMaxChars, setCToolDescMaxChars] = useState('')
   const [cToolDefCompression, setCToolDefCompression] = useState(false)
-  const [cToolDefSizeThreshold, setCToolDefSizeThreshold] = useState('')
   const [cToolDefMinDescChars, setCToolDefMinDescChars] = useState('')
   const [cToolNameMaxChars, setCToolNameMaxChars] = useState('')
   const [cImageMaxLongEdge, setCImageMaxLongEdge] = useState('')
   const [cImageMaxPixelsSingle, setCImageMaxPixelsSingle] = useState('')
   const [cImageMaxPixelsMulti, setCImageMaxPixelsMulti] = useState('')
   const [cImageMultiThreshold, setCImageMultiThreshold] = useState('')
-  const [cMaxHistoryTurns, setCMaxHistoryTurns] = useState('')
-  const [cMaxHistoryChars, setCMaxHistoryChars] = useState('')
   const [cMaxRequestBodyBytes, setCMaxRequestBodyBytes] = useState('')
   const [cAdaptive, setCAdaptive] = useState(false)
   const [cAdaptiveMaxIters, setCAdaptiveMaxIters] = useState('')
-  const [cAdaptiveToolResult, setCAdaptiveToolResult] = useState(false)
-  const [cAdaptiveMinToolResultChars, setCAdaptiveMinToolResultChars] = useState('')
-  const [cAdaptiveToolUseInput, setCAdaptiveToolUseInput] = useState(false)
-  const [cAdaptiveMinToolUseInputChars, setCAdaptiveMinToolUseInputChars] = useState('')
-  const [cAdaptiveHistoryImage, setCAdaptiveHistoryImage] = useState(false)
-  const [cAdaptiveHistoryRemoval, setCAdaptiveHistoryRemoval] = useState(false)
-  const [cAdaptiveHistoryPreserve, setCAdaptiveHistoryPreserve] = useState('')
 
   const isLoading = proxyLoading || globalLoading
   const isPending = proxyPending || globalPending
@@ -86,31 +72,17 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
       setCEnabled(c.enabled)
       setCWhitespace(c.whitespaceCompression)
       setCThinkingStrategy(c.thinkingStrategy)
-      setCToolResultMaxChars(c.toolResultMaxChars.toString())
-      setCToolResultHeadLines(c.toolResultHeadLines.toString())
-      setCToolResultTailLines(c.toolResultTailLines.toString())
-      setCToolUseInputMaxChars(c.toolUseInputMaxChars.toString())
       setCToolDescMaxChars(c.toolDescriptionMaxChars.toString())
       setCToolDefCompression(c.toolDefinitionCompression)
-      setCToolDefSizeThreshold(c.toolDefinitionSizeThreshold.toString())
       setCToolDefMinDescChars(c.toolDefinitionMinDescriptionChars.toString())
       setCToolNameMaxChars(c.toolNameMaxChars.toString())
       setCImageMaxLongEdge(c.imageMaxLongEdge.toString())
       setCImageMaxPixelsSingle(c.imageMaxPixelsSingle.toString())
       setCImageMaxPixelsMulti(c.imageMaxPixelsMulti.toString())
       setCImageMultiThreshold(c.imageMultiThreshold.toString())
-      setCMaxHistoryTurns(c.maxHistoryTurns.toString())
-      setCMaxHistoryChars(c.maxHistoryChars.toString())
       setCMaxRequestBodyBytes(c.maxRequestBodyBytes.toString())
       setCAdaptive(c.adaptiveCompression)
       setCAdaptiveMaxIters(c.adaptiveCompressionMaxIters.toString())
-      setCAdaptiveToolResult(c.adaptiveToolResultCompression)
-      setCAdaptiveMinToolResultChars(c.adaptiveMinToolResultMaxChars.toString())
-      setCAdaptiveToolUseInput(c.adaptiveToolUseInputCompression)
-      setCAdaptiveMinToolUseInputChars(c.adaptiveMinToolUseInputMaxChars.toString())
-      setCAdaptiveHistoryImage(c.adaptiveHistoryImageRemoval)
-      setCAdaptiveHistoryRemoval(c.adaptiveHistoryRemoval)
-      setCAdaptiveHistoryPreserve(c.adaptiveHistoryPreserveMessages.toString())
     }
     if (open && proxyConfig) {
       setProxyUrl(proxyConfig.proxyUrl || '')
@@ -170,31 +142,17 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
       setIf('enabled', cEnabled, oc.enabled)
       setIf('whitespaceCompression', cWhitespace, oc.whitespaceCompression)
       setIf('thinkingStrategy', cThinkingStrategy, oc.thinkingStrategy)
-      setIf('toolResultMaxChars', parseInt(cToolResultMaxChars) || 0, oc.toolResultMaxChars)
-      setIf('toolResultHeadLines', parseInt(cToolResultHeadLines) || 0, oc.toolResultHeadLines)
-      setIf('toolResultTailLines', parseInt(cToolResultTailLines) || 0, oc.toolResultTailLines)
-      setIf('toolUseInputMaxChars', parseInt(cToolUseInputMaxChars) || 0, oc.toolUseInputMaxChars)
       setIf('toolDescriptionMaxChars', parseInt(cToolDescMaxChars) || 0, oc.toolDescriptionMaxChars)
       setIf('toolDefinitionCompression', cToolDefCompression, oc.toolDefinitionCompression)
-      setIf('toolDefinitionSizeThreshold', parseInt(cToolDefSizeThreshold) || 0, oc.toolDefinitionSizeThreshold)
       setIf('toolDefinitionMinDescriptionChars', parseInt(cToolDefMinDescChars) || 0, oc.toolDefinitionMinDescriptionChars)
       setIf('toolNameMaxChars', parseInt(cToolNameMaxChars) || 0, oc.toolNameMaxChars)
       setIf('imageMaxLongEdge', parseInt(cImageMaxLongEdge) || 0, oc.imageMaxLongEdge)
       setIf('imageMaxPixelsSingle', parseInt(cImageMaxPixelsSingle) || 0, oc.imageMaxPixelsSingle)
       setIf('imageMaxPixelsMulti', parseInt(cImageMaxPixelsMulti) || 0, oc.imageMaxPixelsMulti)
       setIf('imageMultiThreshold', parseInt(cImageMultiThreshold) || 0, oc.imageMultiThreshold)
-      setIf('maxHistoryTurns', parseInt(cMaxHistoryTurns) || 0, oc.maxHistoryTurns)
-      setIf('maxHistoryChars', parseInt(cMaxHistoryChars) || 0, oc.maxHistoryChars)
       setIf('maxRequestBodyBytes', parseInt(cMaxRequestBodyBytes) || 0, oc.maxRequestBodyBytes)
       setIf('adaptiveCompression', cAdaptive, oc.adaptiveCompression)
       setIf('adaptiveCompressionMaxIters', parseInt(cAdaptiveMaxIters) || 0, oc.adaptiveCompressionMaxIters)
-      setIf('adaptiveToolResultCompression', cAdaptiveToolResult, oc.adaptiveToolResultCompression)
-      setIf('adaptiveMinToolResultMaxChars', parseInt(cAdaptiveMinToolResultChars) || 0, oc.adaptiveMinToolResultMaxChars)
-      setIf('adaptiveToolUseInputCompression', cAdaptiveToolUseInput, oc.adaptiveToolUseInputCompression)
-      setIf('adaptiveMinToolUseInputMaxChars', parseInt(cAdaptiveMinToolUseInputChars) || 0, oc.adaptiveMinToolUseInputMaxChars)
-      setIf('adaptiveHistoryImageRemoval', cAdaptiveHistoryImage, oc.adaptiveHistoryImageRemoval)
-      setIf('adaptiveHistoryRemoval', cAdaptiveHistoryRemoval, oc.adaptiveHistoryRemoval)
-      setIf('adaptiveHistoryPreserveMessages', parseInt(cAdaptiveHistoryPreserve) || 0, oc.adaptiveHistoryPreserveMessages)
       if (hasCompChanges) {
         globalPayload.compression = comp
         hasGlobalChanges = true
@@ -231,12 +189,10 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
     }
     if (hasProxyChanges) {
       pending++
-      mutateProxy(proxyPayload, { onSuccess: done, onError: fail })
+      mutateProxy(proxyPayload as never, { onSuccess: done, onError: fail })
     }
     if (pending === 0) onOpenChange(false)
   }
-
-  // PLACEHOLDER_JSX
 
   const numInput = (id: string, label: string, value: string, setter: (v: string) => void, hint?: string) => (
     <div className="space-y-1">
@@ -277,35 +233,18 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
                   <option value="300">5 分钟</option>
                   <option value="3600">1 小时</option>
                 </select>
-                <p className="text-xs text-muted-foreground">仅支持 5 分钟和 1 小时两档，保存后立即生效</p>
               </div>
               <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <label className="text-sm font-medium">Prompt Cache 记账</label>
-                  <p className="text-xs text-muted-foreground">关闭后立即停止输出和扣减本地 cache token</p>
-                </div>
+                <label className="text-sm font-medium">Prompt Cache 记账</label>
                 <Switch checked={promptCacheAccountingEnabled} onCheckedChange={setPromptCacheAccountingEnabled} disabled={isPending} aria-label="Prompt Cache 记账" />
               </div>
               <div className="space-y-1">
-                <label htmlFor="gcDefaultEndpoint" className="text-sm font-medium">默认 Endpoint</label>
-                <select
-                  id="gcDefaultEndpoint"
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                  value={defaultEndpoint}
-                  onChange={(e) => setDefaultEndpoint(e.target.value)}
-                  disabled={isPending}
-                >
-                  <option value="ide">ide</option>
-                  <option value="cli">cli</option>
-                </select>
-                <p className="text-xs text-muted-foreground">凭据未显式指定 endpoint 时使用此默认值</p>
+                <label htmlFor="gcDefaultEndpoint" className="text-sm font-medium">默认端点</label>
+                <Input id="gcDefaultEndpoint" placeholder="ide" value={defaultEndpoint} onChange={(e) => setDefaultEndpoint(e.target.value)} disabled={isPending} />
               </div>
               <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <label className="text-sm font-medium">凭据冷却机制</label>
-                  <p className="text-xs text-muted-foreground">禁用后 429 限流不会触发冷却，仍会尝试故障转移</p>
-                </div>
-                <Switch checked={enableCredentialCooldown} onCheckedChange={setEnableCredentialCooldown} disabled={isPending} />
+                <label className="text-sm font-medium">凭据冷却机制</label>
+                <Switch checked={enableCredentialCooldown} onCheckedChange={setEnableCredentialCooldown} disabled={isPending} aria-label="凭据冷却机制" />
               </div>
             </div>
 
@@ -362,20 +301,13 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
                 </select>
               </div>
 
-              {/* 工具截断 */}
-              <p className="text-xs font-medium text-muted-foreground pt-2">工具截断</p>
-              {numInput('gcTrMaxChars', 'tool_result 截断阈值（字符）', cToolResultMaxChars, setCToolResultMaxChars)}
-              <div className="grid grid-cols-2 gap-2">
-                {numInput('gcTrHead', 'tool_result 保留头部行数', cToolResultHeadLines, setCToolResultHeadLines)}
-                {numInput('gcTrTail', 'tool_result 保留尾部行数', cToolResultTailLines, setCToolResultTailLines)}
-              </div>
-              {numInput('gcTuMaxChars', 'tool_use input 截断阈值（字符）', cToolUseInputMaxChars, setCToolUseInputMaxChars)}
+              {/* 工具定义 */}
+              <p className="text-xs font-medium text-muted-foreground pt-2">工具定义</p>
               {numInput('gcTdMaxChars', '工具描述截断阈值（字符）', cToolDescMaxChars, setCToolDescMaxChars)}
               <div className="flex items-center justify-between">
                 <label className="text-sm font-medium">工具定义压缩</label>
                 <Switch checked={cToolDefCompression} onCheckedChange={setCToolDefCompression} disabled={isPending} aria-label="工具定义压缩" />
               </div>
-              {numInput('gcTdSizeThreshold', '工具定义压缩阈值（字符）', cToolDefSizeThreshold, setCToolDefSizeThreshold, '超过此大小的工具定义才压缩')}
               {numInput('gcTdMinDescChars', '工具定义最小描述字符数', cToolDefMinDescChars, setCToolDefMinDescChars)}
               {numInput('gcTnMaxChars', '工具名称最大字符数', cToolNameMaxChars, setCToolNameMaxChars, '0 = 不限')}
 
@@ -388,40 +320,14 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
               </div>
               {numInput('gcImgMultiThreshold', '多图阈值（张）', cImageMultiThreshold, setCImageMultiThreshold, '超过此数量按多图限制')}
 
-              {/* 历史与请求体 */}
-              <p className="text-xs font-medium text-muted-foreground pt-2">历史与请求体</p>
-              <div className="grid grid-cols-2 gap-2">
-                {numInput('gcMaxTurns', '历史最大轮数', cMaxHistoryTurns, setCMaxHistoryTurns, '0 = 不限')}
-                {numInput('gcMaxChars', '历史最大字符数', cMaxHistoryChars, setCMaxHistoryChars, '0 = 不限')}
-              </div>
-              {numInput('gcMaxBody', '请求体大小上限（字节）', cMaxRequestBodyBytes, setCMaxRequestBodyBytes, '超过此大小触发自适应压缩，0 = 不限')}
-
               {/* 自适应压缩 */}
               <p className="text-xs font-medium text-muted-foreground pt-2">自适应压缩</p>
+              {numInput('gcMaxBody', '请求体大小上限（字节）', cMaxRequestBodyBytes, setCMaxRequestBodyBytes, '超过此大小触发自适应压缩，0 = 不限')}
               <div className="flex items-center justify-between">
                 <label className="text-sm font-medium">启用自适应压缩</label>
                 <Switch checked={cAdaptive} onCheckedChange={setCAdaptive} disabled={isPending} aria-label="启用自适应压缩" />
               </div>
               {numInput('gcAdaptiveMaxIters', '最大迭代次数', cAdaptiveMaxIters, setCAdaptiveMaxIters)}
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-medium">自适应 tool_result 压缩</label>
-                <Switch checked={cAdaptiveToolResult} onCheckedChange={setCAdaptiveToolResult} disabled={isPending} aria-label="自适应 tool_result 压缩" />
-              </div>
-              {numInput('gcAdaptiveMinTrChars', '自适应 tool_result 最小字符数', cAdaptiveMinToolResultChars, setCAdaptiveMinToolResultChars)}
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-medium">自适应 tool_use input 压缩</label>
-                <Switch checked={cAdaptiveToolUseInput} onCheckedChange={setCAdaptiveToolUseInput} disabled={isPending} aria-label="自适应 tool_use input 压缩" />
-              </div>
-              {numInput('gcAdaptiveMinTuChars', '自适应 tool_use input 最小字符数', cAdaptiveMinToolUseInputChars, setCAdaptiveMinToolUseInputChars)}
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-medium">自适应历史图片移除</label>
-                <Switch checked={cAdaptiveHistoryImage} onCheckedChange={setCAdaptiveHistoryImage} disabled={isPending} aria-label="自适应历史图片移除" />
-              </div>
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-medium">自适应历史移除</label>
-                <Switch checked={cAdaptiveHistoryRemoval} onCheckedChange={setCAdaptiveHistoryRemoval} disabled={isPending} aria-label="自适应历史移除" />
-              </div>
-              {numInput('gcAdaptivePreserve', '自适应保留最近消息数', cAdaptiveHistoryPreserve, setCAdaptiveHistoryPreserve, '历史移除时保留的最近消息数')}
             </div>
 
             <DialogFooter>

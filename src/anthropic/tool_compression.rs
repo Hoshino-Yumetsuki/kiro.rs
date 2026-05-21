@@ -15,11 +15,12 @@ use crate::model::config::CompressionConfig;
 /// 返回压缩后的工具列表（如果未超阈值则原样返回）
 #[allow(dead_code)]
 pub fn compress_tools_if_needed(tools: &[KiroTool], config: &CompressionConfig) -> Vec<KiroTool> {
-    if !config.tool_definition_compression || config.tool_definition_size_threshold == 0 {
+    if !config.tool_definition_compression {
         return tools.to_vec();
     }
 
-    let threshold = config.tool_definition_size_threshold;
+    // 旧阈值逻辑保留用于测试兼容（默认 20KB）
+    let threshold = 20 * 1024;
     let total_size = estimate_tools_size(tools);
     if total_size <= threshold {
         return tools.to_vec();
@@ -310,7 +311,7 @@ mod tests {
             serde_json::json!({"type": "object", "properties": {}}),
         )];
         let mut config = CompressionConfig::default();
-        config.tool_definition_size_threshold = 0;
+        config.tool_definition_compression = false;
 
         let result = compress_tools_if_needed(&tools, &config);
 
@@ -339,7 +340,7 @@ mod tests {
 
         let original_size = estimate_tools_size(&tools);
         assert!(
-            original_size > CompressionConfig::default().tool_definition_size_threshold,
+            original_size > 20 * 1024,
             "测试数据应超过阈值"
         );
 

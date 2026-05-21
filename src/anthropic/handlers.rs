@@ -192,9 +192,8 @@ struct AdaptiveCompressionOutcome {
     initial_bytes: usize,
     final_bytes: usize,
     iters: usize,
-    additional_history_turns_removed: usize,
-    final_tool_result_max_chars: usize,
-    final_tool_use_input_max_chars: usize,
+    whitespace_compressed: bool,
+    thinking_compressed: bool,
     tool_schemas_simplified: bool,
     final_tool_description_max_chars: usize,
 }
@@ -244,100 +243,32 @@ fn adaptive_shrink_request_body(
         initial_bytes: request_body.len(),
         final_bytes: request_body.len(),
         iters: 0,
-        additional_history_turns_removed: 0,
-        final_tool_result_max_chars: base_config.tool_result_max_chars,
-        final_tool_use_input_max_chars: base_config.tool_use_input_max_chars,
+        whitespace_compressed: false,
+        thinking_compressed: false,
         tool_schemas_simplified: false,
         final_tool_description_max_chars: 0,
     };
 
-    // 二次压缩策略：
-    // 1) 逐步降低 tool_result_max_chars（仅当存在 tool_result/tools）
-    // 2) 逐步降低 tool_use_input_max_chars（仅当存在 tool_use）
-    // 3) 工具定义 schema 简化（一次性，低损）
-    // 4) 逐步截断工具 description（仅当存在 tools）
-    // 5) 仅清除一次历史图片（保留 current_message 图片）
-    // 6) 按 request_body_bytes 成对移除最老的 user+assistant 两条消息（保留前 2 条）
-    //
-    // 每轮都会重新跑一次压缩管道（包含 tool 配对修复），再重新序列化计算字节数。
-    let mut adaptive_config = base_config.clone();
-    let mut history_images_removed = false;
-    let adaptive_min_tool_result_max_chars = base_config.adaptive_min_tool_result_max_chars;
-    let adaptive_min_tool_use_input_max_chars = base_config.adaptive_min_tool_use_input_max_chars;
-    let adaptive_history_preserve_messages = base_config.adaptive_history_preserve_messages;
+    // 自适应压缩策略：
+    // 1) 空白压缩（一次性）
+    // 2) thinking 压缩（一次性）
+    // 3) 工具定义 schema 简化（一次性）
+    // 4) 逐步截断工具 description（迭代 ×3/4）
+    let mut whitespace_done = false;
+    let mut thinking_done = false;
+    let mut schemas_simplified = false;
 
-    // 是否存在任何 tool_result / tools（否则降低阈值只会浪费迭代次数）
-    let has_any_tool_results_or_tools = {
-        let state = &kiro_request.conversation_state;
-        if !state
-            .current_message
-            .user_input_message
-            .user_input_message_context
-            .tool_results
-            .is_empty()
-            || !state
-                .current_message
-                .user_input_message
-                .user_input_message_context
-                .tools
-                .is_empty()
-        {
-            true
-        } else {
-            state.history.iter().any(|msg| match msg {
-                crate::kiro::model::requests::conversation::Message::User(u) => {
-                    !u.user_input_message
-                        .user_input_message_context
-                        .tool_results
-                        .is_empty()
-                        || !u
-                            .user_input_message
-                            .user_input_message_context
-                            .tools
-                            .is_empty()
-                }
-                _ => false,
-            })
-        }
-    };
-
-    // 是否存在任何 tool_use（否则降低阈值只会浪费迭代次数）
-    let has_any_tool_uses = kiro_request
-        .conversation_state
-        .history
-        .iter()
-        .any(|msg| match msg {
-            crate::kiro::model::requests::conversation::Message::Assistant(a) => a
-                .assistant_response_message
-                .tool_uses
-                .as_ref()
-                .is_some_and(|t| !t.is_empty()),
-            _ => false,
-        });
-
-    // 是否存在历史图片（否则无需尝试图片降级）
-    let has_history_images = kiro_request
-        .conversation_state
-        .history
-        .iter()
-        .any(|msg| match msg {
-            crate::kiro::model::requests::conversation::Message::User(u) => {
-                !u.user_input_message.images.is_empty()
-            }
-            _ => false,
-        });
-
-    // 工具定义压缩状态
-    let mut tool_schemas_simplified = false;
-    let has_any_tools = !kiro_request
+    let has_tools = !kiro_request
         .conversation_state
         .current_message
         .user_input_message
         .user_input_message_context
         .tools
         .is_empty();
+
     // 初始 description 截断阈值：取当前最大 description 字符数的 3/4
-    let max_tool_desc_chars = if has_any_tools {
+    let min_desc = base_config.tool_definition_min_description_chars;
+    let max_tool_desc_chars = if has_tools {
         kiro_request
             .conversation_state
             .current_message
@@ -351,126 +282,61 @@ fn adaptive_shrink_request_body(
     } else {
         0
     };
-    let adaptive_min_tool_description_chars = base_config.tool_definition_min_description_chars;
-    let mut tool_description_max_chars =
-        (max_tool_desc_chars * 3 / 4).max(adaptive_min_tool_description_chars);
+    let mut desc_max = (max_tool_desc_chars * 3 / 4).max(min_desc);
 
     for _ in 0..base_config.adaptive_compression_max_iters {
         if request_body.len() <= max_body {
             break;
         }
 
-        let mut changed = false;
-
-        if base_config.adaptive_tool_result_compression
-            && adaptive_min_tool_result_max_chars > 0
-            && has_any_tool_results_or_tools
-            && adaptive_config.tool_result_max_chars > adaptive_min_tool_result_max_chars
-        {
-            let next = (adaptive_config.tool_result_max_chars * 3 / 4)
-                .max(adaptive_min_tool_result_max_chars);
-            if next < adaptive_config.tool_result_max_chars {
-                adaptive_config.tool_result_max_chars = next;
-                changed = true;
-            }
-        } else if base_config.adaptive_tool_use_input_compression
-            && adaptive_min_tool_use_input_max_chars > 0
-            && has_any_tool_uses
-            && adaptive_config.tool_use_input_max_chars > adaptive_min_tool_use_input_max_chars
-        {
-            let next = (adaptive_config.tool_use_input_max_chars * 3 / 4)
-                .max(adaptive_min_tool_use_input_max_chars);
-            if next < adaptive_config.tool_use_input_max_chars {
-                adaptive_config.tool_use_input_max_chars = next;
-                changed = true;
-            }
-        } else if base_config.tool_definition_compression
-            && has_any_tools
-            && !tool_schemas_simplified
-        {
-            // 工具定义压缩第一步：schema 简化（一次性）
-            let tools = &mut kiro_request
-                .conversation_state
-                .current_message
-                .user_input_message
-                .user_input_message_context
-                .tools;
-            let saved = super::tool_compression::simplify_tool_schemas(tools);
-            if saved > 0 {
-                changed = true;
-            }
-            tool_schemas_simplified = true;
-        } else if base_config.tool_definition_compression
-            && has_any_tools
-            && tool_description_max_chars >= adaptive_min_tool_description_chars
-        {
-            // 工具定义压缩第二步：description 逐步截断
-            let tools = &mut kiro_request
-                .conversation_state
-                .current_message
-                .user_input_message
-                .user_input_message_context
-                .tools;
-            let saved = super::tool_compression::truncate_tool_descriptions(
-                tools,
-                tool_description_max_chars,
-                adaptive_min_tool_description_chars,
+        if !whitespace_done && base_config.whitespace_compression {
+            super::compressor::compress_whitespace_pass(
+                &mut kiro_request.conversation_state,
             );
-            if saved > 0 {
-                changed = true;
+            whitespace_done = true;
+            outcome.whitespace_compressed = true;
+        } else if !thinking_done && base_config.thinking_strategy != "keep" {
+            super::compressor::compress_thinking_pass(
+                &mut kiro_request.conversation_state,
+                &base_config.thinking_strategy,
+            );
+            thinking_done = true;
+            outcome.thinking_compressed = true;
+        } else if base_config.tool_definition_compression && !schemas_simplified && has_tools {
+            let tools = &mut kiro_request
+                .conversation_state
+                .current_message
+                .user_input_message
+                .user_input_message_context
+                .tools;
+            super::tool_compression::simplify_tool_schemas(tools);
+            schemas_simplified = true;
+            outcome.tool_schemas_simplified = true;
+        } else if base_config.tool_definition_compression && has_tools && desc_max >= min_desc {
+            let tools = &mut kiro_request
+                .conversation_state
+                .current_message
+                .user_input_message
+                .user_input_message_context
+                .tools;
+            super::tool_compression::truncate_tool_descriptions(tools, desc_max, min_desc);
+            let next = (desc_max * 3 / 4).max(min_desc);
+            if next >= desc_max {
+                // 已到下限，无法继续
+                outcome.final_tool_description_max_chars = desc_max;
+                break;
             }
-            // 每轮递减 3/4
-            let next = (tool_description_max_chars * 3 / 4).max(adaptive_min_tool_description_chars);
-            if next >= tool_description_max_chars {
-                // 已到下限，标记不再尝试
-                tool_description_max_chars = 0;
-            } else {
-                tool_description_max_chars = next;
-            }
+            desc_max = next;
         } else {
-            let history = &mut kiro_request.conversation_state.history;
-            if base_config.adaptive_history_image_removal
-                && !history_images_removed
-                && has_history_images
-            {
-                // 仅清除历史图片，保留 current_message 图片
-                let removed = kiro_request.conversation_state.remove_history_images();
-                if removed > 0 {
-                    history_images_removed = true;
-                    changed = true;
-                }
-            } else if base_config.adaptive_history_removal
-                && history.len() > adaptive_history_preserve_messages + 2
-            {
-                // 移除最老历史消息（成对移除 user+assistant）
-                let preserve = adaptive_history_preserve_messages;
-                let min_len = preserve + 2;
-                let removable = history.len().saturating_sub(min_len);
-                // 单轮最多移除 16 条消息（8 轮），避免一次性丢弃过多上下文
-                let mut remove_msgs = removable.min(16);
-                remove_msgs -= remove_msgs % 2; // 保持成对移除
-                if remove_msgs > 0 {
-                    history.drain(preserve..preserve + remove_msgs);
-                    outcome.additional_history_turns_removed += remove_msgs / 2;
-                    changed = true;
-                }
-            }
+            break; // nothing more to try
         }
 
-        if !changed {
-            break;
-        }
-
-        super::compressor::compress(&mut kiro_request.conversation_state, &adaptive_config);
         *request_body = serde_json::to_string(kiro_request)?;
         outcome.iters += 1;
         outcome.final_bytes = request_body.len();
     }
 
-    outcome.final_tool_result_max_chars = adaptive_config.tool_result_max_chars;
-    outcome.final_tool_use_input_max_chars = adaptive_config.tool_use_input_max_chars;
-    outcome.tool_schemas_simplified = tool_schemas_simplified;
-    outcome.final_tool_description_max_chars = tool_description_max_chars;
+    outcome.final_tool_description_max_chars = desc_max;
 
     Ok(Some(outcome))
 }
@@ -1076,12 +942,11 @@ pub async fn post_messages(
                     final_bytes = outcome.final_bytes,
                     threshold = max_body,
                     iters = outcome.iters,
-                    additional_history_turns_removed = outcome.additional_history_turns_removed,
-                    final_tool_result_max_chars = outcome.final_tool_result_max_chars,
-                    final_tool_use_input_max_chars = outcome.final_tool_use_input_max_chars,
+                    whitespace_compressed = outcome.whitespace_compressed,
+                    thinking_compressed = outcome.thinking_compressed,
                     tool_schemas_simplified = outcome.tool_schemas_simplified,
                     final_tool_description_max_chars = outcome.final_tool_description_max_chars,
-                    "请求体超过阈值，已执行自适应二次压缩"
+                    "请求体超过阈值，已执行自适应压缩"
                 );
             }
             Ok(None) => {}

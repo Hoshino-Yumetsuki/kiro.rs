@@ -823,17 +823,10 @@ impl AdminService {
                 enabled: c.enabled,
                 whitespace_compression: c.whitespace_compression,
                 thinking_strategy: c.thinking_strategy.clone(),
-                tool_result_max_chars: c.tool_result_max_chars,
-                tool_result_head_lines: c.tool_result_head_lines,
-                tool_result_tail_lines: c.tool_result_tail_lines,
-                tool_use_input_max_chars: c.tool_use_input_max_chars,
                 tool_description_max_chars: c.tool_description_max_chars,
                 tool_definition_compression: c.tool_definition_compression,
-                tool_definition_size_threshold: c.tool_definition_size_threshold,
                 tool_definition_min_description_chars: c.tool_definition_min_description_chars,
                 tool_name_max_chars: c.tool_name_max_chars,
-                max_history_turns: c.max_history_turns,
-                max_history_chars: c.max_history_chars,
                 image_max_long_edge: c.image_max_long_edge,
                 image_max_pixels_single: c.image_max_pixels_single,
                 image_max_pixels_multi: c.image_max_pixels_multi,
@@ -841,13 +834,6 @@ impl AdminService {
                 max_request_body_bytes: c.max_request_body_bytes,
                 adaptive_compression: c.adaptive_compression,
                 adaptive_compression_max_iters: c.adaptive_compression_max_iters,
-                adaptive_tool_result_compression: c.adaptive_tool_result_compression,
-                adaptive_min_tool_result_max_chars: c.adaptive_min_tool_result_max_chars,
-                adaptive_tool_use_input_compression: c.adaptive_tool_use_input_compression,
-                adaptive_min_tool_use_input_max_chars: c.adaptive_min_tool_use_input_max_chars,
-                adaptive_history_image_removal: c.adaptive_history_image_removal,
-                adaptive_history_removal: c.adaptive_history_removal,
-                adaptive_history_preserve_messages: c.adaptive_history_preserve_messages,
             },
         }
     }
@@ -978,35 +964,11 @@ impl AdminService {
         if let Some(ref v) = src.thinking_strategy {
             target.thinking_strategy = v.clone();
         }
-        if let Some(v) = src.tool_result_max_chars {
-            target.tool_result_max_chars = v;
-        }
-        if let Some(v) = src.tool_result_head_lines {
-            target.tool_result_head_lines = v;
-        }
-        if let Some(v) = src.tool_result_tail_lines {
-            target.tool_result_tail_lines = v;
-        }
-        if let Some(v) = src.tool_use_input_max_chars {
-            target.tool_use_input_max_chars = v;
-        }
         if let Some(v) = src.tool_description_max_chars {
             target.tool_description_max_chars = v;
         }
-        if let Some(v) = src.max_history_turns {
-            target.max_history_turns = v;
-        }
-        if let Some(v) = src.max_history_chars {
-            target.max_history_chars = v;
-        }
-        if let Some(v) = src.max_request_body_bytes {
-            target.max_request_body_bytes = v;
-        }
         if let Some(v) = src.tool_definition_compression {
             target.tool_definition_compression = v;
-        }
-        if let Some(v) = src.tool_definition_size_threshold {
-            target.tool_definition_size_threshold = v;
         }
         if let Some(v) = src.tool_definition_min_description_chars {
             target.tool_definition_min_description_chars = v;
@@ -1026,32 +988,14 @@ impl AdminService {
         if let Some(v) = src.image_multi_threshold {
             target.image_multi_threshold = v;
         }
+        if let Some(v) = src.max_request_body_bytes {
+            target.max_request_body_bytes = v;
+        }
         if let Some(v) = src.adaptive_compression {
             target.adaptive_compression = v;
         }
         if let Some(v) = src.adaptive_compression_max_iters {
             target.adaptive_compression_max_iters = v;
-        }
-        if let Some(v) = src.adaptive_tool_result_compression {
-            target.adaptive_tool_result_compression = v;
-        }
-        if let Some(v) = src.adaptive_min_tool_result_max_chars {
-            target.adaptive_min_tool_result_max_chars = v;
-        }
-        if let Some(v) = src.adaptive_tool_use_input_compression {
-            target.adaptive_tool_use_input_compression = v;
-        }
-        if let Some(v) = src.adaptive_min_tool_use_input_max_chars {
-            target.adaptive_min_tool_use_input_max_chars = v;
-        }
-        if let Some(v) = src.adaptive_history_image_removal {
-            target.adaptive_history_image_removal = v;
-        }
-        if let Some(v) = src.adaptive_history_removal {
-            target.adaptive_history_removal = v;
-        }
-        if let Some(v) = src.adaptive_history_preserve_messages {
-            target.adaptive_history_preserve_messages = v;
         }
     }
 }

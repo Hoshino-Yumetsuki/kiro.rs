@@ -555,24 +555,15 @@ pub fn convert_request(
     }
 
     // 13. 构建 ConversationState
-    let mut conversation_state = ConversationState::new(conversation_id)
+    let conversation_state = ConversationState::new(conversation_id)
         .with_agent_continuation_id(agent_continuation_id)
         .with_agent_task_type("vibe")
         .with_chat_trigger_type(chat_trigger_type)
         .with_current_message(current_message)
         .with_history(history);
 
-    // 14. 执行输入压缩
-    let compression_stats = if compression_config.enabled {
-        let stats = super::compressor::compress(&mut conversation_state, compression_config);
-        if stats.total_saved() > 0 || stats.history_turns_removed > 0 {
-            Some(stats)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    // 14. 压缩已移至 adaptive loop（handlers.rs），此处不再执行
+    let compression_stats: Option<super::compressor::CompressionStats> = None;
 
     if !tool_name_map.is_empty() {
         tracing::info!("工具名称映射: {} 个超长名称已缩短", tool_name_map.len());

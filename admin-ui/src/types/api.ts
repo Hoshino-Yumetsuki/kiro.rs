@@ -347,17 +347,10 @@ export interface CompressionConfigResponse {
   enabled: boolean
   whitespaceCompression: boolean
   thinkingStrategy: string
-  toolResultMaxChars: number
-  toolResultHeadLines: number
-  toolResultTailLines: number
-  toolUseInputMaxChars: number
   toolDescriptionMaxChars: number
   toolDefinitionCompression: boolean
-  toolDefinitionSizeThreshold: number
   toolDefinitionMinDescriptionChars: number
   toolNameMaxChars: number
-  maxHistoryTurns: number
-  maxHistoryChars: number
   imageMaxLongEdge: number
   imageMaxPixelsSingle: number
   imageMaxPixelsMulti: number
@@ -365,13 +358,6 @@ export interface CompressionConfigResponse {
   maxRequestBodyBytes: number
   adaptiveCompression: boolean
   adaptiveCompressionMaxIters: number
-  adaptiveToolResultCompression: boolean
-  adaptiveMinToolResultMaxChars: number
-  adaptiveToolUseInputCompression: boolean
-  adaptiveMinToolUseInputMaxChars: number
-  adaptiveHistoryImageRemoval: boolean
-  adaptiveHistoryRemoval: boolean
-  adaptiveHistoryPreserveMessages: number
 }
 
 export interface GlobalConfigResponse {
@@ -388,17 +374,10 @@ export interface UpdateCompressionConfigRequest {
   enabled?: boolean
   whitespaceCompression?: boolean
   thinkingStrategy?: string
-  toolResultMaxChars?: number
-  toolResultHeadLines?: number
-  toolResultTailLines?: number
-  toolUseInputMaxChars?: number
   toolDescriptionMaxChars?: number
   toolDefinitionCompression?: boolean
-  toolDefinitionSizeThreshold?: number
   toolDefinitionMinDescriptionChars?: number
   toolNameMaxChars?: number
-  maxHistoryTurns?: number
-  maxHistoryChars?: number
   imageMaxLongEdge?: number
   imageMaxPixelsSingle?: number
   imageMaxPixelsMulti?: number
@@ -406,13 +385,6 @@ export interface UpdateCompressionConfigRequest {
   maxRequestBodyBytes?: number
   adaptiveCompression?: boolean
   adaptiveCompressionMaxIters?: number
-  adaptiveToolResultCompression?: boolean
-  adaptiveMinToolResultMaxChars?: number
-  adaptiveToolUseInputCompression?: boolean
-  adaptiveMinToolUseInputMaxChars?: number
-  adaptiveHistoryImageRemoval?: boolean
-  adaptiveHistoryRemoval?: boolean
-  adaptiveHistoryPreserveMessages?: number
 }
 
 export interface UpdateGlobalConfigRequest {
