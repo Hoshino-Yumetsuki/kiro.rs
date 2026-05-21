@@ -21,17 +21,6 @@ use std::time::Duration;
 use tokio::time::{Instant, interval_at};
 use uuid::Uuid;
 
-/// 自适应压缩：最大迭代次数（避免极端输入导致过长 CPU 消耗）
-const ADAPTIVE_COMPRESSION_MAX_ITERS: usize = 32;
-/// tool_result 二次压缩的最低阈值（字符数）
-const ADAPTIVE_MIN_TOOL_RESULT_MAX_CHARS: usize = 512;
-/// tool_use input 二次压缩的最低阈值（字符数）
-const ADAPTIVE_MIN_TOOL_USE_INPUT_MAX_CHARS: usize = 256;
-/// 历史截断默认保留消息数（与 compressor.rs 的 preserve_count 保持一致）
-const ADAPTIVE_HISTORY_PRESERVE_MESSAGES: usize = 2;
-/// 消息内容二次压缩的最低阈值（字符数）
-const ADAPTIVE_MIN_MESSAGE_CONTENT_MAX_CHARS: usize = 8192;
-
 use super::converter::{ConversionError, convert_request};
 use super::middleware::AppState;
 use super::stream::{CacheUsageBreakdown, SseEvent, StreamContext};
@@ -241,7 +230,12 @@ fn adaptive_shrink_request_body(
     max_body: usize,
     request_body: &mut String,
 ) -> Result<Option<AdaptiveCompressionOutcome>, serde_json::Error> {
-    if max_body == 0 || request_body.len() <= max_body || !base_config.enabled {
+    if max_body == 0
+        || request_body.len() <= max_body
+        || !base_config.enabled
+        || !base_config.adaptive_compression
+        || base_config.adaptive_compression_max_iters == 0
+    {
         return Ok(None);
     }
 
@@ -265,6 +259,10 @@ fn adaptive_shrink_request_body(
     // 每轮都会重新跑一次压缩管道（包含 tool 配对修复），再重新序列化计算字节数。
     let mut adaptive_config = base_config.clone();
     let mut history_images_removed = false;
+    let adaptive_min_tool_result_max_chars = base_config.adaptive_min_tool_result_max_chars;
+    let adaptive_min_tool_use_input_max_chars = base_config.adaptive_min_tool_use_input_max_chars;
+    let adaptive_min_message_content_max_chars = base_config.adaptive_min_message_content_max_chars;
+    let adaptive_history_preserve_messages = base_config.adaptive_history_preserve_messages;
 
     // 是否存在任何 tool_result / tools（否则降低阈值只会浪费迭代次数）
     let has_any_tool_results_or_tools = {
@@ -345,29 +343,33 @@ fn adaptive_shrink_request_body(
     };
     // 初始值设为最大消息字符数的 3/4
     let mut message_content_max_chars =
-        (max_content_chars * 3 / 4).max(ADAPTIVE_MIN_MESSAGE_CONTENT_MAX_CHARS);
+        (max_content_chars * 3 / 4).max(adaptive_min_message_content_max_chars);
 
-    for _ in 0..ADAPTIVE_COMPRESSION_MAX_ITERS {
+    for _ in 0..base_config.adaptive_compression_max_iters {
         if request_body.len() <= max_body {
             break;
         }
 
         let mut changed = false;
 
-        if has_any_tool_results_or_tools
-            && adaptive_config.tool_result_max_chars > ADAPTIVE_MIN_TOOL_RESULT_MAX_CHARS
+        if base_config.adaptive_tool_result_compression
+            && adaptive_min_tool_result_max_chars > 0
+            && has_any_tool_results_or_tools
+            && adaptive_config.tool_result_max_chars > adaptive_min_tool_result_max_chars
         {
             let next = (adaptive_config.tool_result_max_chars * 3 / 4)
-                .max(ADAPTIVE_MIN_TOOL_RESULT_MAX_CHARS);
+                .max(adaptive_min_tool_result_max_chars);
             if next < adaptive_config.tool_result_max_chars {
                 adaptive_config.tool_result_max_chars = next;
                 changed = true;
             }
-        } else if has_any_tool_uses
-            && adaptive_config.tool_use_input_max_chars > ADAPTIVE_MIN_TOOL_USE_INPUT_MAX_CHARS
+        } else if base_config.adaptive_tool_use_input_compression
+            && adaptive_min_tool_use_input_max_chars > 0
+            && has_any_tool_uses
+            && adaptive_config.tool_use_input_max_chars > adaptive_min_tool_use_input_max_chars
         {
             let next = (adaptive_config.tool_use_input_max_chars * 3 / 4)
-                .max(ADAPTIVE_MIN_TOOL_USE_INPUT_MAX_CHARS);
+                .max(adaptive_min_tool_use_input_max_chars);
             if next < adaptive_config.tool_use_input_max_chars {
                 adaptive_config.tool_use_input_max_chars = next;
                 changed = true;
@@ -387,9 +389,11 @@ fn adaptive_shrink_request_body(
             };
 
             let history = &mut kiro_request.conversation_state.history;
-            if (max_single_user_content_bytes > max_body
-                || history.len() <= ADAPTIVE_HISTORY_PRESERVE_MESSAGES + 2)
-                && message_content_max_chars >= ADAPTIVE_MIN_MESSAGE_CONTENT_MAX_CHARS
+            if base_config.adaptive_message_content_compression
+                && adaptive_min_message_content_max_chars > 0
+                && (max_single_user_content_bytes > max_body
+                    || history.len() <= adaptive_history_preserve_messages + 2)
+                && message_content_max_chars >= adaptive_min_message_content_max_chars
             {
                 // 第三层：截断超长消息内容
                 let saved = super::compressor::compress_long_messages_pass(
@@ -403,17 +407,22 @@ fn adaptive_shrink_request_body(
                 outcome.final_message_content_max_chars = message_content_max_chars;
                 // 每轮递减 3/4
                 message_content_max_chars =
-                    (message_content_max_chars * 3 / 4).max(ADAPTIVE_MIN_MESSAGE_CONTENT_MAX_CHARS);
-            } else if !history_images_removed && has_history_images {
+                    (message_content_max_chars * 3 / 4).max(adaptive_min_message_content_max_chars);
+            } else if base_config.adaptive_history_image_removal
+                && !history_images_removed
+                && has_history_images
+            {
                 // 第四层：仅清除历史图片，保留 current_message 图片
                 let removed = kiro_request.conversation_state.remove_history_images();
                 if removed > 0 {
                     history_images_removed = true;
                     changed = true;
                 }
-            } else if history.len() > ADAPTIVE_HISTORY_PRESERVE_MESSAGES + 2 {
+            } else if base_config.adaptive_history_removal
+                && history.len() > adaptive_history_preserve_messages + 2
+            {
                 // 第五层：移除最老历史消息（成对移除 user+assistant）
-                let preserve = ADAPTIVE_HISTORY_PRESERVE_MESSAGES;
+                let preserve = adaptive_history_preserve_messages;
                 let min_len = preserve + 2;
                 let removable = history.len().saturating_sub(min_len);
                 // 单轮最多移除 16 条消息（8 轮），避免一次性丢弃过多上下文
@@ -1767,9 +1776,10 @@ mod tests {
     use super::*;
     use crate::anthropic::types::{Message, SystemMessage};
     use crate::kiro::model::requests::conversation::{
-        ConversationState, CurrentMessage, HistoryUserMessage, KiroImage,
-        Message as KiroMessage, UserInputMessage,
+        ConversationState, CurrentMessage, HistoryUserMessage, KiroImage, Message as KiroMessage,
+        UserInputMessage,
     };
+    use crate::model::config::CompressionConfig;
 
     fn sample_messages_request() -> MessagesRequest {
         // 生成一个超过 1024 tokens 的 system message 用于测试缓存
@@ -1992,7 +2002,9 @@ mod tests {
                     UserInputMessage::new("current", "model")
                         .with_images(vec![KiroImage::from_base64("png", big.clone())]),
                 ))
-                .with_history(vec![KiroMessage::User(HistoryUserMessage::new("history", "model"))]),
+                .with_history(vec![KiroMessage::User(HistoryUserMessage::new(
+                    "history", "model",
+                ))]),
             profile_arn: None,
         };
         if let KiroMessage::User(user) = &mut kiro_request.conversation_state.history[0] {
@@ -2015,6 +2027,30 @@ mod tests {
             KiroMessage::User(user) => user.user_input_message.images.is_empty(),
             _ => false,
         });
+    }
+
+    #[test]
+    fn test_adaptive_shrink_can_be_disabled() {
+        let oversized_content = "A".repeat(20_000);
+        let mut kiro_request = KiroRequest {
+            conversation_state: ConversationState::new("conv-1").with_current_message(
+                CurrentMessage::new(UserInputMessage::new(oversized_content, "model")),
+            ),
+            profile_arn: None,
+        };
+        let mut request_body = serde_json::to_string(&kiro_request).unwrap();
+        let mut config = CompressionConfig::default();
+        config.adaptive_compression = false;
+
+        let outcome = adaptive_shrink_request_body(
+            &mut kiro_request,
+            &config,
+            request_body.len() / 2,
+            &mut request_body,
+        )
+        .unwrap();
+
+        assert!(outcome.is_none());
     }
 
     #[test]

@@ -5,25 +5,25 @@
 //! 2. 按比例截断 `description`：根据超出比例缩短描述，最短保留 50 字符
 
 use crate::kiro::model::requests::tool::{InputSchema, Tool as KiroTool, ToolSpecification};
-
-/// 工具定义总大小阈值（20KB）
-const TOOL_SIZE_THRESHOLD: usize = 20 * 1024;
-
-/// description 最短保留字符数
-const MIN_DESCRIPTION_CHARS: usize = 50;
+use crate::model::config::CompressionConfig;
 
 /// 如果工具定义总大小超过阈值，执行压缩
 ///
 /// 返回压缩后的工具列表（如果未超阈值则原样返回）
-pub fn compress_tools_if_needed(tools: &[KiroTool]) -> Vec<KiroTool> {
+pub fn compress_tools_if_needed(tools: &[KiroTool], config: &CompressionConfig) -> Vec<KiroTool> {
+    if !config.tool_definition_compression || config.tool_definition_size_threshold == 0 {
+        return tools.to_vec();
+    }
+
+    let threshold = config.tool_definition_size_threshold;
     let total_size = estimate_tools_size(tools);
-    if total_size <= TOOL_SIZE_THRESHOLD {
+    if total_size <= threshold {
         return tools.to_vec();
     }
 
     tracing::info!(
         total_size,
-        threshold = TOOL_SIZE_THRESHOLD,
+        threshold,
         tool_count = tools.len(),
         "工具定义超过阈值，开始压缩"
     );
@@ -32,7 +32,7 @@ pub fn compress_tools_if_needed(tools: &[KiroTool]) -> Vec<KiroTool> {
     let mut compressed: Vec<KiroTool> = tools.iter().map(simplify_schema).collect();
 
     let size_after_schema = estimate_tools_size(&compressed);
-    if size_after_schema <= TOOL_SIZE_THRESHOLD {
+    if size_after_schema <= threshold {
         tracing::info!(
             original_size = total_size,
             compressed_size = size_after_schema,
@@ -41,14 +41,15 @@ pub fn compress_tools_if_needed(tools: &[KiroTool]) -> Vec<KiroTool> {
         return compressed;
     }
     // 第二步：按比例截断 description（基于字节大小）
-    let ratio = TOOL_SIZE_THRESHOLD as f64 / size_after_schema as f64;
+    let ratio = threshold as f64 / size_after_schema as f64;
+    let min_description_chars = config.tool_definition_min_description_chars;
     for tool in &mut compressed {
         let desc = &tool.tool_specification.description;
         let target_bytes = (desc.len() as f64 * ratio) as usize;
-        // 最短保留 MIN_DESCRIPTION_CHARS 个字符对应的字节数（至少 50 字符）
+        // 最短保留配置指定字符数对应的字节数
         let min_bytes = desc
             .char_indices()
-            .nth(MIN_DESCRIPTION_CHARS)
+            .nth(min_description_chars)
             .map(|(idx, _)| idx)
             .unwrap_or(desc.len());
         let target_bytes = target_bytes.max(min_bytes);
@@ -201,12 +202,53 @@ mod tests {
             "A short description",
             serde_json::json!({"type": "object", "properties": {}}),
         )];
-        let result = compress_tools_if_needed(&tools);
+        let result = compress_tools_if_needed(&tools, &CompressionConfig::default());
         assert_eq!(result.len(), 1);
         assert_eq!(
             result[0].tool_specification.description,
             "A short description"
         );
+    }
+
+    #[test]
+    fn test_tool_definition_compression_can_be_disabled() {
+        let long_desc = "x".repeat(2000);
+        let tools: Vec<KiroTool> = (0..15)
+            .map(|i| {
+                make_tool(
+                    &format!("tool_{}", i),
+                    &long_desc,
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "param": {"type": "string", "description": "A very long parameter description"}
+                        }
+                    }),
+                )
+            })
+            .collect();
+        let mut config = CompressionConfig::default();
+        config.tool_definition_compression = false;
+
+        let result = compress_tools_if_needed(&tools, &config);
+
+        assert_eq!(estimate_tools_size(&result), estimate_tools_size(&tools));
+        assert_eq!(result[0].tool_specification.description, long_desc);
+    }
+
+    #[test]
+    fn test_tool_definition_threshold_zero_disables_compression() {
+        let tools = vec![make_tool(
+            "test",
+            &"x".repeat(2000),
+            serde_json::json!({"type": "object", "properties": {}}),
+        )];
+        let mut config = CompressionConfig::default();
+        config.tool_definition_size_threshold = 0;
+
+        let result = compress_tools_if_needed(&tools, &config);
+
+        assert_eq!(estimate_tools_size(&result), estimate_tools_size(&tools));
     }
 
     #[test]
@@ -230,9 +272,12 @@ mod tests {
             .collect();
 
         let original_size = estimate_tools_size(&tools);
-        assert!(original_size > TOOL_SIZE_THRESHOLD, "测试数据应超过阈值");
+        assert!(
+            original_size > CompressionConfig::default().tool_definition_size_threshold,
+            "测试数据应超过阈值"
+        );
 
-        let result = compress_tools_if_needed(&tools);
+        let result = compress_tools_if_needed(&tools, &CompressionConfig::default());
         let compressed_size = estimate_tools_size(&result);
         assert!(
             compressed_size < original_size,

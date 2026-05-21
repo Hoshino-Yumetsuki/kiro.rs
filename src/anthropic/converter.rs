@@ -262,29 +262,34 @@ fn is_valid_uuid(s: &str) -> bool {
     s.len() == 36 && s.chars().filter(|c| *c == '-').count() == 4
 }
 
-/// Kiro API 工具名称最大长度限制
-const TOOL_NAME_MAX_LEN: usize = 63;
-
 /// 生成确定性短名称：截断前缀 + "_" + 8 位 SHA256 hex
-fn shorten_tool_name(name: &str) -> String {
+fn shorten_tool_name(name: &str, max_chars: usize) -> String {
     let mut hasher = Sha256::new();
     hasher.update(name.as_bytes());
     let hash_hex = format!("{:x}", hasher.finalize());
     let hash_suffix = &hash_hex[..8];
-    let prefix_max = TOOL_NAME_MAX_LEN - 1 - 8;
+    let prefix_max = max_chars.saturating_sub(1 + hash_suffix.len());
     let prefix = match name.char_indices().nth(prefix_max) {
         Some((idx, _)) => &name[..idx],
         None => name,
     };
-    format!("{}_{}", prefix, hash_suffix)
+    if prefix.is_empty() {
+        hash_suffix[..max_chars.min(hash_suffix.len())].to_string()
+    } else {
+        format!("{}_{}", prefix, hash_suffix)
+    }
 }
 
 /// 如果名称超长则缩短，并记录映射（short → original）
-fn map_tool_name(name: &str, tool_name_map: &mut HashMap<String, String>) -> String {
-    if name.len() <= TOOL_NAME_MAX_LEN {
+fn map_tool_name(
+    name: &str,
+    tool_name_map: &mut HashMap<String, String>,
+    max_chars: usize,
+) -> String {
+    if max_chars == 0 || name.chars().count() <= max_chars {
         return name.to_string();
     }
-    let short = shorten_tool_name(name);
+    let short = shorten_tool_name(name, max_chars);
     tool_name_map.insert(short.clone(), name.to_string());
     short
 }
@@ -423,6 +428,7 @@ pub fn convert_request(
     let mut tools = convert_tools(
         &req.tools,
         compression_config.tool_description_max_chars,
+        compression_config.tool_name_max_chars,
         &mut tool_name_map,
     );
 
@@ -469,7 +475,7 @@ pub fn convert_request(
 
     // 10.5. 工具压缩：在所有工具（含 placeholder）就绪后执行
     if compression_config.enabled {
-        tools = super::tool_compression::compress_tools_if_needed(&tools);
+        tools = super::tool_compression::compress_tools_if_needed(&tools, compression_config);
     }
 
     // 10.6. 工具统计诊断日志
@@ -949,6 +955,7 @@ fn remove_orphaned_tool_uses(
 fn convert_tools(
     tools: &Option<Vec<AnthropicTool>>,
     max_description_chars: usize,
+    max_name_chars: usize,
     tool_name_map: &mut HashMap<String, String>,
 ) -> Vec<KiroTool> {
     let Some(tools) = tools else {
@@ -1002,7 +1009,7 @@ fn convert_tools(
 
             KiroTool {
                 tool_specification: ToolSpecification {
-                    name: map_tool_name(&t.name, tool_name_map),
+                    name: map_tool_name(&t.name, tool_name_map, max_name_chars),
                     description,
                     input_schema: InputSchema::from_json(schema),
                 },
@@ -1160,7 +1167,8 @@ fn build_history(
         if msg.role == "user" {
             // 先处理累积的 assistant 消息
             if !assistant_buffer.is_empty() {
-                let merged = merge_assistant_messages(&assistant_buffer, tool_name_map)?;
+                let merged =
+                    merge_assistant_messages(&assistant_buffer, compression_config, tool_name_map)?;
                 history.push(Message::Assistant(merged));
                 assistant_buffer.clear();
             }
@@ -1185,7 +1193,8 @@ fn build_history(
 
     // 处理末尾累积的 assistant 消息
     if !assistant_buffer.is_empty() {
-        let merged = merge_assistant_messages(&assistant_buffer, tool_name_map)?;
+        let merged =
+            merge_assistant_messages(&assistant_buffer, compression_config, tool_name_map)?;
         history.push(Message::Assistant(merged));
     }
 
@@ -1303,6 +1312,7 @@ fn merge_user_messages(
 /// 转换 assistant 消息
 fn convert_assistant_message(
     msg: &super::types::Message,
+    compression_config: &CompressionConfig,
     tool_name_map: &mut HashMap<String, String>,
 ) -> Result<HistoryAssistantMessage, ConversionError> {
     let mut thinking_content = String::new();
@@ -1330,7 +1340,11 @@ fn convert_assistant_message(
                         "tool_use" => {
                             if let (Some(id), Some(name)) = (block.id, block.name) {
                                 let input = block.input.unwrap_or(serde_json::json!({}));
-                                let mapped_name = map_tool_name(&name, tool_name_map);
+                                let mapped_name = map_tool_name(
+                                    &name,
+                                    tool_name_map,
+                                    compression_config.tool_name_max_chars,
+                                );
                                 tool_uses
                                     .push(ToolUseEntry::new(id, mapped_name).with_input(input));
                             }
@@ -1435,18 +1449,19 @@ fn convert_assistant_message(
 /// 用于处理网络不稳定时产生的连续 assistant 消息（Issue #79）
 fn merge_assistant_messages(
     messages: &[&super::types::Message],
+    compression_config: &CompressionConfig,
     tool_name_map: &mut HashMap<String, String>,
 ) -> Result<HistoryAssistantMessage, ConversionError> {
     assert!(!messages.is_empty());
     if messages.len() == 1 {
-        return convert_assistant_message(messages[0], tool_name_map);
+        return convert_assistant_message(messages[0], compression_config, tool_name_map);
     }
 
     let mut all_tool_uses: Vec<ToolUseEntry> = Vec::new();
     let mut content_parts: Vec<String> = Vec::new();
 
     for msg in messages {
-        let converted = convert_assistant_message(msg, tool_name_map)?;
+        let converted = convert_assistant_message(msg, compression_config, tool_name_map)?;
         let am = converted.assistant_response_message;
         if !am.content.trim().is_empty() {
             content_parts.push(am.content);
@@ -2055,7 +2070,9 @@ mod tests {
             ]),
         };
 
-        let result = convert_assistant_message(&msg, &mut HashMap::new()).expect("应该成功转换");
+        let result =
+            convert_assistant_message(&msg, &CompressionConfig::default(), &mut HashMap::new())
+                .expect("应该成功转换");
 
         assert!(
             result.assistant_response_message.content.is_empty(),
@@ -2085,7 +2102,9 @@ mod tests {
             ]),
         };
 
-        let result = convert_assistant_message(&msg, &mut HashMap::new()).expect("应该成功转换");
+        let result =
+            convert_assistant_message(&msg, &CompressionConfig::default(), &mut HashMap::new())
+                .expect("应该成功转换");
 
         // 验证 content 使用原始文本（不是占位符）
         assert_eq!(
@@ -2128,7 +2147,9 @@ mod tests {
             ]),
         };
 
-        let result = convert_assistant_message(&msg, &mut HashMap::new()).expect("应该成功转换");
+        let result =
+            convert_assistant_message(&msg, &CompressionConfig::default(), &mut HashMap::new())
+                .expect("应该成功转换");
         let content = &result.assistant_response_message.content;
 
         assert!(
@@ -2167,7 +2188,9 @@ mod tests {
             ]),
         };
 
-        let result = convert_assistant_message(&msg, &mut HashMap::new()).expect("应该成功转换");
+        let result =
+            convert_assistant_message(&msg, &CompressionConfig::default(), &mut HashMap::new())
+                .expect("应该成功转换");
         let content = &result.assistant_response_message.content;
 
         // 控制字符被过滤，不应出现换行和 tab
@@ -2208,7 +2231,7 @@ mod tests {
             },
         ];
 
-        let converted = convert_tools(&Some(tools), 4000, &mut HashMap::new());
+        let converted = convert_tools(&Some(tools), 4000, 63, &mut HashMap::new());
 
         // 应该只有 1 个工具（web_search 被过滤）
         assert_eq!(converted.len(), 1, "web_search 应该被过滤");
@@ -2243,10 +2266,32 @@ mod tests {
             },
         ];
 
-        let converted = convert_tools(&Some(tools), 4000, &mut HashMap::new());
+        let converted = convert_tools(&Some(tools), 4000, 63, &mut HashMap::new());
 
         // 所有 web_search 工具都应被过滤
         assert!(converted.is_empty(), "所有 web_search 变体都应被过滤");
+    }
+
+    #[test]
+    fn test_convert_tools_can_disable_tool_name_shortening() {
+        use super::super::types::Tool as AnthropicTool;
+        use std::collections::HashMap;
+
+        let name = "tool_name_that_is_longer_than_the_default_kiro_limit_of_sixty_three_chars";
+        let tools = vec![AnthropicTool {
+            tool_type: None,
+            name: name.to_string(),
+            description: "desc".to_string(),
+            input_schema: HashMap::new(),
+            max_uses: None,
+            cache_control: None,
+        }];
+        let mut tool_name_map = HashMap::new();
+
+        let converted = convert_tools(&Some(tools), 4000, 0, &mut tool_name_map);
+
+        assert_eq!(converted[0].tool_specification.name, name);
+        assert!(tool_name_map.is_empty());
     }
 
     #[test]
@@ -3001,7 +3046,12 @@ mod tests {
         };
 
         let messages: Vec<&AnthropicMessage> = vec![&msg1, &msg2];
-        let result = merge_assistant_messages(&messages, &mut HashMap::new()).expect("合并应成功");
+        let result = merge_assistant_messages(
+            &messages,
+            &CompressionConfig::default(),
+            &mut HashMap::new(),
+        )
+        .expect("合并应成功");
 
         // 验证 thinking 和 text 内容被合并
         let content = &result.assistant_response_message.content;
@@ -3126,7 +3176,12 @@ mod tests {
         };
 
         let messages: Vec<&AnthropicMessage> = vec![&msg1, &msg2];
-        let result = merge_assistant_messages(&messages, &mut HashMap::new()).expect("合并应成功");
+        let result = merge_assistant_messages(
+            &messages,
+            &CompressionConfig::default(),
+            &mut HashMap::new(),
+        )
+        .expect("合并应成功");
 
         let tool_uses = result
             .assistant_response_message
@@ -3158,7 +3213,12 @@ mod tests {
         };
 
         let messages: Vec<&AnthropicMessage> = vec![&msg1, &msg2];
-        let result = merge_assistant_messages(&messages, &mut HashMap::new()).expect("合并应成功");
+        let result = merge_assistant_messages(
+            &messages,
+            &CompressionConfig::default(),
+            &mut HashMap::new(),
+        )
+        .expect("合并应成功");
 
         assert!(
             result.assistant_response_message.content.is_empty(),
