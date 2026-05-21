@@ -36,8 +36,6 @@
     "adaptiveMinToolResultMaxChars": 512,
     "adaptiveToolUseInputCompression": true,
     "adaptiveMinToolUseInputMaxChars": 256,
-    "adaptiveMessageContentCompression": true,
-    "adaptiveMinMessageContentMaxChars": 8192,
     "adaptiveHistoryImageRemoval": true,
     "adaptiveHistoryRemoval": true,
     "adaptiveHistoryPreserveMessages": 2

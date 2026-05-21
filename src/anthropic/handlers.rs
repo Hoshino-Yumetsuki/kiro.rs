@@ -195,7 +195,8 @@ struct AdaptiveCompressionOutcome {
     additional_history_turns_removed: usize,
     final_tool_result_max_chars: usize,
     final_tool_use_input_max_chars: usize,
-    final_message_content_max_chars: usize,
+    tool_schemas_simplified: bool,
+    final_tool_description_max_chars: usize,
 }
 
 /// 计算 KiroRequest 中所有图片 base64 数据的总字节数。
@@ -246,22 +247,23 @@ fn adaptive_shrink_request_body(
         additional_history_turns_removed: 0,
         final_tool_result_max_chars: base_config.tool_result_max_chars,
         final_tool_use_input_max_chars: base_config.tool_use_input_max_chars,
-        final_message_content_max_chars: 0,
+        tool_schemas_simplified: false,
+        final_tool_description_max_chars: 0,
     };
 
     // 二次压缩策略：
     // 1) 逐步降低 tool_result_max_chars（仅当存在 tool_result/tools）
     // 2) 逐步降低 tool_use_input_max_chars（仅当存在 tool_use）
-    // 3) 截断超长用户消息内容（当单条消息已超过阈值时优先）
-    // 4) 仅清除一次历史图片（保留 current_message 图片）
-    // 5) 按 request_body_bytes 成对移除最老的 user+assistant 两条消息（保留前 2 条）
+    // 3) 工具定义 schema 简化（一次性，低损）
+    // 4) 逐步截断工具 description（仅当存在 tools）
+    // 5) 仅清除一次历史图片（保留 current_message 图片）
+    // 6) 按 request_body_bytes 成对移除最老的 user+assistant 两条消息（保留前 2 条）
     //
     // 每轮都会重新跑一次压缩管道（包含 tool 配对修复），再重新序列化计算字节数。
     let mut adaptive_config = base_config.clone();
     let mut history_images_removed = false;
     let adaptive_min_tool_result_max_chars = base_config.adaptive_min_tool_result_max_chars;
     let adaptive_min_tool_use_input_max_chars = base_config.adaptive_min_tool_use_input_max_chars;
-    let adaptive_min_message_content_max_chars = base_config.adaptive_min_message_content_max_chars;
     let adaptive_history_preserve_messages = base_config.adaptive_history_preserve_messages;
 
     // 是否存在任何 tool_result / tools（否则降低阈值只会浪费迭代次数）
@@ -325,25 +327,33 @@ fn adaptive_shrink_request_body(
             _ => false,
         });
 
-    // 扫描所有用户消息，找到最大 content 字符数作为初始 message_content_max_chars
-    let max_content_chars = {
-        let mut max_chars = kiro_request
+    // 工具定义压缩状态
+    let mut tool_schemas_simplified = false;
+    let has_any_tools = !kiro_request
+        .conversation_state
+        .current_message
+        .user_input_message
+        .user_input_message_context
+        .tools
+        .is_empty();
+    // 初始 description 截断阈值：取当前最大 description 字符数的 3/4
+    let max_tool_desc_chars = if has_any_tools {
+        kiro_request
             .conversation_state
             .current_message
             .user_input_message
-            .content
-            .chars()
-            .count();
-        for msg in &kiro_request.conversation_state.history {
-            if let crate::kiro::model::requests::conversation::Message::User(u) = msg {
-                max_chars = max_chars.max(u.user_input_message.content.chars().count());
-            }
-        }
-        max_chars
+            .user_input_message_context
+            .tools
+            .iter()
+            .map(|t| t.tool_specification.description.chars().count())
+            .max()
+            .unwrap_or(0)
+    } else {
+        0
     };
-    // 初始值设为最大消息字符数的 3/4
-    let mut message_content_max_chars =
-        (max_content_chars * 3 / 4).max(adaptive_min_message_content_max_chars);
+    let adaptive_min_tool_description_chars = base_config.tool_definition_min_description_chars;
+    let mut tool_description_max_chars =
+        (max_tool_desc_chars * 3 / 4).max(adaptive_min_tool_description_chars);
 
     for _ in 0..base_config.adaptive_compression_max_iters {
         if request_body.len() <= max_body {
@@ -374,45 +384,56 @@ fn adaptive_shrink_request_body(
                 adaptive_config.tool_use_input_max_chars = next;
                 changed = true;
             }
+        } else if base_config.tool_definition_compression
+            && has_any_tools
+            && !tool_schemas_simplified
+        {
+            // 工具定义压缩第一步：schema 简化（一次性）
+            let tools = &mut kiro_request
+                .conversation_state
+                .current_message
+                .user_input_message
+                .user_input_message_context
+                .tools;
+            let saved = super::tool_compression::simplify_tool_schemas(tools);
+            if saved > 0 {
+                changed = true;
+            }
+            tool_schemas_simplified = true;
+        } else if base_config.tool_definition_compression
+            && has_any_tools
+            && tool_description_max_chars >= adaptive_min_tool_description_chars
+        {
+            // 工具定义压缩第二步：description 逐步截断
+            let tools = &mut kiro_request
+                .conversation_state
+                .current_message
+                .user_input_message
+                .user_input_message_context
+                .tools;
+            let saved = super::tool_compression::truncate_tool_descriptions(
+                tools,
+                tool_description_max_chars,
+                adaptive_min_tool_description_chars,
+            );
+            if saved > 0 {
+                changed = true;
+            }
+            // 每轮递减 3/4
+            let next = (tool_description_max_chars * 3 / 4).max(adaptive_min_tool_description_chars);
+            if next >= tool_description_max_chars {
+                // 已到下限，标记不再尝试
+                tool_description_max_chars = 0;
+            } else {
+                tool_description_max_chars = next;
+            }
         } else {
-            // 如果任意单条 user content 已经超过 max_body，则移除历史并不能让请求落到阈值内，
-            // 必须优先截断超长消息内容。
-            let max_single_user_content_bytes = {
-                let state = &kiro_request.conversation_state;
-                let mut max_bytes = state.current_message.user_input_message.content.len();
-                for msg in &state.history {
-                    if let crate::kiro::model::requests::conversation::Message::User(u) = msg {
-                        max_bytes = max_bytes.max(u.user_input_message.content.len());
-                    }
-                }
-                max_bytes
-            };
-
             let history = &mut kiro_request.conversation_state.history;
-            if base_config.adaptive_message_content_compression
-                && adaptive_min_message_content_max_chars > 0
-                && (max_single_user_content_bytes > max_body
-                    || history.len() <= adaptive_history_preserve_messages + 2)
-                && message_content_max_chars >= adaptive_min_message_content_max_chars
-            {
-                // 第三层：截断超长消息内容
-                let saved = super::compressor::compress_long_messages_pass(
-                    &mut kiro_request.conversation_state,
-                    message_content_max_chars,
-                );
-                if saved > 0 {
-                    changed = true;
-                }
-                // 记录本轮实际生效的阈值（递减前）
-                outcome.final_message_content_max_chars = message_content_max_chars;
-                // 每轮递减 3/4
-                message_content_max_chars =
-                    (message_content_max_chars * 3 / 4).max(adaptive_min_message_content_max_chars);
-            } else if base_config.adaptive_history_image_removal
+            if base_config.adaptive_history_image_removal
                 && !history_images_removed
                 && has_history_images
             {
-                // 第四层：仅清除历史图片，保留 current_message 图片
+                // 仅清除历史图片，保留 current_message 图片
                 let removed = kiro_request.conversation_state.remove_history_images();
                 if removed > 0 {
                     history_images_removed = true;
@@ -421,7 +442,7 @@ fn adaptive_shrink_request_body(
             } else if base_config.adaptive_history_removal
                 && history.len() > adaptive_history_preserve_messages + 2
             {
-                // 第五层：移除最老历史消息（成对移除 user+assistant）
+                // 移除最老历史消息（成对移除 user+assistant）
                 let preserve = adaptive_history_preserve_messages;
                 let min_len = preserve + 2;
                 let removable = history.len().saturating_sub(min_len);
@@ -448,8 +469,8 @@ fn adaptive_shrink_request_body(
 
     outcome.final_tool_result_max_chars = adaptive_config.tool_result_max_chars;
     outcome.final_tool_use_input_max_chars = adaptive_config.tool_use_input_max_chars;
-    // final_message_content_max_chars 在循环内截断时已记录实际生效值；
-    // 若第四层从未执行，保持默认 0 表示未触发
+    outcome.tool_schemas_simplified = tool_schemas_simplified;
+    outcome.final_tool_description_max_chars = tool_description_max_chars;
 
     Ok(Some(outcome))
 }
@@ -1058,7 +1079,8 @@ pub async fn post_messages(
                     additional_history_turns_removed = outcome.additional_history_turns_removed,
                     final_tool_result_max_chars = outcome.final_tool_result_max_chars,
                     final_tool_use_input_max_chars = outcome.final_tool_use_input_max_chars,
-                    final_message_content_max_chars = outcome.final_message_content_max_chars,
+                    tool_schemas_simplified = outcome.tool_schemas_simplified,
+                    final_tool_description_max_chars = outcome.final_tool_description_max_chars,
                     "请求体超过阈值，已执行自适应二次压缩"
                 );
             }

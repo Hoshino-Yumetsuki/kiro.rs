@@ -67,8 +67,6 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
   const [cAdaptiveMinToolResultChars, setCAdaptiveMinToolResultChars] = useState('')
   const [cAdaptiveToolUseInput, setCAdaptiveToolUseInput] = useState(false)
   const [cAdaptiveMinToolUseInputChars, setCAdaptiveMinToolUseInputChars] = useState('')
-  const [cAdaptiveMsgContent, setCAdaptiveMsgContent] = useState(false)
-  const [cAdaptiveMinMsgContentChars, setCAdaptiveMinMsgContentChars] = useState('')
   const [cAdaptiveHistoryImage, setCAdaptiveHistoryImage] = useState(false)
   const [cAdaptiveHistoryRemoval, setCAdaptiveHistoryRemoval] = useState(false)
   const [cAdaptiveHistoryPreserve, setCAdaptiveHistoryPreserve] = useState('')
@@ -110,8 +108,6 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
       setCAdaptiveMinToolResultChars(c.adaptiveMinToolResultMaxChars.toString())
       setCAdaptiveToolUseInput(c.adaptiveToolUseInputCompression)
       setCAdaptiveMinToolUseInputChars(c.adaptiveMinToolUseInputMaxChars.toString())
-      setCAdaptiveMsgContent(c.adaptiveMessageContentCompression)
-      setCAdaptiveMinMsgContentChars(c.adaptiveMinMessageContentMaxChars.toString())
       setCAdaptiveHistoryImage(c.adaptiveHistoryImageRemoval)
       setCAdaptiveHistoryRemoval(c.adaptiveHistoryRemoval)
       setCAdaptiveHistoryPreserve(c.adaptiveHistoryPreserveMessages.toString())
@@ -196,8 +192,6 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
       setIf('adaptiveMinToolResultMaxChars', parseInt(cAdaptiveMinToolResultChars) || 0, oc.adaptiveMinToolResultMaxChars)
       setIf('adaptiveToolUseInputCompression', cAdaptiveToolUseInput, oc.adaptiveToolUseInputCompression)
       setIf('adaptiveMinToolUseInputMaxChars', parseInt(cAdaptiveMinToolUseInputChars) || 0, oc.adaptiveMinToolUseInputMaxChars)
-      setIf('adaptiveMessageContentCompression', cAdaptiveMsgContent, oc.adaptiveMessageContentCompression)
-      setIf('adaptiveMinMessageContentMaxChars', parseInt(cAdaptiveMinMsgContentChars) || 0, oc.adaptiveMinMessageContentMaxChars)
       setIf('adaptiveHistoryImageRemoval', cAdaptiveHistoryImage, oc.adaptiveHistoryImageRemoval)
       setIf('adaptiveHistoryRemoval', cAdaptiveHistoryRemoval, oc.adaptiveHistoryRemoval)
       setIf('adaptiveHistoryPreserveMessages', parseInt(cAdaptiveHistoryPreserve) || 0, oc.adaptiveHistoryPreserveMessages)
@@ -419,11 +413,6 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
                 <Switch checked={cAdaptiveToolUseInput} onCheckedChange={setCAdaptiveToolUseInput} disabled={isPending} aria-label="自适应 tool_use input 压缩" />
               </div>
               {numInput('gcAdaptiveMinTuChars', '自适应 tool_use input 最小字符数', cAdaptiveMinToolUseInputChars, setCAdaptiveMinToolUseInputChars)}
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-medium">自适应消息内容压缩</label>
-                <Switch checked={cAdaptiveMsgContent} onCheckedChange={setCAdaptiveMsgContent} disabled={isPending} aria-label="自适应消息内容压缩" />
-              </div>
-              {numInput('gcAdaptiveMinMsgChars', '自适应消息内容最小字符数', cAdaptiveMinMsgContentChars, setCAdaptiveMinMsgContentChars)}
               <div className="flex items-center justify-between">
                 <label className="text-sm font-medium">自适应历史图片移除</label>
                 <Switch checked={cAdaptiveHistoryImage} onCheckedChange={setCAdaptiveHistoryImage} disabled={isPending} aria-label="自适应历史图片移除" />
