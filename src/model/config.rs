@@ -116,6 +116,19 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub enable_credential_cooldown: bool,
 
+    /// 余额不足时是否自动禁用凭据（默认 true）
+    ///
+    /// 禁用后，余额初始化检测到余额不足时不会自动禁用凭据，仅记录警告日志。
+    #[serde(default = "default_true")]
+    pub auto_disable_insufficient_balance: bool,
+
+    /// Token 刷新失败时是否自动禁用凭据（默认 true）
+    ///
+    /// 禁用后，Token 刷新连续失败达到阈值时不会自动禁用凭据，仅记录警告日志。
+    /// 注意：invalid_grant 错误（凭据已失效）始终会禁用凭据，不受此开关影响。
+    #[serde(default = "default_true")]
+    pub auto_disable_refresh_failure: bool,
+
     /// 端点特定的配置
     ///
     /// 键为端点名（如 "ide" / "cli"），值为该端点自由定义的参数对象。
@@ -317,6 +330,8 @@ impl Default for Config {
             prompt_cache_accounting_enabled: default_true(),
             extract_thinking: default_extract_thinking(),
             enable_credential_cooldown: default_true(),
+            auto_disable_insufficient_balance: default_true(),
+            auto_disable_refresh_failure: default_true(),
             default_endpoint: default_endpoint(),
             endpoints: HashMap::new(),
             config_path: None,

@@ -35,6 +35,8 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
   const [promptCacheAccountingEnabled, setPromptCacheAccountingEnabled] = useState(true)
   const [defaultEndpoint, setDefaultEndpoint] = useState('ide')
   const [enableCredentialCooldown, setEnableCredentialCooldown] = useState(true)
+  const [autoDisableInsufficientBalance, setAutoDisableInsufficientBalance] = useState(true)
+  const [autoDisableRefreshFailure, setAutoDisableRefreshFailure] = useState(true)
 
   // 代理设置
   const [proxyUrl, setProxyUrl] = useState('')
@@ -68,6 +70,8 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
       setPromptCacheAccountingEnabled(globalConfig.promptCacheAccountingEnabled)
       setDefaultEndpoint(globalConfig.defaultEndpoint || 'ide')
       setEnableCredentialCooldown(globalConfig.enableCredentialCooldown)
+      setAutoDisableInsufficientBalance(globalConfig.autoDisableInsufficientBalance)
+      setAutoDisableRefreshFailure(globalConfig.autoDisableRefreshFailure)
       const c = globalConfig.compression
       setCEnabled(c.enabled)
       setCWhitespace(c.whitespaceCompression)
@@ -126,6 +130,16 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
 
     if (enableCredentialCooldown !== (globalConfig?.enableCredentialCooldown ?? true)) {
       globalPayload.enableCredentialCooldown = enableCredentialCooldown
+      hasGlobalChanges = true
+    }
+
+    if (autoDisableInsufficientBalance !== (globalConfig?.autoDisableInsufficientBalance ?? true)) {
+      globalPayload.autoDisableInsufficientBalance = autoDisableInsufficientBalance
+      hasGlobalChanges = true
+    }
+
+    if (autoDisableRefreshFailure !== (globalConfig?.autoDisableRefreshFailure ?? true)) {
+      globalPayload.autoDisableRefreshFailure = autoDisableRefreshFailure
       hasGlobalChanges = true
     }
 
@@ -245,6 +259,20 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
               <div className="flex items-center justify-between">
                 <label className="text-sm font-medium">凭据冷却机制</label>
                 <Switch checked={enableCredentialCooldown} onCheckedChange={setEnableCredentialCooldown} disabled={isPending} aria-label="凭据冷却机制" />
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-sm font-medium">余额不足自动禁用</label>
+                  <p className="text-xs text-muted-foreground">余额初始化时检测到不足将自动禁用凭据</p>
+                </div>
+                <Switch checked={autoDisableInsufficientBalance} onCheckedChange={setAutoDisableInsufficientBalance} disabled={isPending} aria-label="余额不足自动禁用" />
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-sm font-medium">刷新失败自动禁用</label>
+                  <p className="text-xs text-muted-foreground">Token 刷新连续失败达阈值时自动禁用凭据</p>
+                </div>
+                <Switch checked={autoDisableRefreshFailure} onCheckedChange={setAutoDisableRefreshFailure} disabled={isPending} aria-label="刷新失败自动禁用" />
               </div>
             </div>
 

@@ -1761,12 +1761,15 @@ impl MultiTokenManager {
                                     return Err(err);
                                 }
 
+                                let auto_disable = self.config.read().auto_disable_refresh_failure;
                                 let has_available = {
                                     let mut entries = self.entries.lock();
                                     if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
                                         entry.refresh_failure_count += 1;
                                         let refresh_failure_count = entry.refresh_failure_count;
-                                        if refresh_failure_count >= MAX_FAILURES_PER_CREDENTIAL {
+                                        if refresh_failure_count >= MAX_FAILURES_PER_CREDENTIAL
+                                            && auto_disable
+                                        {
                                             entry.disabled = true;
                                             entry.auto_heal_reason =
                                                 Some(AutoHealReason::TooManyFailures);
@@ -2329,11 +2332,15 @@ impl MultiTokenManager {
 
                     // 余额小于 1 时自动禁用凭据
                     if remaining < 1.0 {
-                        let mut entries = self.entries.lock();
-                        if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
-                            entry.disabled = true;
-                            entry.disable_reason = Some(DisableReason::InsufficientBalance);
-                            tracing::warn!("凭据 #{} 余额不足 ({:.2})，已自动禁用", id, remaining);
+                        if self.config.read().auto_disable_insufficient_balance {
+                            let mut entries = self.entries.lock();
+                            if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+                                entry.disabled = true;
+                                entry.disable_reason = Some(DisableReason::InsufficientBalance);
+                                tracing::warn!("凭据 #{} 余额不足 ({:.2})，已自动禁用", id, remaining);
+                            }
+                        } else {
+                            tracing::warn!("凭据 #{} 余额不足 ({:.2})，但自动禁用已关闭", id, remaining);
                         }
                     } else {
                         tracing::info!("凭据 #{} 余额初始化成功: {:.2}", id, remaining);
