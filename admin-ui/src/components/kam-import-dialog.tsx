@@ -11,6 +11,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useCredentials, useAddCredential, useDeleteCredential } from '@/hooks/use-credentials'
 import { getCredentialBalance, setCredentialDisabled } from '@/api/credentials'
+import { formatKiroUsageWithUsd } from '@/lib/format'
 import { extractErrorMessage, sha256Hex } from '@/lib/utils'
 
 interface KamImportDialogProps {
@@ -297,7 +298,7 @@ export function KamImportDialog({ open, onOpenChange }: KamImportDialogProps) {
             next[i] = {
               ...next[i],
               status: 'verified',
-              usage: `${balance.currentUsage}/${balance.usageLimit}`,
+              usage: formatKiroUsageWithUsd(balance.currentUsage, balance.usageLimit),
               email: addedCred.email || account.email,
               credentialId: addedCred.credentialId,
             }

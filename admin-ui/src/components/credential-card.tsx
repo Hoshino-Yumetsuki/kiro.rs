@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import type { CredentialStatusItem, CachedBalanceInfo, BalanceResponse } from '@/types/api'
+import { formatKiroCredits, formatKiroCreditsAsUsd } from '@/lib/format'
 import {
   useSetDisabled,
   useSetPriority,
@@ -349,24 +350,28 @@ export function CredentialCard({
                   <Loader2 className="inline w-3 h-3 animate-spin" aria-hidden="true" /> 加载中…
                 </span>
               ) : balance ? (
-                <span className="font-medium ml-1">
-                  {new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(balance.remaining)} / {new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(balance.usageLimit)}
-                  <span className="text-xs text-muted-foreground ml-1">
-                    ({(100 - balance.usagePercentage).toFixed(1)}% 剩余)
+                <span className="inline-flex flex-col gap-0.5 ml-1 align-top">
+                  <span className="font-medium tabular-nums">
+                    {formatKiroCredits(balance.remaining)} / {formatKiroCredits(balance.usageLimit)}
+                  </span>
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    ≈ {formatKiroCreditsAsUsd(balance.remaining)} / {formatKiroCreditsAsUsd(balance.usageLimit)} · {(100 - balance.usagePercentage).toFixed(1)}% 剩余
                   </span>
                 </span>
               ) : cachedBalance && cachedBalance.ttlSecs > 0 && cachedBalance.usageLimit > 0 ? (
-                <span className="font-medium ml-1">
-                  {new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(cachedBalance.remaining)} / {new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(cachedBalance.usageLimit)}
-                  <span className="text-xs text-muted-foreground ml-1">
-                    ({(100 - cachedBalance.usagePercentage).toFixed(1)}% 剩余, {formatCacheAge(cachedBalance.cachedAt)}缓存)
+                <span className="inline-flex flex-col gap-0.5 ml-1 align-top">
+                  <span className="font-medium tabular-nums">
+                    {formatKiroCredits(cachedBalance.remaining)} / {formatKiroCredits(cachedBalance.usageLimit)}
+                  </span>
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    ≈ {formatKiroCreditsAsUsd(cachedBalance.remaining)} / {formatKiroCreditsAsUsd(cachedBalance.usageLimit)} · {(100 - cachedBalance.usagePercentage).toFixed(1)}% 剩余 · {formatCacheAge(cachedBalance.cachedAt)}缓存
                   </span>
                 </span>
               ) : cachedBalance && cachedBalance.ttlSecs > 0 ? (
-                <span className="font-medium ml-1">
-                  {new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(cachedBalance.remaining)}
-                  <span className="text-xs text-muted-foreground ml-1">
-                    ({formatCacheAge(cachedBalance.cachedAt)}缓存)
+                <span className="inline-flex flex-col gap-0.5 ml-1 align-top">
+                  <span className="font-medium tabular-nums">{formatKiroCredits(cachedBalance.remaining)}</span>
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    ≈ {formatKiroCreditsAsUsd(cachedBalance.remaining)} · {formatCacheAge(cachedBalance.cachedAt)}缓存
                   </span>
                 </span>
               ) : (

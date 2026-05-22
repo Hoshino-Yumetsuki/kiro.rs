@@ -11,6 +11,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useCredentials, useAddCredential, useDeleteCredential } from '@/hooks/use-credentials'
 import { getCredentialBalance, setCredentialDisabled } from '@/api/credentials'
+import { formatKiroUsageWithUsd } from '@/lib/format'
 import { extractErrorMessage, sha256Hex } from '@/lib/utils'
 
 interface BatchImportDialogProps {
@@ -252,7 +253,7 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
               newResults[i] = {
                 ...newResults[i],
                 status: 'verified',
-                usage: `${balance.currentUsage}/${balance.usageLimit}`,
+                usage: formatKiroUsageWithUsd(balance.currentUsage, balance.usageLimit),
                 email: addedCred.email || undefined,
                 credentialId: addedCred.credentialId
               }
@@ -302,7 +303,7 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
             newResults[i] = {
               ...newResults[i],
               status: 'verified',
-              usage: `${balance.currentUsage}/${balance.usageLimit}`,
+              usage: formatKiroUsageWithUsd(balance.currentUsage, balance.usageLimit),
               email: addedCred.email || undefined,
               credentialId: addedCred.credentialId
             }
