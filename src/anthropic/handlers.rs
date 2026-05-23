@@ -196,6 +196,9 @@ struct AdaptiveCompressionOutcome {
     thinking_compressed: bool,
     tool_schemas_simplified: bool,
     final_tool_description_max_chars: usize,
+    tool_result_compressed: bool,
+    tool_use_input_compressed: bool,
+    long_messages_compressed: bool,
 }
 
 /// 计算 KiroRequest 中所有图片 base64 数据的总字节数。
@@ -247,16 +250,19 @@ fn adaptive_shrink_request_body(
         thinking_compressed: false,
         tool_schemas_simplified: false,
         final_tool_description_max_chars: 0,
+        tool_result_compressed: false,
+        tool_use_input_compressed: false,
+        long_messages_compressed: false,
     };
 
-    // 自适应压缩策略：
-    // 1) 空白压缩（一次性）
-    // 2) thinking 压缩（一次性）
-    // 3) 工具定义 schema 简化（一次性）
-    // 4) 逐步截断工具 description（迭代 ×3/4）
-    let mut whitespace_done = false;
-    let mut thinking_done = false;
-    let mut schemas_simplified = false;
+    // 自适应压缩策略（按风险递增顺序）：
+    // 阶段 1: 空白压缩（一次性，无损）
+    // 阶段 2: thinking 压缩（一次性，低损）
+    // 阶段 3: 工具定义 schema 简化（一次性，低损）
+    // 阶段 4: 逐步截断工具 description（迭代 ×3/4）
+    // 阶段 5: tool_result 截断（渐进式：8000→4000→2000→1000 chars）
+    // 阶段 6: tool_use input 截断（渐进式：8000→4000→2000→1000 chars）
+    // 阶段 7: 长消息内容截断（渐进式：16000→8000→4000→2000 chars）
 
     let has_tools = !kiro_request
         .conversation_state
@@ -266,10 +272,46 @@ fn adaptive_shrink_request_body(
         .tools
         .is_empty();
 
-    // 初始 description 截断阈值：取当前最大 description 字符数的 3/4
-    let min_desc = base_config.tool_definition_min_description_chars;
-    let max_tool_desc_chars = if has_tools {
-        kiro_request
+    // 阶段 1: 空白压缩
+    if request_body.len() > max_body && base_config.whitespace_compression {
+        super::compressor::compress_whitespace_pass(&mut kiro_request.conversation_state);
+        outcome.whitespace_compressed = true;
+        *request_body = serde_json::to_string(kiro_request)?;
+        outcome.iters += 1;
+        outcome.final_bytes = request_body.len();
+    }
+
+    // 阶段 2: thinking 压缩
+    if request_body.len() > max_body && base_config.thinking_strategy != "keep" {
+        super::compressor::compress_thinking_pass(
+            &mut kiro_request.conversation_state,
+            &base_config.thinking_strategy,
+        );
+        outcome.thinking_compressed = true;
+        *request_body = serde_json::to_string(kiro_request)?;
+        outcome.iters += 1;
+        outcome.final_bytes = request_body.len();
+    }
+
+    // 阶段 3: 工具 schema 简化
+    if request_body.len() > max_body && base_config.tool_definition_compression && has_tools {
+        let tools = &mut kiro_request
+            .conversation_state
+            .current_message
+            .user_input_message
+            .user_input_message_context
+            .tools;
+        super::tool_compression::simplify_tool_schemas(tools);
+        outcome.tool_schemas_simplified = true;
+        *request_body = serde_json::to_string(kiro_request)?;
+        outcome.iters += 1;
+        outcome.final_bytes = request_body.len();
+    }
+
+    // 阶段 4: 工具描述迭代截断
+    if request_body.len() > max_body && base_config.tool_definition_compression && has_tools {
+        let min_desc = base_config.tool_definition_min_description_chars;
+        let max_tool_desc_chars = kiro_request
             .conversation_state
             .current_message
             .user_input_message
@@ -278,41 +320,13 @@ fn adaptive_shrink_request_body(
             .iter()
             .map(|t| t.tool_specification.description.chars().count())
             .max()
-            .unwrap_or(0)
-    } else {
-        0
-    };
-    let mut desc_max = (max_tool_desc_chars * 3 / 4).max(min_desc);
+            .unwrap_or(0);
+        let mut desc_max = (max_tool_desc_chars * 3 / 4).max(min_desc);
 
-    for _ in 0..base_config.adaptive_compression_max_iters {
-        if request_body.len() <= max_body {
-            break;
-        }
-
-        if !whitespace_done && base_config.whitespace_compression {
-            super::compressor::compress_whitespace_pass(
-                &mut kiro_request.conversation_state,
-            );
-            whitespace_done = true;
-            outcome.whitespace_compressed = true;
-        } else if !thinking_done && base_config.thinking_strategy != "keep" {
-            super::compressor::compress_thinking_pass(
-                &mut kiro_request.conversation_state,
-                &base_config.thinking_strategy,
-            );
-            thinking_done = true;
-            outcome.thinking_compressed = true;
-        } else if base_config.tool_definition_compression && !schemas_simplified && has_tools {
-            let tools = &mut kiro_request
-                .conversation_state
-                .current_message
-                .user_input_message
-                .user_input_message_context
-                .tools;
-            super::tool_compression::simplify_tool_schemas(tools);
-            schemas_simplified = true;
-            outcome.tool_schemas_simplified = true;
-        } else if base_config.tool_definition_compression && has_tools && desc_max >= min_desc {
+        for _ in 0..base_config.adaptive_compression_max_iters {
+            if request_body.len() <= max_body || desc_max <= min_desc {
+                break;
+            }
             let tools = &mut kiro_request
                 .conversation_state
                 .current_message
@@ -322,21 +336,102 @@ fn adaptive_shrink_request_body(
             super::tool_compression::truncate_tool_descriptions(tools, desc_max, min_desc);
             let next = (desc_max * 3 / 4).max(min_desc);
             if next >= desc_max {
-                // 已到下限，无法继续
-                outcome.final_tool_description_max_chars = desc_max;
                 break;
             }
             desc_max = next;
-        } else {
-            break; // nothing more to try
+            *request_body = serde_json::to_string(kiro_request)?;
+            outcome.iters += 1;
+            outcome.final_bytes = request_body.len();
         }
-
-        *request_body = serde_json::to_string(kiro_request)?;
-        outcome.iters += 1;
-        outcome.final_bytes = request_body.len();
+        outcome.final_tool_description_max_chars = desc_max;
     }
 
-    outcome.final_tool_description_max_chars = desc_max;
+    // 阶段 5: tool_result 截断（渐进式降低阈值）
+    if request_body.len() > max_body {
+        let thresholds: &[usize] = &[8000, 4000, 2000, 1000];
+        for &threshold in thresholds {
+            if request_body.len() <= max_body {
+                break;
+            }
+            let saved = super::compressor::compress_tool_results_pass(
+                &mut kiro_request.conversation_state,
+                threshold,
+                5,
+                3,
+            );
+            if saved > 0 {
+                outcome.tool_result_compressed = true;
+                *request_body = serde_json::to_string(kiro_request)?;
+                outcome.iters += 1;
+                outcome.final_bytes = request_body.len();
+                tracing::info!(
+                    threshold,
+                    saved,
+                    current_bytes = request_body.len(),
+                    "自适应压缩：tool_result 截断"
+                );
+            }
+        }
+    }
+
+    // 阶段 6: tool_use input 截断（渐进式降低阈值）
+    if request_body.len() > max_body {
+        let thresholds: &[usize] = &[8000, 4000, 2000, 1000];
+        for &threshold in thresholds {
+            if request_body.len() <= max_body {
+                break;
+            }
+            let saved = super::compressor::compress_tool_use_inputs_pass(
+                &mut kiro_request.conversation_state,
+                threshold,
+            );
+            if saved > 0 {
+                outcome.tool_use_input_compressed = true;
+                *request_body = serde_json::to_string(kiro_request)?;
+                outcome.iters += 1;
+                outcome.final_bytes = request_body.len();
+                tracing::info!(
+                    threshold,
+                    saved,
+                    current_bytes = request_body.len(),
+                    "自适应压缩：tool_use input 截断"
+                );
+            }
+        }
+    }
+
+    // 阶段 7: 长消息内容截断（渐进式降低阈值）
+    if request_body.len() > max_body {
+        let thresholds: &[usize] = &[16000, 8000, 4000, 2000];
+        for &threshold in thresholds {
+            if request_body.len() <= max_body {
+                break;
+            }
+            let saved = super::compressor::compress_long_messages_pass(
+                &mut kiro_request.conversation_state,
+                threshold,
+            );
+            if saved > 0 {
+                outcome.long_messages_compressed = true;
+                *request_body = serde_json::to_string(kiro_request)?;
+                outcome.iters += 1;
+                outcome.final_bytes = request_body.len();
+                tracing::info!(
+                    threshold,
+                    saved,
+                    current_bytes = request_body.len(),
+                    "自适应压缩：长消息内容截断"
+                );
+            }
+        }
+    }
+
+    // 最终修复：压缩后修复 tool_use/tool_result 配对和空 content
+    if outcome.tool_result_compressed || outcome.tool_use_input_compressed || outcome.long_messages_compressed {
+        super::compressor::repair_tool_pairing_and_content(&mut kiro_request.conversation_state);
+        *request_body = serde_json::to_string(kiro_request)?;
+        outcome.final_bytes = request_body.len();
+    }
 
     Ok(Some(outcome))
 }
@@ -946,6 +1041,9 @@ pub async fn post_messages(
                     thinking_compressed = outcome.thinking_compressed,
                     tool_schemas_simplified = outcome.tool_schemas_simplified,
                     final_tool_description_max_chars = outcome.final_tool_description_max_chars,
+                    tool_result_compressed = outcome.tool_result_compressed,
+                    tool_use_input_compressed = outcome.tool_use_input_compressed,
+                    long_messages_compressed = outcome.long_messages_compressed,
                     "请求体超过阈值，已执行自适应压缩"
                 );
             }
