@@ -67,8 +67,8 @@ pub struct ImageProcessResult {
 /// - 当 GIF 过长导致超出总帧数时，按"秒级上限"下调采样频率（例如 8 秒 GIF → 每秒最多 2 张）
 pub fn process_gif_frames(
     base64_data: &str,
-    config: &CompressionConfig,
-    image_count: usize,
+    _config: &CompressionConfig,
+    _image_count: usize,
     max_frames_budget: usize,
 ) -> Result<GifSamplingResult, String> {
     let gif_bytes = BASE64
@@ -109,13 +109,6 @@ pub fn process_gif_frames(
     } else {
         // duration_secs_ceil > effective_max_frames：平均 < 1 fps，改为均匀抽取 max_frames 张
         duration_ms.div_ceil(effective_max_frames as u64).max(1)
-    };
-
-    // 根据图片数量选择像素限制（复用现有策略）
-    let _max_pixels = if image_count >= config.image_multi_threshold {
-        config.image_max_pixels_multi
-    } else {
-        config.image_max_pixels_single
     };
 
     // Pass 2：按采样间隔选择帧并重编码为 JPEG（质量压缩）

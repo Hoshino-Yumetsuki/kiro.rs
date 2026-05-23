@@ -202,22 +202,6 @@ fn default_tool_name_max_chars() -> usize {
     63
 }
 
-fn default_image_max_long_edge() -> u32 {
-    4000
-}
-
-fn default_image_max_pixels_single() -> u32 {
-    4_000_000
-}
-
-fn default_image_max_pixels_multi() -> u32 {
-    4_000_000
-}
-
-fn default_image_multi_threshold() -> usize {
-    20
-}
-
 fn default_max_request_body_bytes() -> usize {
     // 上游对请求体大小存在硬性限制（实测约 5MiB 左右会触发 400），
     // 这里默认设置为 4.5MiB 留出安全余量。
@@ -256,18 +240,6 @@ pub struct CompressionConfig {
     /// Kiro 工具名最大长度（字符数，0=不缩短），默认 63
     #[serde(default = "default_tool_name_max_chars")]
     pub tool_name_max_chars: usize,
-    /// 图片长边最大像素，默认 4000（Anthropic 硬限制 8000，留安全余量；窄长图受益于更大长边）
-    #[serde(default = "default_image_max_long_edge")]
-    pub image_max_long_edge: u32,
-    /// 单张图片最大总像素，默认 4_000_000（2000×2000，与多图限制一致）
-    #[serde(default = "default_image_max_pixels_single")]
-    pub image_max_pixels_single: u32,
-    /// 多图模式下单张图片最大总像素，默认 4_000_000（2000×2000）
-    #[serde(default = "default_image_max_pixels_multi")]
-    pub image_max_pixels_multi: u32,
-    /// 触发多图限制的图片数量阈值，默认 20
-    #[serde(default = "default_image_multi_threshold")]
-    pub image_multi_threshold: usize,
     /// 请求体最大字节数，超过则触发自适应压缩（0 = 不限制）
     #[serde(default = "default_max_request_body_bytes")]
     pub max_request_body_bytes: usize,
@@ -289,10 +261,6 @@ impl Default for CompressionConfig {
             tool_definition_compression: true,
             tool_definition_min_description_chars: default_tool_definition_min_description_chars(),
             tool_name_max_chars: default_tool_name_max_chars(),
-            image_max_long_edge: default_image_max_long_edge(),
-            image_max_pixels_single: default_image_max_pixels_single(),
-            image_max_pixels_multi: default_image_max_pixels_multi(),
-            image_multi_threshold: default_image_multi_threshold(),
             max_request_body_bytes: default_max_request_body_bytes(),
             adaptive_compression: true,
             adaptive_compression_max_iters: default_adaptive_compression_max_iters(),
