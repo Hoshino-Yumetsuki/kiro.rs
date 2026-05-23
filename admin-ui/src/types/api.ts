@@ -351,10 +351,6 @@ export interface CompressionConfigResponse {
   toolDefinitionCompression: boolean
   toolDefinitionMinDescriptionChars: number
   toolNameMaxChars: number
-  imageMaxLongEdge: number
-  imageMaxPixelsSingle: number
-  imageMaxPixelsMulti: number
-  imageMultiThreshold: number
   maxRequestBodyBytes: number
   adaptiveCompression: boolean
   adaptiveCompressionMaxIters: number
@@ -380,10 +376,6 @@ export interface UpdateCompressionConfigRequest {
   toolDefinitionCompression?: boolean
   toolDefinitionMinDescriptionChars?: number
   toolNameMaxChars?: number
-  imageMaxLongEdge?: number
-  imageMaxPixelsSingle?: number
-  imageMaxPixelsMulti?: number
-  imageMultiThreshold?: number
   maxRequestBodyBytes?: number
   adaptiveCompression?: boolean
   adaptiveCompressionMaxIters?: number

@@ -51,10 +51,6 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
   const [cToolDefCompression, setCToolDefCompression] = useState(false)
   const [cToolDefMinDescChars, setCToolDefMinDescChars] = useState('')
   const [cToolNameMaxChars, setCToolNameMaxChars] = useState('')
-  const [cImageMaxLongEdge, setCImageMaxLongEdge] = useState('')
-  const [cImageMaxPixelsSingle, setCImageMaxPixelsSingle] = useState('')
-  const [cImageMaxPixelsMulti, setCImageMaxPixelsMulti] = useState('')
-  const [cImageMultiThreshold, setCImageMultiThreshold] = useState('')
   const [cMaxRequestBodyBytes, setCMaxRequestBodyBytes] = useState('')
   const [cAdaptive, setCAdaptive] = useState(false)
   const [cAdaptiveMaxIters, setCAdaptiveMaxIters] = useState('')
@@ -80,10 +76,6 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
       setCToolDefCompression(c.toolDefinitionCompression)
       setCToolDefMinDescChars(c.toolDefinitionMinDescriptionChars.toString())
       setCToolNameMaxChars(c.toolNameMaxChars.toString())
-      setCImageMaxLongEdge(c.imageMaxLongEdge.toString())
-      setCImageMaxPixelsSingle(c.imageMaxPixelsSingle.toString())
-      setCImageMaxPixelsMulti(c.imageMaxPixelsMulti.toString())
-      setCImageMultiThreshold(c.imageMultiThreshold.toString())
       setCMaxRequestBodyBytes(c.maxRequestBodyBytes.toString())
       setCAdaptive(c.adaptiveCompression)
       setCAdaptiveMaxIters(c.adaptiveCompressionMaxIters.toString())
@@ -160,10 +152,6 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
       setIf('toolDefinitionCompression', cToolDefCompression, oc.toolDefinitionCompression)
       setIf('toolDefinitionMinDescriptionChars', parseInt(cToolDefMinDescChars) || 0, oc.toolDefinitionMinDescriptionChars)
       setIf('toolNameMaxChars', parseInt(cToolNameMaxChars) || 0, oc.toolNameMaxChars)
-      setIf('imageMaxLongEdge', parseInt(cImageMaxLongEdge) || 0, oc.imageMaxLongEdge)
-      setIf('imageMaxPixelsSingle', parseInt(cImageMaxPixelsSingle) || 0, oc.imageMaxPixelsSingle)
-      setIf('imageMaxPixelsMulti', parseInt(cImageMaxPixelsMulti) || 0, oc.imageMaxPixelsMulti)
-      setIf('imageMultiThreshold', parseInt(cImageMultiThreshold) || 0, oc.imageMultiThreshold)
       setIf('maxRequestBodyBytes', parseInt(cMaxRequestBodyBytes) || 0, oc.maxRequestBodyBytes)
       setIf('adaptiveCompression', cAdaptive, oc.adaptiveCompression)
       setIf('adaptiveCompressionMaxIters', parseInt(cAdaptiveMaxIters) || 0, oc.adaptiveCompressionMaxIters)
@@ -338,15 +326,6 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
               </div>
               {numInput('gcTdMinDescChars', '工具定义最小描述字符数', cToolDefMinDescChars, setCToolDefMinDescChars)}
               {numInput('gcTnMaxChars', '工具名称最大字符数', cToolNameMaxChars, setCToolNameMaxChars, '0 = 不限')}
-
-              {/* 图片处理 */}
-              <p className="text-xs font-medium text-muted-foreground pt-2">图片处理</p>
-              {numInput('gcImgLongEdge', '图片最大长边（px）', cImageMaxLongEdge, setCImageMaxLongEdge)}
-              <div className="grid grid-cols-2 gap-2">
-                {numInput('gcImgPixelsSingle', '单图最大像素', cImageMaxPixelsSingle, setCImageMaxPixelsSingle)}
-                {numInput('gcImgPixelsMulti', '多图最大像素', cImageMaxPixelsMulti, setCImageMaxPixelsMulti)}
-              </div>
-              {numInput('gcImgMultiThreshold', '多图阈值（张）', cImageMultiThreshold, setCImageMultiThreshold, '超过此数量按多图限制')}
 
               {/* 自适应压缩 */}
               <p className="text-xs font-medium text-muted-foreground pt-2">自适应压缩</p>

@@ -829,10 +829,6 @@ impl AdminService {
                 tool_definition_compression: c.tool_definition_compression,
                 tool_definition_min_description_chars: c.tool_definition_min_description_chars,
                 tool_name_max_chars: c.tool_name_max_chars,
-                image_max_long_edge: c.image_max_long_edge,
-                image_max_pixels_single: c.image_max_pixels_single,
-                image_max_pixels_multi: c.image_max_pixels_multi,
-                image_multi_threshold: c.image_multi_threshold,
                 max_request_body_bytes: c.max_request_body_bytes,
                 adaptive_compression: c.adaptive_compression,
                 adaptive_compression_max_iters: c.adaptive_compression_max_iters,
@@ -985,18 +981,6 @@ impl AdminService {
         }
         if let Some(v) = src.tool_name_max_chars {
             target.tool_name_max_chars = v;
-        }
-        if let Some(v) = src.image_max_long_edge {
-            target.image_max_long_edge = v;
-        }
-        if let Some(v) = src.image_max_pixels_single {
-            target.image_max_pixels_single = v;
-        }
-        if let Some(v) = src.image_max_pixels_multi {
-            target.image_max_pixels_multi = v;
-        }
-        if let Some(v) = src.image_multi_threshold {
-            target.image_multi_threshold = v;
         }
         if let Some(v) = src.max_request_body_bytes {
             target.max_request_body_bytes = v;
