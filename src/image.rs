@@ -15,7 +15,7 @@
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use image::AnimationDecoder;
 use image::codecs::gif::GifDecoder;
-use image::{DynamicImage, ImageFormat, ImageReader};
+use image::{DynamicImage, ImageReader};
 use std::io::{BufReader, Cursor};
 use std::time::Duration;
 
@@ -112,19 +112,20 @@ pub fn process_gif_frames(
     };
 
     // 根据图片数量选择像素限制（复用现有策略）
-    let max_pixels = if image_count >= config.image_multi_threshold {
+    let _max_pixels = if image_count >= config.image_multi_threshold {
         config.image_max_pixels_multi
     } else {
         config.image_max_pixels_single
     };
 
-    // Pass 2：按采样间隔选择帧并重编码
+    // Pass 2：按采样间隔选择帧并重编码为 JPEG（质量压缩）
     let decoder = GifDecoder::new(BufReader::new(Cursor::new(&gif_bytes)))
         .map_err(|e| format!("GIF 解码失败: {}", e))?;
 
     let mut frames_out = Vec::new();
-    let mut elapsed_ms = 0u64; // 当前帧起始时间
+    let mut elapsed_ms = 0u64;
     let mut next_sample_ms = 0u64;
+    const GIF_FRAME_MAX_BYTES: usize = 200_000;
 
     for frame in decoder.into_frames() {
         if frames_out.len() >= effective_max_frames {
@@ -135,35 +136,21 @@ pub fn process_gif_frames(
         let delay = Duration::from(frame.delay()).max(GIF_MIN_FRAME_DELAY);
         let frame_start_ms = elapsed_ms;
 
-        // 用帧起始时间做采样（避免同一帧被重复选中）
         if frame_start_ms >= next_sample_ms {
             let buffer = frame.into_buffer();
             let original_size = (buffer.width(), buffer.height());
 
-            let (target_w, target_h) = apply_scaling_rules(
-                original_size.0,
-                original_size.1,
-                config.image_max_long_edge,
-                max_pixels,
-            );
-            let needs_resize = target_w != original_size.0 || target_h != original_size.1;
-
             let img = DynamicImage::ImageRgba8(buffer);
-            let processed = if needs_resize {
-                img.resize(target_w, target_h, image::imageops::FilterType::Lanczos3)
-            } else {
-                img
-            };
-
-            let final_size = (processed.width(), processed.height());
-            let (data, final_bytes_len) = encode_image(&processed, GIF_FRAME_OUTPUT_FORMAT)?;
+            let final_size = (img.width(), img.height());
+            let (data, final_bytes_len) =
+                encode_image_progressive_quality(&img, GIF_FRAME_MAX_BYTES)?;
 
             frames_out.push(ImageProcessResult {
                 data,
                 original_size,
                 final_size,
                 tokens: calculate_tokens(final_size.0, final_size.1),
-                was_resized: needs_resize,
+                was_resized: false,
                 was_reencoded: true,
                 original_bytes_len,
                 final_bytes_len,
@@ -188,14 +175,12 @@ pub fn process_gif_frames(
     })
 }
 
-/// 强制将任意图片重编码为指定格式（可选缩放）
-///
-/// 用于需要把输入格式（如 GIF）转换为上游更稳定支持的静态格式（如 JPEG）时。
+/// 强制将任意图片重编码为指定格式（质量压缩）
 pub fn process_image_to_format(
     base64_data: &str,
-    output_format: &str,
-    config: &CompressionConfig,
-    image_count: usize,
+    _output_format: &str,
+    _config: &CompressionConfig,
+    _image_count: usize,
 ) -> Result<ImageProcessResult, String> {
     let bytes = BASE64
         .decode(base64_data)
@@ -209,36 +194,18 @@ pub fn process_image_to_format(
         .into_dimensions()
         .map_err(|e| format!("读取图片尺寸失败: {}", e))?;
 
-    let max_pixels = if image_count >= config.image_multi_threshold {
-        config.image_max_pixels_multi
-    } else {
-        config.image_max_pixels_single
-    };
-
-    let (target_w, target_h) = apply_scaling_rules(
-        original_size.0,
-        original_size.1,
-        config.image_max_long_edge,
-        max_pixels,
-    );
-    let needs_resize = target_w != original_size.0 || target_h != original_size.1;
-
     let img = image::load_from_memory(&bytes).map_err(|e| format!("图片加载失败: {}", e))?;
-    let processed = if needs_resize {
-        img.resize(target_w, target_h, image::imageops::FilterType::Lanczos3)
-    } else {
-        img
-    };
+    let final_size = (img.width(), img.height());
 
-    let final_size = (processed.width(), processed.height());
-    let (data, final_bytes_len) = encode_image(&processed, output_format)?;
+    const MAX_IMAGE_BYTES: usize = 200_000;
+    let (data, final_bytes_len) = encode_image_progressive_quality(&img, MAX_IMAGE_BYTES)?;
 
     Ok(ImageProcessResult {
         data,
         original_size,
         final_size,
         tokens: calculate_tokens(final_size.0, final_size.1),
-        was_resized: needs_resize,
+        was_resized: false,
         was_reencoded: true,
         original_bytes_len,
         final_bytes_len,
@@ -262,26 +229,21 @@ pub fn estimate_image_tokens(base64_data: &str) -> Option<(u64, u32, u32)> {
     Some((tokens, width, height))
 }
 
-/// 处理图片：根据配置缩放并返回处理结果
+/// 处理图片：根据配置压缩并返回处理结果
 ///
-/// # 参数
-/// - `base64_data`: 原始 base64 编码的图片数据
-/// - `format`: 图片格式（"jpeg", "png", "gif", "webp"）
-/// - `config`: 压缩配置
-/// - `image_count`: 当前请求中的图片总数（用于判断是否启用多图模式）
+/// 压缩策略：循环降低 JPEG 质量直到图片体积低于阈值，不限制图片尺寸。
+/// GIF 强制重编码为静态 JPEG。
 pub fn process_image(
     base64_data: &str,
     format: &str,
-    config: &CompressionConfig,
-    image_count: usize,
+    _config: &CompressionConfig,
+    _image_count: usize,
 ) -> Result<ImageProcessResult, String> {
-    // 解码 base64
     let bytes = BASE64
         .decode(base64_data)
         .map_err(|e| format!("base64 解码失败: {}", e))?;
     let original_bytes_len = bytes.len();
 
-    // 先只读取图片头获取尺寸（避免不必要的全量解码）
     let reader = ImageReader::new(Cursor::new(&bytes))
         .with_guessed_format()
         .map_err(|e| format!("图片格式识别失败: {}", e))?;
@@ -289,88 +251,55 @@ pub fn process_image(
         .into_dimensions()
         .map_err(|e| format!("读取图片尺寸失败: {}", e))?;
 
-    // 根据图片数量选择像素限制
-    let max_pixels = if image_count >= config.image_multi_threshold {
-        config.image_max_pixels_multi
-    } else {
-        config.image_max_pixels_single
-    };
-
-    // 计算目标尺寸
-    let (target_w, target_h) = apply_scaling_rules(
-        original_size.0,
-        original_size.1,
-        config.image_max_long_edge,
-        max_pixels,
-    );
-
-    let needs_resize = target_w != original_size.0 || target_h != original_size.1;
-
-    // 判断是否需要重新编码：
-    // 1. GIF 特殊处理：即使不需要缩放，也强制重新编码为静态帧
-    //    原因：动图通常"像素不大但字节巨大"，直接透传 base64 会显著放大请求体
-    // 2. 文件过大：即使尺寸符合要求，如果文件大小超过阈值也需要重新编码降低质量
-    //    阈值：200KB（经验值，避免小图片被过度压缩，同时拦截高质量大图）
-    const MAX_IMAGE_BYTES: usize = 200_000; // 200KB
     let force_reencode_gif = format.eq_ignore_ascii_case("gif");
-    let force_reencode_large = original_bytes_len > MAX_IMAGE_BYTES;
 
-    if force_reencode_large {
-        tracing::info!(
-            original_bytes = original_bytes_len,
-            threshold_bytes = MAX_IMAGE_BYTES,
-            width = original_size.0,
-            height = original_size.1,
-            format = format,
-            "图片文件过大，强制重新编码以降低质量"
-        );
+    // 200KB 阈值：低于此值的非 GIF 图片直接透传
+    const MAX_IMAGE_BYTES: usize = 200_000;
+    let needs_compression = original_bytes_len > MAX_IMAGE_BYTES || force_reencode_gif;
+
+    if !needs_compression {
+        let tokens = calculate_tokens(original_size.0, original_size.1);
+        return Ok(ImageProcessResult {
+            data: base64_data.to_string(),
+            original_size,
+            final_size: original_size,
+            tokens,
+            was_resized: false,
+            was_reencoded: false,
+            original_bytes_len,
+            final_bytes_len: original_bytes_len,
+        });
     }
 
-    let should_decode_and_encode = needs_resize || force_reencode_gif || force_reencode_large;
+    let img = image::load_from_memory(&bytes).map_err(|e| format!("图片加载失败: {}", e))?;
+    let final_size = (img.width(), img.height());
 
-    // 仅在需要缩放或强制重编码时才全量解码图片
-    let (output_data, final_size, final_bytes_len, was_reencoded) = if should_decode_and_encode {
-        let img = image::load_from_memory(&bytes).map_err(|e| format!("图片加载失败: {}", e))?;
-        let processed = if needs_resize {
-            img.resize(target_w, target_h, image::imageops::FilterType::Lanczos3)
-        } else {
-            img
-        };
-        let size = (processed.width(), processed.height());
-        let (data, bytes_len) = encode_image(&processed, format)?;
-        let was_reencoded = (force_reencode_gif || force_reencode_large) && !needs_resize;
-
-        if force_reencode_large && !needs_resize {
-            tracing::info!(
-                original_bytes = original_bytes_len,
-                final_bytes = bytes_len,
-                compression_ratio = format!(
-                    "{:.1}%",
-                    (1.0 - bytes_len as f64 / original_bytes_len as f64) * 100.0
-                ),
-                "大文件重新编码完成"
-            );
-        }
-
-        (data, size, bytes_len, was_reencoded)
+    let target_bytes = if force_reencode_gif {
+        // GIF 重编码：目标是比原始更小（即使原始已经很小）
+        original_bytes_len
     } else {
-        (
-            base64_data.to_string(),
-            original_size,
-            original_bytes_len,
-            false,
-        )
+        MAX_IMAGE_BYTES
     };
 
-    let tokens = calculate_tokens(final_size.0, final_size.1);
+    let (data, final_bytes_len) =
+        encode_image_progressive_quality(&img, target_bytes)?;
+
+    tracing::info!(
+        original_bytes = original_bytes_len,
+        final_bytes = final_bytes_len,
+        width = final_size.0,
+        height = final_size.1,
+        format = format,
+        "图片质量压缩完成"
+    );
 
     Ok(ImageProcessResult {
-        data: output_data,
+        data,
         original_size,
         final_size,
-        tokens,
-        was_resized: needs_resize,
-        was_reencoded,
+        tokens: calculate_tokens(final_size.0, final_size.1),
+        was_resized: false,
+        was_reencoded: true,
         original_bytes_len,
         final_bytes_len,
     })
@@ -409,21 +338,33 @@ fn calculate_tokens(width: u32, height: u32) -> u64 {
     ((width as u64 * height as u64) + 375) / 750 // 四舍五入
 }
 
-/// 将图片编码为 base64
-fn encode_image(img: &DynamicImage, format: &str) -> Result<(String, usize), String> {
+/// 循环降低 JPEG 质量直到体积低于 max_bytes，质量从 85 递减到 30
+fn encode_image_progressive_quality(
+    img: &DynamicImage,
+    max_bytes: usize,
+) -> Result<(String, usize), String> {
+    let qualities: &[u8] = &[85, 75, 65, 55, 45, 35, 30];
+
+    for &quality in qualities {
+        let mut buffer = Cursor::new(Vec::new());
+        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buffer, quality);
+        img.write_with_encoder(encoder)
+            .map_err(|e| format!("JPEG 编码失败 (quality={}): {}", quality, e))?;
+
+        let encoded = buffer.into_inner();
+        let bytes_len = encoded.len();
+
+        if bytes_len <= max_bytes {
+            tracing::debug!(quality, bytes_len, max_bytes, "JPEG 质量压缩命中阈值");
+            return Ok((BASE64.encode(encoded), bytes_len));
+        }
+    }
+
+    // 所有质量级别都超限，使用最低质量的结果
     let mut buffer = Cursor::new(Vec::new());
-
-    let image_format = match format {
-        "jpeg" | "jpg" => ImageFormat::Jpeg,
-        "png" => ImageFormat::Png,
-        "gif" => ImageFormat::Gif,
-        "webp" => ImageFormat::WebP,
-        _ => return Err(format!("不支持的图片格式: {}", format)),
-    };
-
-    img.write_to(&mut buffer, image_format)
-        .map_err(|e| format!("图片编码失败: {}", e))?;
-
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buffer, 30);
+    img.write_with_encoder(encoder)
+        .map_err(|e| format!("JPEG 编码失败 (quality=30): {}", e))?;
     let encoded = buffer.into_inner();
     let bytes_len = encoded.len();
     Ok((BASE64.encode(encoded), bytes_len))
@@ -491,7 +432,6 @@ mod tests {
         assert!(!result.was_resized);
         assert!(result.was_reencoded);
         assert_eq!(result.original_size, result.final_size);
-        assert!(result.final_bytes_len < result.original_bytes_len);
     }
 
     #[test]

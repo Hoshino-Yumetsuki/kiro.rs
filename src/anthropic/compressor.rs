@@ -218,8 +218,7 @@ fn truncate_thinking_blocks(text: &str, max_chars: usize) -> String {
 // ============ tool_result 智能截断 ============
 
 /// 按行智能截断，保留头尾行
-#[allow(dead_code)]
-fn smart_truncate_by_lines(
+pub fn smart_truncate_by_lines(
     text: &str,
     max_chars: usize,
     head_lines: usize,
@@ -272,8 +271,7 @@ fn smart_truncate_by_lines(
 }
 
 /// 遍历所有 tool_result 的 text 字段，执行智能截断
-#[allow(dead_code)]
-fn compress_tool_results_pass(
+pub fn compress_tool_results_pass(
     state: &mut ConversationState,
     max_chars: usize,
     head_lines: usize,
@@ -312,7 +310,6 @@ fn compress_tool_results_pass(
 }
 
 /// 截断单个 tool_result 的 content 数组中的 text 字段
-#[allow(dead_code)]
 fn truncate_tool_result_content(
     content: &mut [serde_json::Map<String, serde_json::Value>],
     max_chars: usize,
@@ -337,8 +334,7 @@ fn truncate_tool_result_content(
 // ============ tool_use input 截断 ============
 
 /// 遍历 history 中 assistant 消息的 tool_use input，截断大字符串字段
-#[allow(dead_code)]
-fn compress_tool_use_inputs_pass(state: &mut ConversationState, max_chars: usize) -> usize {
+pub fn compress_tool_use_inputs_pass(state: &mut ConversationState, max_chars: usize) -> usize {
     let mut saved = 0usize;
 
     for msg in &mut state.history {
@@ -358,7 +354,6 @@ fn compress_tool_use_inputs_pass(state: &mut ConversationState, max_chars: usize
 }
 
 /// 递归截断 JSON 值中的大字符串
-#[allow(dead_code)]
 fn truncate_json_value_strings(value: &mut serde_json::Value, max_chars: usize) -> usize {
     let mut saved = 0usize;
 
@@ -409,7 +404,7 @@ fn truncate_json_value_strings(value: &mut serde_json::Value, max_chars: usize) 
 ///
 /// 返回 (移除的轮数, 移除的字节数)
 #[allow(dead_code)]
-fn compress_history_pass(
+pub fn compress_history_pass(
     state: &mut ConversationState,
     max_turns: usize,
     max_chars: usize,
@@ -472,8 +467,7 @@ fn compress_history_pass(
 /// - 移除 history 中孤立的 tool_use（其 tool_use_id 在 history/current 的 tool_result 中不存在）
 ///
 /// 返回 (移除的 tool_use 数, 移除的 tool_result 数)。
-#[allow(dead_code)]
-fn repair_tool_pairing_pass(state: &mut ConversationState) -> (usize, usize) {
+pub fn repair_tool_pairing_pass(state: &mut ConversationState) -> (usize, usize) {
     use std::collections::HashSet;
 
     // 1) 收集 history 内所有 tool_use_id（上游通常要求 tool_result 必须能在历史 tool_use 中找到）
@@ -556,8 +550,7 @@ fn repair_tool_pairing_pass(state: &mut ConversationState) -> (usize, usize) {
 /// - history assistant_response_message.content（仅当无 tool_uses 时兜底）
 /// - current_message.user_input_message.content（最终必要兜底）
 /// - history/current tool_result content 数组中空 text 项（优先删除，必要时兜底）
-#[allow(dead_code)]
-fn repair_non_empty_content_pass(state: &mut ConversationState) -> usize {
+pub fn repair_non_empty_content_pass(state: &mut ConversationState) -> usize {
     let mut repaired = 0usize;
 
     for msg in &mut state.history {
@@ -623,7 +616,6 @@ fn repair_non_empty_content_pass(state: &mut ConversationState) -> usize {
 
 /// 修复 tool_result content 数组中 text 字段为空字符串的条目。
 /// 策略：优先删除空 text 项；若删除后 content 变空数组则兜底补 "."。
-#[allow(dead_code)]
 fn repair_tool_result_text_fields(
     results: &mut [crate::kiro::model::requests::tool::ToolResult],
 ) -> usize {
@@ -656,7 +648,6 @@ fn repair_tool_result_text_fields(
     repaired
 }
 
-#[allow(dead_code)]
 fn repair_content_field(field: &mut String) -> bool {
     if field.trim().is_empty() {
         *field = ".".to_string();
@@ -667,13 +658,13 @@ fn repair_content_field(field: &mut String) -> bool {
 
 // ============ 超长消息内容截断 ============
 
-/// 截断超长的用户消息内容（history user messages 和 current_message）
+/// 截断超长的 assistant 历史消息内容
 ///
 /// 这是最后手段的压缩层，仅在自适应二次压缩中使用。
 /// 截断策略：保留头部内容，尾部截断并附加省略标记。
+/// 不截断用户消息（用户消息包含工具调用上下文，截断可能破坏语义）。
 ///
 /// 返回节省的字节数。
-#[allow(dead_code)]
 pub fn compress_long_messages_pass(state: &mut ConversationState, max_chars: usize) -> usize {
     if max_chars == 0 {
         return 0;
@@ -681,18 +672,14 @@ pub fn compress_long_messages_pass(state: &mut ConversationState, max_chars: usi
 
     let mut saved = 0usize;
 
-    // 遍历 history 中所有 User 消息
     for msg in &mut state.history {
-        if let Message::User(user_msg) = msg {
-            saved += truncate_long_content(&mut user_msg.user_input_message.content, max_chars);
+        if let Message::Assistant(assistant_msg) = msg {
+            saved += truncate_long_content(
+                &mut assistant_msg.assistant_response_message.content,
+                max_chars,
+            );
         }
     }
-
-    // 处理 current_message
-    saved += truncate_long_content(
-        &mut state.current_message.user_input_message.content,
-        max_chars,
-    );
 
     saved
 }
@@ -726,6 +713,23 @@ fn safe_char_truncate(text: &str, max_chars: usize) -> &str {
     match text.char_indices().nth(max_chars) {
         Some((idx, _)) => &text[..idx],
         None => text,
+    }
+}
+
+/// 压缩后统一修复：tool_use/tool_result 配对 + 空 content 兜底
+pub fn repair_tool_pairing_and_content(state: &mut ConversationState) {
+    let (removed_tool_uses, removed_tool_results) = repair_tool_pairing_pass(state);
+    if removed_tool_uses > 0 || removed_tool_results > 0 {
+        tracing::debug!(
+            removed_tool_uses,
+            removed_tool_results,
+            "自适应压缩后修复 tool_use/tool_result 配对"
+        );
+    }
+
+    let repaired = repair_non_empty_content_pass(state);
+    if repaired > 0 {
+        tracing::debug!(repaired, "自适应压缩后修复空 content 占位符");
     }
 }
 
@@ -1226,28 +1230,37 @@ mod tests {
     }
 
     #[test]
-    fn test_compress_long_messages_truncates_current_message() {
+    fn test_compress_long_messages_truncates_history_assistant() {
         let long_content = "a".repeat(20000);
-        let mut state = make_simple_state(vec![], &long_content);
+        let mut state = make_simple_state(vec![("short user", &long_content)], "current");
         let saved = compress_long_messages_pass(&mut state, 8192);
         assert!(saved > 0);
-        let content = &state.current_message.user_input_message.content;
-        assert!(content.len() < long_content.len());
-        assert!(content.contains("[content truncated,"));
-        assert!(content.contains("chars omitted]"));
-        // 头部应保留
-        assert!(content.starts_with("aaaa"));
+        if let Message::Assistant(a) = &state.history[1] {
+            assert!(a.assistant_response_message.content.len() < long_content.len());
+            assert!(
+                a.assistant_response_message
+                    .content
+                    .contains("[content truncated,")
+            );
+            assert!(
+                a.assistant_response_message
+                    .content
+                    .contains("chars omitted]")
+            );
+            assert!(a.assistant_response_message.content.starts_with("aaaa"));
+        } else {
+            panic!("expected Assistant message");
+        }
     }
 
     #[test]
-    fn test_compress_long_messages_truncates_history_user() {
+    fn test_compress_long_messages_does_not_truncate_user() {
         let long_content = "b".repeat(20000);
         let mut state = make_simple_state(vec![(&long_content, "short reply")], "current");
         let saved = compress_long_messages_pass(&mut state, 8192);
-        assert!(saved > 0);
+        assert_eq!(saved, 0);
         if let Message::User(u) = &state.history[0] {
-            assert!(u.user_input_message.content.len() < long_content.len());
-            assert!(u.user_input_message.content.contains("[content truncated,"));
+            assert_eq!(u.user_input_message.content, long_content);
         } else {
             panic!("expected User message");
         }
@@ -1258,33 +1271,20 @@ mod tests {
         let mut state = make_simple_state(vec![("short user", "short assistant")], "short current");
         let saved = compress_long_messages_pass(&mut state, 8192);
         assert_eq!(saved, 0);
-        assert_eq!(
-            state.current_message.user_input_message.content,
-            "short current"
-        );
-        if let Message::User(u) = &state.history[0] {
-            assert_eq!(u.user_input_message.content, "short user");
+        if let Message::Assistant(a) = &state.history[1] {
+            assert_eq!(a.assistant_response_message.content, "short assistant");
         }
-    }
-
-    #[test]
-    fn test_compress_long_messages_skips_placeholder() {
-        let mut state = make_simple_state(vec![], " ");
-        let saved = compress_long_messages_pass(&mut state, 1);
-        assert_eq!(saved, 0);
-        assert_eq!(state.current_message.user_input_message.content, " ");
     }
 
     #[test]
     fn test_compress_long_messages_zero_max_chars_noop() {
         let long_content = "x".repeat(20000);
-        let mut state = make_simple_state(vec![], &long_content);
+        let mut state = make_simple_state(vec![("user", &long_content)], "current");
         let saved = compress_long_messages_pass(&mut state, 0);
         assert_eq!(saved, 0);
-        assert_eq!(
-            state.current_message.user_input_message.content,
-            long_content
-        );
+        if let Message::Assistant(a) = &state.history[1] {
+            assert_eq!(a.assistant_response_message.content, long_content);
+        }
     }
 
     #[test]
