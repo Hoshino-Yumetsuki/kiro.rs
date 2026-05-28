@@ -35,6 +35,10 @@ pub struct KiroRequest {
     /// Profile ARN（可选）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile_arn: Option<String>,
+    /// 额外模型请求字段（thinking 等模型级参数）
+    /// 例如: { "thinking": { "type": "adaptive" }, "output_config": { "effort": "high" } }
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_model_request_fields: Option<serde_json::Value>,
 }
 #[cfg(test)]
 mod tests {

@@ -16,6 +16,8 @@ pub enum EventType {
     Metering,
     /// 上下文使用率事件
     ContextUsage,
+    /// 推理内容事件（Thinking 模式）
+    ReasoningContent,
     /// 未知事件类型
     Unknown,
 }
@@ -28,6 +30,7 @@ impl EventType {
             "toolUseEvent" => Self::ToolUse,
             "meteringEvent" => Self::Metering,
             "contextUsageEvent" => Self::ContextUsage,
+            "reasoningContentEvent" => Self::ReasoningContent,
             _ => Self::Unknown,
         }
     }
@@ -39,6 +42,7 @@ impl EventType {
             Self::ToolUse => "toolUseEvent",
             Self::Metering => "meteringEvent",
             Self::ContextUsage => "contextUsageEvent",
+            Self::ReasoningContent => "reasoningContentEvent",
             Self::Unknown => "unknown",
         }
     }
@@ -71,6 +75,8 @@ pub enum Event {
     Metering(super::MeteringEvent),
     /// 上下文使用率
     ContextUsage(super::ContextUsageEvent),
+    /// 推理内容（Thinking 模式）
+    ReasoningContent(super::ReasoningContentEvent),
     /// 未知事件 (保留原始帧数据)
     Unknown {},
     /// 服务端错误
@@ -123,6 +129,10 @@ impl Event {
             EventType::ContextUsage => {
                 let payload = super::ContextUsageEvent::from_frame(&frame)?;
                 Ok(Self::ContextUsage(payload))
+            }
+            EventType::ReasoningContent => {
+                let payload = super::ReasoningContentEvent::from_frame(&frame)?;
+                Ok(Self::ReasoningContent(payload))
             }
             EventType::Unknown => Ok(Self::Unknown {}),
         }

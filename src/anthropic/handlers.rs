@@ -1034,9 +1034,14 @@ pub async fn post_messages(
 
     // 构建 Kiro 请求
     let tool_name_map = conversion_result.tool_name_map;
+
+    // 构建 additionalModelRequestFields（thinking 参数）
+    let additional_model_request_fields = build_additional_model_request_fields(&payload);
+
     let mut kiro_request = KiroRequest {
         conversation_state: conversion_result.conversation_state,
         profile_arn: state.profile_arn.clone(),
+        additional_model_request_fields,
     };
 
     let mut request_body = match serde_json::to_string(&kiro_request) {
@@ -1135,11 +1140,11 @@ pub async fn post_messages(
         "已构建 Kiro 请求体"
     );
 
-    // 检查是否启用了thinking
+    // 检查是否启用了thinking（且模型支持）
     let thinking_enabled = payload
         .thinking
         .as_ref()
-        .map(|t| t.is_enabled())
+        .map(|t| t.is_enabled() && Thinking::model_supports_thinking(&payload.model))
         .unwrap_or(false);
 
     if payload.stream {
@@ -1394,6 +1399,11 @@ async fn handle_non_stream_request(
     // 从 meteringEvent 透传的 credit usage，仅用于最终 usage 字段
     let mut metering: Option<MeteringEvent> = None;
 
+    // 推理内容收集（原生 reasoningContentEvent）
+    let mut reasoning_text = String::new();
+    let mut reasoning_signature: Option<String> = None;
+    let mut redacted_thinking_blocks: Vec<String> = Vec::new();
+
     // 收集工具调用的增量 JSON
     let mut tool_json_buffers: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
@@ -1509,6 +1519,17 @@ async fn handle_non_stream_request(
                             );
                             metering = Some(event_metering);
                         }
+                        Event::ReasoningContent(reasoning) => {
+                            if let Some(text) = &reasoning.text {
+                                reasoning_text.push_str(text);
+                            }
+                            if let Some(sig) = &reasoning.signature {
+                                reasoning_signature = Some(sig.clone());
+                            }
+                            if let Some(redacted) = &reasoning.redacted_content {
+                                redacted_thinking_blocks.push(redacted.clone());
+                            }
+                        }
                         Event::Exception { exception_type, .. } => {
                             if exception_type == "ContentLengthExceededException" {
                                 stop_reason = "max_tokens".to_string();
@@ -1531,6 +1552,26 @@ async fn handle_non_stream_request(
 
     // 构建响应内容
     let mut content: Vec<serde_json::Value> = Vec::new();
+
+    // 推理内容块（thinking）放在最前面
+    if !reasoning_text.is_empty() {
+        let mut thinking_block = json!({
+            "type": "thinking",
+            "thinking": reasoning_text
+        });
+        if let Some(ref sig) = reasoning_signature {
+            thinking_block["signature"] = json!(sig);
+        }
+        content.push(thinking_block);
+    }
+
+    // redacted_thinking 块
+    for redacted in &redacted_thinking_blocks {
+        content.push(json!({
+            "type": "redacted_thinking",
+            "data": redacted
+        }));
+    }
 
     if !text_content.is_empty() {
         content.push(json!({
@@ -1599,16 +1640,12 @@ async fn handle_non_stream_request(
 
 /// 检测模型名是否包含 "thinking" 后缀，若包含则覆写 thinking 配置
 ///
-/// 支持的后缀格式：
-/// - `-thinking-minimal` → budget 512
-/// - `-thinking-low` → budget 1024
-/// - `-thinking-medium` → budget 8192
-/// - `-thinking-high` → budget 24576
-/// - `-thinking-xhigh` → budget 32768
-/// - `-thinking` → budget 20000（默认）
-///
-/// - Opus 4.6：覆写为 adaptive 类型
-/// - 其他模型：覆写为 enabled 类型
+/// 支持的后缀格式（映射为 adaptive + effort）：
+/// - `-thinking-minimal` / `-thinking-low` → effort: low
+/// - `-thinking-medium` → effort: medium
+/// - `-thinking-high` / `-thinking` → effort: high（默认）
+/// - `-thinking-xhigh` → effort: xhigh
+/// - `-thinking-max` → effort: max
 fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
     let model_lower = payload.model.to_lowercase();
     if !model_lower.contains("thinking") {
@@ -1616,52 +1653,101 @@ fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
     }
 
     // 具体后缀必须在通用 "thinking" 之前匹配
-    let budget_tokens = if model_lower.ends_with("-thinking-minimal") {
-        512
-    } else if model_lower.ends_with("-thinking-low") {
-        1024
+    let effort = if model_lower.ends_with("-thinking-minimal") || model_lower.ends_with("-thinking-low") {
+        "low"
     } else if model_lower.ends_with("-thinking-medium") {
-        8192
-    } else if model_lower.ends_with("-thinking-high") {
-        24576
+        "medium"
+    } else if model_lower.ends_with("-thinking-high") || model_lower.ends_with("-thinking") {
+        "high"
     } else if model_lower.ends_with("-thinking-xhigh") {
-        32768
-    } else if model_lower.ends_with("-thinking") {
-        20000
+        "xhigh"
+    } else if model_lower.ends_with("-thinking-max") {
+        "max"
     } else {
         // "thinking" 出现在模型名中但不是后缀（如 "thinking-model-v2"），不覆写
         return;
     };
 
-    let is_opus_or_sonnet_4_6 = (model_lower.contains("opus") || model_lower.contains("sonnet"))
-        && (model_lower.contains("4-6") || model_lower.contains("4.6"));
-
-    let thinking_type = if is_opus_or_sonnet_4_6 {
-        "adaptive"
-    } else {
-        "enabled"
-    };
-
     tracing::info!(
         model = %payload.model,
-        thinking_type = thinking_type,
-        budget_tokens = budget_tokens,
+        thinking_type = "adaptive",
+        effort = effort,
         "模型名包含 thinking 后缀，覆写 thinking 配置"
     );
 
     payload.thinking = Some(Thinking {
-        thinking_type: thinking_type.to_string(),
-        budget_tokens,
+        thinking_type: "adaptive".to_string(),
+        budget_tokens: 20000, // 保留字段兼容性，实际不再使用
     });
 
-    if is_opus_or_sonnet_4_6 {
-        payload.output_config = Some(OutputConfig {
-            effort: "high".to_string(),
-        });
-    }
+    payload.output_config = Some(OutputConfig {
+        effort: effort.to_string(),
+    });
 }
 
-/// POST /v1/messages/count_tokens
+/// 构建 additionalModelRequestFields
+///
+/// 根据请求中的 thinking 配置，构建 Kiro API 的 additionalModelRequestFields。
+/// 仅对支持 thinking 的模型（Claude 4+）生成该字段。
+///
+/// 映射规则：
+/// - thinking.type == "adaptive" → { thinking: { type: "adaptive" }, output_config: { effort: "..." } }
+/// - thinking.type == "enabled" → 映射为 adaptive（旧版兼容）
+/// - thinking.type == "disabled" 或无 thinking → None（不传该字段）
+///
+/// Effort 级别限制：
+/// - xhigh/max 仅 Opus 系列支持，其他模型自动回退到 high
+fn build_additional_model_request_fields(payload: &MessagesRequest) -> Option<serde_json::Value> {
+    let thinking = payload.thinking.as_ref()?;
+
+    // 未启用 thinking 则不传
+    if !thinking.is_enabled() {
+        return None;
+    }
+
+    // 模型门控：仅 Claude 4+ 支持
+    if !Thinking::model_supports_thinking(&payload.model) {
+        tracing::debug!(
+            model = %payload.model,
+            "模型不支持 additionalModelRequestFields.thinking，跳过"
+        );
+        return None;
+    }
+
+    // 获取 effort 级别
+    let raw_effort = payload
+        .output_config
+        .as_ref()
+        .map(|c| c.normalized_effort())
+        .unwrap_or("high");
+
+    // xhigh/max 仅 Opus 系列支持，其他模型回退到 high
+    let is_opus = payload.model.to_lowercase().contains("opus");
+    let effort = if !is_opus && (raw_effort == "xhigh" || raw_effort == "max") {
+        tracing::info!(
+            model = %payload.model,
+            requested_effort = raw_effort,
+            "非 Opus 模型不支持 {}, 回退到 high",
+            raw_effort
+        );
+        "high"
+    } else {
+        raw_effort
+    };
+
+    let fields = serde_json::json!({
+        "thinking": { "type": "adaptive" },
+        "output_config": { "effort": effort }
+    });
+
+    tracing::info!(
+        model = %payload.model,
+        effort = effort,
+        "构建 additionalModelRequestFields: thinking=adaptive"
+    );
+
+    Some(fields)
+}
 ///
 /// 计算消息的 token 数量。
 pub async fn count_tokens(
@@ -2026,6 +2112,7 @@ mod tests {
                     "history", "model",
                 ))]),
             profile_arn: None,
+            additional_model_request_fields: None,
         };
         if let KiroMessage::User(user) = &mut kiro_request.conversation_state.history[0] {
             user.user_input_message.images = vec![KiroImage::from_base64("png", big.clone())];
@@ -2073,6 +2160,7 @@ mod tests {
                 ))
                 .with_history(history),
             profile_arn: None,
+            additional_model_request_fields: None,
         };
 
         let mut request_body = serde_json::to_string(&kiro_request).unwrap();
@@ -2120,6 +2208,7 @@ mod tests {
                 CurrentMessage::new(UserInputMessage::new(oversized_content, "model")),
             ),
             profile_arn: None,
+            additional_model_request_fields: None,
         };
         let mut request_body = serde_json::to_string(&kiro_request).unwrap();
         let mut config = CompressionConfig::default();

@@ -81,14 +81,22 @@ pub struct ModelsResponse {
 const MAX_BUDGET_TOKENS: i32 = 128_000;
 
 /// Thinking 配置
+///
+/// 支持两种模式：
+/// - `adaptive`: 自适应思考模式，通过 output_config.effort 控制思考级别
+/// - `enabled`: 旧版兼容模式（内部映射为 adaptive + 对应 effort）
+/// - `disabled`: 禁用思考
 #[derive(Debug, Deserialize, Clone)]
 pub struct Thinking {
     #[serde(rename = "type")]
     pub thinking_type: String,
+    /// 旧版 budget_tokens 字段，保留用于反序列化兼容性（客户端可能仍发送此字段）
+    /// 实际不再使用，thinking 级别通过 output_config.effort 控制
     #[serde(
         default = "default_budget_tokens",
         deserialize_with = "deserialize_budget_tokens"
     )]
+    #[allow(dead_code)]
     pub budget_tokens: i32,
 }
 
@@ -96,6 +104,24 @@ impl Thinking {
     /// 是否启用了 thinking（enabled 或 adaptive）
     pub fn is_enabled(&self) -> bool {
         self.thinking_type == "enabled" || self.thinking_type == "adaptive"
+    }
+
+    /// 判断模型是否支持 additionalModelRequestFields.thinking 参数
+    /// 只有 Claude 4+ 系列模型支持，非 Claude 模型不支持
+    pub fn model_supports_thinking(model: &str) -> bool {
+        let lower = model.to_lowercase();
+        if !lower.contains("claude") {
+            return false;
+        }
+        // claude-3.x 不支持原生 thinking
+        if lower.contains("claude-3-") || lower.contains("claude-3.") {
+            return false;
+        }
+        // auto 模型由后端决定，保守不传
+        if lower == "auto" {
+            return false;
+        }
+        true
     }
 }
 
@@ -115,6 +141,19 @@ where
 pub struct OutputConfig {
     #[serde(default = "default_effort")]
     pub effort: String,
+}
+
+impl OutputConfig {
+    /// 归一化 effort 值：仅接受 low/medium/high/xhigh/max，非法值回退 high
+    pub fn normalized_effort(&self) -> &str {
+        match self.effort.as_str() {
+            "low" | "medium" | "high" | "xhigh" | "max" => self.effort.as_str(),
+            _ => {
+                tracing::warn!("未知的 thinking effort 值 '{}', 回退为 'high'", self.effort);
+                "high"
+            }
+        }
+    }
 }
 
 fn default_effort() -> String {
