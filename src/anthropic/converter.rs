@@ -1007,42 +1007,6 @@ fn convert_tools(
         .collect()
 }
 
-/// 生成thinking标签前缀
-fn generate_thinking_prefix(req: &MessagesRequest) -> Option<String> {
-    if let Some(t) = &req.thinking {
-        if t.thinking_type == "enabled" {
-            return Some(format!(
-                "<thinking_mode>enabled</thinking_mode><max_thinking_length>{}</max_thinking_length>",
-                t.budget_tokens
-            ));
-        } else if t.thinking_type == "adaptive" {
-            let raw_effort = req
-                .output_config
-                .as_ref()
-                .map(|c| c.effort.as_str())
-                .unwrap_or("high");
-            // 白名单归一化：仅接受 low/medium/high，非法值回退 high
-            let effort = match raw_effort {
-                "low" | "medium" | "high" => raw_effort,
-                _ => {
-                    tracing::warn!("未知的 thinking effort 值 '{}', 回退为 'high'", raw_effort);
-                    "high"
-                }
-            };
-            return Some(format!(
-                "<thinking_mode>adaptive</thinking_mode><thinking_effort>{}</thinking_effort>",
-                effort
-            ));
-        }
-    }
-    None
-}
-
-/// 检查内容是否已包含thinking标签
-fn has_thinking_tags(content: &str) -> bool {
-    content.contains("<thinking_mode>") || content.contains("<max_thinking_length>")
-}
-
 /// 检查请求的工具列表中是否包含 Write 或 Edit 工具
 fn has_write_or_edit_tool(req: &MessagesRequest) -> bool {
     req.tools
@@ -1076,9 +1040,6 @@ fn build_history(
     } = ctx;
     let mut history = Vec::new();
 
-    // 生成thinking前缀（如果需要）
-    let thinking_prefix = generate_thinking_prefix(req);
-
     // 仅在请求包含 Write/Edit 工具时注入分块写入策略
     let should_inject_chunked_policy = has_write_or_edit_tool(req);
 
@@ -1092,19 +1053,8 @@ fn build_history(
 
         if !system_content.is_empty() {
             // 仅在存在 Write/Edit 工具时追加分块写入策略到系统消息
-            let system_content = if should_inject_chunked_policy {
+            let final_content = if should_inject_chunked_policy {
                 format!("{}\n{}", system_content, SYSTEM_CHUNKED_POLICY)
-            } else {
-                system_content
-            };
-
-            // 注入thinking标签到系统消息最前面（如果需要且不存在）
-            let final_content = if let Some(ref prefix) = thinking_prefix {
-                if !has_thinking_tags(&system_content) {
-                    format!("{}\n{}", prefix, system_content)
-                } else {
-                    system_content
-                }
             } else {
                 system_content
             };
@@ -1116,18 +1066,9 @@ fn build_history(
             let assistant_msg = HistoryAssistantMessage::new("I will follow these instructions.");
             history.push(Message::Assistant(assistant_msg));
         }
-    } else if thinking_prefix.is_some() || should_inject_chunked_policy {
-        // 没有系统消息但需要注入 thinking 配置或分块写入策略
-        let mut parts = Vec::new();
-        if let Some(ref prefix) = thinking_prefix {
-            parts.push(prefix.clone());
-        }
-        if should_inject_chunked_policy {
-            parts.push(SYSTEM_CHUNKED_POLICY.to_string());
-        }
-        let content = parts.join("\n");
-
-        let user_msg = HistoryUserMessage::new(content, model_id);
+    } else if should_inject_chunked_policy {
+        // 没有系统消息但需要注入分块写入策略
+        let user_msg = HistoryUserMessage::new(SYSTEM_CHUNKED_POLICY, model_id);
         history.push(Message::User(user_msg));
 
         let assistant_msg = HistoryAssistantMessage::new("I will follow these instructions.");
@@ -2751,65 +2692,6 @@ mod tests {
             }
             _ => panic!("history[0] 应该是 User 消息"),
         }
-    }
-
-    #[test]
-    fn test_effort_whitelist_fallback() {
-        use super::super::types::{Message as AnthropicMessage, OutputConfig, Thinking};
-
-        // 合法值 "low"
-        let req = MessagesRequest {
-            model: "claude-sonnet-4".to_string(),
-            max_tokens: 1024,
-            messages: vec![AnthropicMessage {
-                role: "user".to_string(),
-                content: serde_json::json!("hello"),
-            }],
-            stream: false,
-            system: None,
-            tools: None,
-            tool_choice: None,
-            thinking: Some(Thinking {
-                thinking_type: "adaptive".to_string(),
-                budget_tokens: 0,
-            }),
-            output_config: Some(OutputConfig {
-                effort: "low".to_string(),
-            }),
-            metadata: None,
-        };
-
-        let prefix = generate_thinking_prefix(&req).unwrap();
-        assert!(prefix.contains("<thinking_effort>low</thinking_effort>"));
-
-        // 非法值 → 回退 "high"
-        let req_invalid = MessagesRequest {
-            model: "claude-sonnet-4".to_string(),
-            max_tokens: 1024,
-            messages: vec![AnthropicMessage {
-                role: "user".to_string(),
-                content: serde_json::json!("hello"),
-            }],
-            stream: false,
-            system: None,
-            tools: None,
-            tool_choice: None,
-            thinking: Some(Thinking {
-                thinking_type: "adaptive".to_string(),
-                budget_tokens: 0,
-            }),
-            output_config: Some(OutputConfig {
-                effort: "ultra".to_string(),
-            }),
-            metadata: None,
-        };
-
-        let prefix = generate_thinking_prefix(&req_invalid).unwrap();
-        assert!(
-            prefix.contains("<thinking_effort>high</thinking_effort>"),
-            "非法 effort 值应回退为 high，实际: {}",
-            prefix
-        );
     }
 
     #[test]
