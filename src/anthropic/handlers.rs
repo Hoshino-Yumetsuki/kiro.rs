@@ -1695,9 +1695,11 @@ fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
 /// 仅对支持 thinking 的模型（Claude 4+）生成该字段。
 ///
 /// 映射规则：
-/// - thinking.type == "adaptive" → { thinking: { type: "adaptive" }, output_config: { effort: "..." } }
-/// - thinking.type == "enabled" → 映射为 adaptive（旧版兼容）
+/// - thinking.type == "adaptive" 且无 output_config → { thinking: { type: "adaptive" } }（不传 effort，使用后端默认）
+/// - thinking.type == "adaptive" 且有 output_config.effort → { thinking: { type: "adaptive" }, output_config: { effort: "..." } }
+/// - thinking.type == "enabled" → 映射为 adaptive（旧版兼容），不传 effort
 /// - thinking.type == "disabled" 或无 thinking → None（不传该字段）
+/// - budget_tokens → 丢弃，不使用
 ///
 /// Effort 级别限制：
 /// - xhigh/max 仅 Opus 系列支持，其他模型自动回退到 high
@@ -1718,12 +1720,20 @@ fn build_additional_model_request_fields(payload: &MessagesRequest) -> Option<se
         return None;
     }
 
-    // 获取 effort 级别
-    let raw_effort = payload
-        .output_config
-        .as_ref()
-        .map(|c| c.normalized_effort())
-        .unwrap_or("high");
+    // 如果没有 output_config，只传 thinking，不传 effort（使用后端默认）
+    let output_config = payload.output_config.as_ref();
+    if output_config.is_none() {
+        tracing::info!(
+            model = %payload.model,
+            "构建 additionalModelRequestFields: thinking=adaptive (无 effort，使用后端默认)"
+        );
+        return Some(serde_json::json!({
+            "thinking": { "type": "adaptive" }
+        }));
+    }
+
+    // 有 output_config，获取并归一化 effort
+    let raw_effort = output_config.unwrap().normalized_effort();
 
     // xhigh/max 仅 Opus 系列支持，其他模型回退到 high
     let is_opus = payload.model.to_lowercase().contains("opus");
@@ -1739,18 +1749,16 @@ fn build_additional_model_request_fields(payload: &MessagesRequest) -> Option<se
         raw_effort
     };
 
-    let fields = serde_json::json!({
-        "thinking": { "type": "adaptive" },
-        "output_config": { "effort": effort }
-    });
-
     tracing::info!(
         model = %payload.model,
         effort = effort,
         "构建 additionalModelRequestFields: thinking=adaptive"
     );
 
-    Some(fields)
+    Some(serde_json::json!({
+        "thinking": { "type": "adaptive" },
+        "output_config": { "effort": effort }
+    }))
 }
 ///
 /// 计算消息的 token 数量。
