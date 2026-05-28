@@ -2,7 +2,7 @@
 
 use std::convert::Infallible;
 
-use crate::kiro::model::events::{Event, MeteringEvent};
+use crate::kiro::model::events::Event;
 use crate::kiro::model::requests::kiro::KiroRequest;
 use crate::kiro::parser::decoder::EventStreamDecoder;
 use crate::token;
@@ -19,7 +19,6 @@ use futures::{Stream, StreamExt, stream};
 use serde_json::json;
 use std::time::Duration;
 use tokio::time::{Instant, interval_at};
-use uuid::Uuid;
 
 use super::converter::{ConversionError, convert_request};
 use super::middleware::AppState;
@@ -114,12 +113,6 @@ fn billed_input_tokens(
         .saturating_sub(cache_creation_input_tokens)
         .saturating_sub(cache_read_input_tokens)
         .max(0)
-}
-
-fn inject_credit_usage_fields(usage: &mut serde_json::Value, metering: &MeteringEvent) {
-    usage["credit_usage"] = json!(metering.usage);
-    usage["credit_unit"] = json!(metering.unit);
-    usage["credit_unit_plural"] = json!(metering.unit_plural);
 }
 
 fn is_input_too_long_error(err: &Error) -> bool {
@@ -1399,8 +1392,6 @@ async fn handle_non_stream_request(
     let mut stop_reason = "end_turn".to_string();
     #[cfg(feature = "sensitive-logs")]
     let mut context_input_tokens_for_log: Option<i32> = None;
-    // 从 meteringEvent 透传的 credit usage，仅用于最终 usage 字段
-    let mut metering: Option<MeteringEvent> = None;
 
     // 推理内容收集（原生 reasoningContentEvent）
     let mut reasoning_text = String::new();
@@ -1483,9 +1474,11 @@ async fn handle_non_stream_request(
                                     .cloned()
                                     .unwrap_or_else(|| tool_use.name.clone());
 
+                                let tool_id = super::stream::ensure_toolu_prefix(&tool_use.tool_use_id);
+
                                 tool_uses.push(json!({
                                     "type": "tool_use",
-                                    "id": tool_use.tool_use_id,
+                                    "id": tool_id,
                                     "name": original_name,
                                     "input": input
                                 }));
@@ -1502,9 +1495,9 @@ async fn handle_non_stream_request(
                             {
                                 context_input_tokens_for_log = Some(actual_input_tokens);
                             }
-                            // 上下文使用量达到 100% 时，设置 stop_reason 为 model_context_window_exceeded
+                            // 上下文使用量达到 100% 时，设置 stop_reason 为 max_tokens
                             if context_usage.context_usage_percentage >= 100.0 {
-                                stop_reason = "model_context_window_exceeded".to_string();
+                                stop_reason = "max_tokens".to_string();
                             }
                             tracing::debug!(
                                 "收到 contextUsageEvent: {}%, 计算 input_tokens: {} (context_window: {})",
@@ -1520,7 +1513,6 @@ async fn handle_non_stream_request(
                                 unit_plural = %event_metering.unit_plural,
                                 "收到 meteringEvent"
                             );
-                            metering = Some(event_metering);
                         }
                         Event::ReasoningContent(reasoning) => {
                             if let Some(text) = &reasoning.text {
@@ -1619,15 +1611,12 @@ async fn handle_non_stream_request(
             "input_tokens": billed_input_tokens,
             "output_tokens": output_tokens
         });
-        if let Some(ref metering) = metering {
-            inject_credit_usage_fields(&mut usage, metering);
-        }
         if let Some(cache_context) = final_cache_context {
             inject_cache_usage_fields(&mut usage, cache_context);
         }
 
         json!({
-            "id": format!("msg_{}", Uuid::new_v4().to_string().replace('-', "")),
+            "id": super::stream::generate_anthropic_message_id(),
             "type": "message",
             "role": "assistant",
             "content": content,
@@ -2034,32 +2023,6 @@ mod tests {
         assert_eq!(usage["cache_read_input_tokens"], 8);
         assert_eq!(usage["cache_creation"]["ephemeral_5m_input_tokens"], 3);
         assert_eq!(usage["cache_creation"]["ephemeral_1h_input_tokens"], 4);
-    }
-
-    #[test]
-    fn test_inject_credit_usage_fields_appends_metering_usage() {
-        let mut usage = serde_json::json!({
-            "input_tokens": 123,
-            "output_tokens": 45,
-            "cache_creation_input_tokens": 7,
-            "cache_read_input_tokens": 8
-        });
-
-        inject_credit_usage_fields(
-            &mut usage,
-            &MeteringEvent {
-                unit: "credit".to_string(),
-                unit_plural: "credits".to_string(),
-                usage: 0.5,
-            },
-        );
-
-        assert_eq!(usage["input_tokens"], 123);
-        assert_eq!(usage["cache_creation_input_tokens"], 7);
-        assert_eq!(usage["cache_read_input_tokens"], 8);
-        assert_eq!(usage["credit_usage"], json!(0.5));
-        assert_eq!(usage["credit_unit"], json!("credit"));
-        assert_eq!(usage["credit_unit_plural"], json!("credits"));
     }
 
     #[test]
