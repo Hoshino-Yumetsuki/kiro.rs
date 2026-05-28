@@ -150,8 +150,7 @@ impl SseStateManager {
     }
 
     /// stop_reason 优先级（索引越小优先级越高）
-    const STOP_REASON_PRIORITY: &'static [&'static str] =
-        &["max_tokens", "tool_use", "end_turn"];
+    const STOP_REASON_PRIORITY: &'static [&'static str] = &["max_tokens", "tool_use", "end_turn"];
 
     /// 获取 stop_reason 的优先级（越小越高，未知原因返回 usize::MAX）
     fn stop_reason_priority(reason: &str) -> usize {
@@ -1013,7 +1012,11 @@ mod tests {
         // message_delta.usage should ONLY have output_tokens (per Anthropic spec)
         assert!(message_delta_usage.get("output_tokens").is_some());
         assert!(message_delta_usage.get("input_tokens").is_none());
-        assert!(message_delta_usage.get("cache_creation_input_tokens").is_none());
+        assert!(
+            message_delta_usage
+                .get("cache_creation_input_tokens")
+                .is_none()
+        );
         assert!(message_delta_usage.get("cache_read_input_tokens").is_none());
         assert!(message_delta_usage.get("credit_usage").is_none());
         assert!(message_delta_usage.get("credit_unit").is_none());
@@ -1067,7 +1070,11 @@ mod tests {
         assert_eq!(message_start_usage["input_tokens"], json!(306));
         // message_delta only has output_tokens
         assert!(message_delta_usage.get("input_tokens").is_none());
-        assert!(message_delta_usage.get("cache_creation_input_tokens").is_none());
+        assert!(
+            message_delta_usage
+                .get("cache_creation_input_tokens")
+                .is_none()
+        );
         assert!(message_delta_usage.get("cache_read_input_tokens").is_none());
         assert!(message_delta_usage.get("output_tokens").is_some());
     }
@@ -1133,7 +1140,10 @@ mod tests {
 
         // message_start should have cache fields
         assert_eq!(message_start_usage["cache_read_input_tokens"], json!(800));
-        assert_eq!(message_start_usage["cache_creation_input_tokens"], json!(50));
+        assert_eq!(
+            message_start_usage["cache_creation_input_tokens"],
+            json!(50)
+        );
         // billed input = 1000 - 50 - 800 = 150
         assert_eq!(message_start_usage["input_tokens"], json!(150));
 
@@ -1148,7 +1158,11 @@ mod tests {
         assert!(message_delta_usage.get("output_tokens").is_some());
         assert!(message_delta_usage.get("input_tokens").is_none());
         assert!(message_delta_usage.get("cache_read_input_tokens").is_none());
-        assert!(message_delta_usage.get("cache_creation_input_tokens").is_none());
+        assert!(
+            message_delta_usage
+                .get("cache_creation_input_tokens")
+                .is_none()
+        );
         assert!(message_delta_usage.get("cache_creation").is_none());
         assert!(message_delta_usage.get("credit_usage").is_none());
     }
