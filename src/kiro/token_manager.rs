@@ -159,7 +159,7 @@ fn sha256_hex(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
     let result = hasher.finalize();
-    format!("{:x}", result)
+    hex::encode(result)
 }
 
 fn credential_secret_hash(credentials: &KiroCredentials) -> Option<String> {

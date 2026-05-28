@@ -374,6 +374,10 @@ pub struct StreamContext {
     pub text_block_index: Option<i32>,
     /// 上游 meteringEvent 透传的 credit usage，仅用于最终 usage 统计，不生成独立 SSE 事件
     pub metering: Option<MeteringEvent>,
+    /// 是否启用结构化输出（缓冲所有文本，流结束时统一剥离 fence）
+    pub structured_output: bool,
+    /// 结构化输出缓冲区
+    pub structured_output_buffer: String,
 }
 
 impl StreamContext {
@@ -384,6 +388,7 @@ impl StreamContext {
         cache_usage: Option<CacheUsageBreakdown>,
         thinking_enabled: bool,
         tool_name_map: HashMap<String, String>,
+        structured_output: bool,
     ) -> Self {
         Self {
             state_manager: SseStateManager::new(),
@@ -401,6 +406,8 @@ impl StreamContext {
             pending_signature: None,
             text_block_index: None,
             metering: None,
+            structured_output,
+            structured_output_buffer: String::new(),
         }
     }
 
@@ -520,6 +527,12 @@ impl StreamContext {
 
         // 估算 tokens
         self.output_tokens += estimate_tokens(content);
+
+        // 结构化输出模式：缓冲文本，流结束时统一处理
+        if self.structured_output {
+            self.structured_output_buffer.push_str(content);
+            return Vec::new();
+        }
 
         // 统一使用 text_delta 发送逻辑，
         // 在 tool_use 自动关闭文本块后能够自愈重建新的文本块，避免"吞字"。
@@ -654,37 +667,37 @@ impl StreamContext {
         }
 
         // 处理 text 内容：作为 thinking 块的增量
-        if let Some(text) = &reasoning.text {
-            if !text.is_empty() {
-                // 如果 thinking 块尚未开始，创建它
-                if !self.in_thinking_block {
-                    let thinking_index = self.state_manager.next_block_index();
-                    self.thinking_block_index = Some(thinking_index);
-                    self.in_thinking_block = true;
-                    let start_events = self.state_manager.handle_content_block_start(
-                        thinking_index,
-                        "thinking",
-                        json!({
-                            "type": "content_block_start",
-                            "index": thinking_index,
-                            "content_block": {
-                                "type": "thinking",
-                                "thinking": "",
-                                "signature": ""
-                            }
-                        }),
-                    );
-                    events.extend(start_events);
-                }
-
-                // 发送 thinking_delta
-                if let Some(thinking_index) = self.thinking_block_index {
-                    events.push(self.create_thinking_delta_event(thinking_index, text));
-                }
-
-                // 估算 tokens
-                self.output_tokens += estimate_tokens(text);
+        if let Some(text) = &reasoning.text
+            && !text.is_empty()
+        {
+            // 如果 thinking 块尚未开始，创建它
+            if !self.in_thinking_block {
+                let thinking_index = self.state_manager.next_block_index();
+                self.thinking_block_index = Some(thinking_index);
+                self.in_thinking_block = true;
+                let start_events = self.state_manager.handle_content_block_start(
+                    thinking_index,
+                    "thinking",
+                    json!({
+                        "type": "content_block_start",
+                        "index": thinking_index,
+                        "content_block": {
+                            "type": "thinking",
+                            "thinking": "",
+                            "signature": ""
+                        }
+                    }),
+                );
+                events.extend(start_events);
             }
+
+            // 发送 thinking_delta
+            if let Some(thinking_index) = self.thinking_block_index {
+                events.push(self.create_thinking_delta_event(thinking_index, text));
+            }
+
+            // 估算 tokens
+            self.output_tokens += estimate_tokens(text);
         }
 
         // 处理 signature：暂存，收到 signature 表示 thinking 块即将结束
@@ -820,6 +833,14 @@ impl StreamContext {
                 }
             }
             self.in_thinking_block = false;
+        }
+
+        // 结构化输出模式：刷出缓冲区，剥离 markdown fence 后作为 text_delta 发送
+        if self.structured_output && !self.structured_output_buffer.is_empty() {
+            let cleaned = super::structured_output::extract_json_from_response(
+                &self.structured_output_buffer,
+            );
+            events.extend(self.create_text_delta_events(&cleaned));
         }
 
         // 如果整个流中只产生了 thinking 块，没有 text 也没有 tool_use，
@@ -982,6 +1003,7 @@ mod tests {
             zero_cache_usage(),
             false,
             HashMap::new(),
+            false,
         );
         let initial_events = ctx.generate_initial_events();
         let mut all_events = initial_events;
@@ -1031,6 +1053,7 @@ mod tests {
             cache_usage(7, 8, 0, 0),
             false,
             HashMap::new(),
+            false,
         );
         let all_events = ctx.generate_initial_events();
 
@@ -1052,6 +1075,7 @@ mod tests {
             cache_usage(7, 8, 0, 0),
             false,
             HashMap::new(),
+            false,
         );
         let initial_events = ctx.generate_initial_events();
         let message_start_usage = initial_events
@@ -1081,7 +1105,7 @@ mod tests {
     #[test]
     fn test_stream_context_omits_cache_usage_fields_when_disabled() {
         let mut ctx =
-            StreamContext::new_with_thinking("test-model", 321, None, false, HashMap::new());
+            StreamContext::new_with_thinking("test-model", 321, None, false, HashMap::new(), false);
         let initial_events = ctx.generate_initial_events();
         let message_start_usage = initial_events
             .iter()
@@ -1123,6 +1147,7 @@ mod tests {
             cache_usage(50, 800, 30, 20),
             false,
             HashMap::new(),
+            false,
         );
 
         ctx.process_kiro_event(&Event::Metering(MeteringEvent {
@@ -1175,6 +1200,7 @@ mod tests {
             zero_cache_usage(),
             false,
             HashMap::new(),
+            false,
         );
 
         let initial_events = ctx.generate_initial_events();
@@ -1251,6 +1277,7 @@ mod tests {
             zero_cache_usage(),
             false,
             HashMap::new(),
+            false,
         );
 
         let mut all_events = Vec::new();
@@ -1294,6 +1321,7 @@ mod tests {
             zero_cache_usage(),
             true,
             HashMap::new(),
+            false,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -1330,6 +1358,7 @@ mod tests {
             zero_cache_usage(),
             true,
             HashMap::new(),
+            false,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -1375,6 +1404,7 @@ mod tests {
             zero_cache_usage(),
             true,
             HashMap::new(),
+            false,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -1409,6 +1439,7 @@ mod tests {
             zero_cache_usage(),
             true,
             HashMap::new(),
+            false,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -1455,6 +1486,7 @@ mod tests {
             zero_cache_usage(),
             true,
             HashMap::new(),
+            false,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -1520,6 +1552,7 @@ mod tests {
             zero_cache_usage(),
             true,
             HashMap::new(),
+            false,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -1578,6 +1611,7 @@ mod tests {
             zero_cache_usage(),
             true,
             HashMap::new(),
+            false,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -1629,6 +1663,7 @@ mod tests {
             zero_cache_usage(),
             true,
             HashMap::new(),
+            false,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -1692,6 +1727,7 @@ mod tests {
             zero_cache_usage(),
             true,
             HashMap::new(),
+            false,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -1745,6 +1781,7 @@ mod tests {
             zero_cache_usage(),
             true,
             HashMap::new(),
+            false,
         );
         let _initial_events = ctx.generate_initial_events();
 

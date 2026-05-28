@@ -53,26 +53,26 @@ fn normalize_machine_id(machine_id: &str) -> Option<String> {
 /// 4. 兜底：基于随机种子派生，按 `credentials.id` 在进程内缓存（首次触发 warn 日志）
 pub fn generate_from_credentials(credentials: &KiroCredentials, config: &Config) -> String {
     // 如果配置了凭据级 machineId，优先使用
-    if let Some(ref machine_id) = credentials.machine_id {
-        if let Some(normalized) = normalize_machine_id(machine_id) {
-            return normalized;
-        }
+    if let Some(ref machine_id) = credentials.machine_id
+        && let Some(normalized) = normalize_machine_id(machine_id)
+    {
+        return normalized;
     }
 
     // 如果配置了全局 machineId，作为默认值
-    if let Some(ref machine_id) = config.machine_id {
-        if let Some(normalized) = normalize_machine_id(machine_id) {
-            return normalized;
-        }
+    if let Some(ref machine_id) = config.machine_id
+        && let Some(normalized) = normalize_machine_id(machine_id)
+    {
+        return normalized;
     }
 
     // 按凭据类型派生（API Key 与 refreshToken 两条路径互斥，不回落）
     if credentials.is_api_key_credential() {
         // API Key 凭据：基于 kiroApiKey 派生
-        if let Some(ref api_key) = credentials.kiro_api_key {
-            if !api_key.is_empty() {
-                return sha256_hex(&format!("KiroAPIKey/{}", api_key));
-            }
+        if let Some(ref api_key) = credentials.kiro_api_key
+            && !api_key.is_empty()
+        {
+            return sha256_hex(&format!("KiroAPIKey/{}", api_key));
         }
     } else if let Some(ref refresh_token) = credentials.refresh_token {
         // OAuth 凭据：基于 refreshToken 派生
