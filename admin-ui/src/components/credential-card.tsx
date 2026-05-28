@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { RefreshCw, RotateCcw, Wallet, Trash2, Loader2, Pencil } from 'lucide-react'
+import { RefreshCw, RotateCcw, Wallet, Trash2, Loader2, Pencil, Check, X } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -277,8 +277,9 @@ export function CredentialCard({
                     className="h-7 w-7 p-0"
                     onClick={handlePriorityChange}
                     disabled={setPriority.isPending}
+                    aria-label="确认"
                   >
-                    ✓
+                    <Check className="h-4 w-4" aria-hidden="true" />
                   </Button>
                   <Button
                     size="sm"
@@ -288,8 +289,9 @@ export function CredentialCard({
                       setEditingPriority(false)
                       setPriorityValue(String(credential.priority))
                     }}
+                    aria-label="取消"
                   >
-                    ✕
+                    <X className="h-4 w-4" aria-hidden="true" />
                   </Button>
                 </div>
               ) : (
@@ -391,7 +393,7 @@ export function CredentialCard({
                   <select
                     value={endpointValue}
                     onChange={(e) => setEndpointValue(e.target.value)}
-                    className="flex h-7 rounded-md border border-input bg-background px-2 py-1 text-sm"
+                    className="flex h-7 rounded-md border border-input bg-background px-2 py-1 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                     aria-label="Endpoint"
                   >
                     <option value="">默认值</option>
@@ -404,8 +406,9 @@ export function CredentialCard({
                     className="h-7 w-7 p-0"
                     onClick={handleEndpointChange}
                     disabled={setEndpoint.isPending}
+                    aria-label="确认"
                   >
-                    ✓
+                    <Check className="h-4 w-4" aria-hidden="true" />
                   </Button>
                   <Button
                     size="sm"
@@ -415,8 +418,9 @@ export function CredentialCard({
                       setEditingEndpoint(false)
                       setEndpointValue(credential.endpoint ?? '')
                     }}
+                    aria-label="取消"
                   >
-                    ✕
+                    <X className="h-4 w-4" aria-hidden="true" />
                   </Button>
                 </div>
               ) : (
@@ -462,8 +466,9 @@ export function CredentialCard({
                     className="h-7 w-7 p-0"
                     onClick={handleRegionChange}
                     disabled={setRegion.isPending}
+                    aria-label="确认"
                   >
-                    ✓
+                    <Check className="h-4 w-4" aria-hidden="true" />
                   </Button>
                   <Button
                     size="sm"
@@ -474,8 +479,9 @@ export function CredentialCard({
                       setRegionValue(credential.region ?? '')
                       setApiRegionValue(credential.apiRegion ?? '')
                     }}
+                    aria-label="取消"
                   >
-                    ✕
+                    <X className="h-4 w-4" aria-hidden="true" />
                   </Button>
                 </div>
               ) : (

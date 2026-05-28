@@ -18,7 +18,6 @@ import { BalanceDialog } from '@/components/balance-dialog'
 import { AddCredentialDialog } from '@/components/add-credential-dialog'
 import { ImportTokenJsonDialog } from '@/components/import-token-json-dialog'
 import { BatchVerifyDialog, type VerifyResult } from '@/components/batch-verify-dialog'
-import { ProxyConfigDialog } from '@/components/proxy-config-dialog'
 import { GlobalConfigDialog } from '@/components/global-config-dialog'
 import { useCredentials, useCachedBalances, useDeleteCredential, useResetFailure, useForceRefreshToken, useProxyConfig, useGlobalConfig } from '@/hooks/use-credentials'
 import { getCredentialBalance } from '@/api/credentials'
@@ -42,7 +41,6 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [verifyDialogOpen, setVerifyDialogOpen] = useState(false)
-  const [proxyConfigDialogOpen, setProxyConfigDialogOpen] = useState(false)
   const [globalConfigDialogOpen, setGlobalConfigDialogOpen] = useState(false)
   const [verifying, setVerifying] = useState(false)
   const [verifyProgress, setVerifyProgress] = useState({ current: 0, total: 0 })
@@ -62,6 +60,12 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const itemsPerPage = 12
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('kiro-dark-mode')
+      if (saved !== null) {
+        const isDark = saved === 'true'
+        document.documentElement.classList.toggle('dark', isDark)
+        return isDark
+      }
       return document.documentElement.classList.contains('dark')
     }
     return false
@@ -150,8 +154,10 @@ export function Dashboard({ onLogout }: DashboardProps) {
   }, [data?.credentials])
 
   const toggleDarkMode = () => {
-    setDarkMode(!darkMode)
-    document.documentElement.classList.toggle('dark')
+    const newMode = !darkMode
+    setDarkMode(newMode)
+    document.documentElement.classList.toggle('dark', newMode)
+    localStorage.setItem('kiro-dark-mode', String(newMode))
   }
 
   const handleViewBalance = (id: number, forceRefresh: boolean) => {
@@ -581,7 +587,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
     <div className="min-h-screen bg-background">
       {/* 顶部导航 */}
       <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60">
-        <div className="container flex h-14 items-center justify-between px-4 md:px-8">
+        <div className="container mx-auto flex h-14 items-center justify-between px-4 md:px-8">
           <div className="flex items-center gap-2">
             <Server className="h-5 w-5" aria-hidden="true" />
             <span className="font-semibold">Kiro Admin</span>
@@ -757,8 +763,14 @@ export function Dashboard({ onLogout }: DashboardProps) {
           </div>
           {data?.credentials.length === 0 ? (
             <Card>
-              <CardContent className="py-8 text-center text-muted-foreground">
-                暂无凭据
+              <CardContent className="py-12 text-center">
+                <Server className="h-12 w-12 mx-auto mb-4 text-muted-foreground/50" aria-hidden="true" />
+                <p className="text-lg font-medium mb-1">暂无凭据</p>
+                <p className="text-sm text-muted-foreground mb-4">添加凭据以开始使用代理服务</p>
+                <Button onClick={() => setAddDialogOpen(true)} size="sm">
+                  <Plus className="h-4 w-4 mr-2" aria-hidden="true" />
+                  添加凭据
+                </Button>
               </CardContent>
             </Card>
           ) : (
@@ -838,12 +850,6 @@ export function Dashboard({ onLogout }: DashboardProps) {
       <GlobalConfigDialog
         open={globalConfigDialogOpen}
         onOpenChange={setGlobalConfigDialogOpen}
-      />
-
-      {/* 全局代理配置对话框（保留兼容） */}
-      <ProxyConfigDialog
-        open={proxyConfigDialogOpen}
-        onOpenChange={setProxyConfigDialogOpen}
       />
 
 
