@@ -780,6 +780,8 @@ impl KiroProvider {
                 if Self::is_model_temporarily_unavailable(&body)
                     && self.token_manager.report_model_unavailable()
                 {
+                    // 模型不可用时也移除亲和性，避免下次请求继续命中同一凭据
+                    self.token_manager.remove_affinity(user_id);
                     anyhow::bail!(
                         "{} API 请求失败（模型暂时不可用，已触发熔断）: {} {}",
                         api_type,
@@ -789,6 +791,9 @@ impl KiroProvider {
                 }
 
                 let cooldown = self.handle_rate_limited_response(ctx.id, &body, retry_after);
+                // 429 触发会话迁移：移除当前 session 的亲和性绑定，
+                // 使后续请求（包括本次重试）路由到其他可用凭据
+                self.token_manager.remove_affinity(user_id);
                 tracing::warn!(
                     credential_id = %ctx.id,
                     cooldown_secs = %cooldown.as_secs(),

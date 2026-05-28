@@ -401,6 +401,8 @@ pub struct GlobalConfigResponse {
     pub default_endpoint: String,
     /// 是否启用凭据冷却机制
     pub enable_credential_cooldown: bool,
+    /// 是否启用粘性路由（同 session 绑定同一凭据）
+    pub enable_sticky_routing: bool,
     /// 余额不足时是否自动禁用凭据
     pub auto_disable_insufficient_balance: bool,
     /// Token 刷新失败时是否自动禁用凭据
@@ -441,6 +443,8 @@ pub struct UpdateGlobalConfigRequest {
     pub default_endpoint: Option<String>,
     /// 是否启用凭据冷却机制（可选）
     pub enable_credential_cooldown: Option<bool>,
+    /// 是否启用粘性路由（可选）
+    pub enable_sticky_routing: Option<bool>,
     /// 余额不足时是否自动禁用凭据（可选）
     pub auto_disable_insufficient_balance: Option<bool>,
     /// Token 刷新失败时是否自动禁用凭据（可选）

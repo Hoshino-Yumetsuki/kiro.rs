@@ -363,6 +363,7 @@ export interface GlobalConfigResponse {
   promptCacheAccountingEnabled: boolean
   defaultEndpoint: string
   enableCredentialCooldown: boolean
+  enableStickyRouting: boolean
   autoDisableInsufficientBalance: boolean
   autoDisableRefreshFailure: boolean
   compression: CompressionConfigResponse
@@ -388,6 +389,7 @@ export interface UpdateGlobalConfigRequest {
   promptCacheAccountingEnabled?: boolean
   defaultEndpoint?: string
   enableCredentialCooldown?: boolean
+  enableStickyRouting?: boolean
   autoDisableInsufficientBalance?: boolean
   autoDisableRefreshFailure?: boolean
   compression?: UpdateCompressionConfigRequest

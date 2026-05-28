@@ -116,6 +116,14 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub enable_credential_cooldown: bool,
 
+    /// 是否启用粘性路由（默认 true）
+    ///
+    /// 启用后，同一 session（user_id）的请求会尽量路由到同一凭据，
+    /// 不同 session 之间轮询分配凭据。当凭据触发 429 时，会自动将该 session
+    /// 迁移到其他可用凭据。禁用后退化为纯负载均衡模式（无亲和性）。
+    #[serde(default = "default_true")]
+    pub enable_sticky_routing: bool,
+
     /// 余额不足时是否自动禁用凭据（默认 true）
     ///
     /// 禁用后，余额初始化检测到余额不足时不会自动禁用凭据，仅记录警告日志。
@@ -298,6 +306,7 @@ impl Default for Config {
             prompt_cache_accounting_enabled: default_true(),
             extract_thinking: default_extract_thinking(),
             enable_credential_cooldown: default_true(),
+            enable_sticky_routing: default_true(),
             auto_disable_insufficient_balance: default_true(),
             auto_disable_refresh_failure: default_true(),
             default_endpoint: default_endpoint(),
