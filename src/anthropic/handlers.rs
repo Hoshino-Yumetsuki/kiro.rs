@@ -1474,7 +1474,8 @@ async fn handle_non_stream_request(
                                     .cloned()
                                     .unwrap_or_else(|| tool_use.name.clone());
 
-                                let tool_id = super::stream::ensure_toolu_prefix(&tool_use.tool_use_id);
+                                let tool_id =
+                                    super::stream::ensure_toolu_prefix(&tool_use.tool_use_id);
 
                                 tool_uses.push(json!({
                                     "type": "tool_use",
