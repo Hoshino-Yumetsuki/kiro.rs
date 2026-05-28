@@ -70,6 +70,14 @@ impl UserAffinityManager {
         }
     }
 
+    /// 移除指定用户的绑定（429 迁移时调用）
+    pub fn remove(&self, user_id: &str) {
+        let mut map = self.affinity.lock();
+        if map.remove(user_id).is_some() {
+            tracing::debug!(user_id = %user_id, "亲和性绑定已移除");
+        }
+    }
+
     /// 移除指定凭据的所有绑定（凭据被禁用时调用）
     pub fn remove_by_credential(&self, credential_id: u64) {
         let mut map = self.affinity.lock();

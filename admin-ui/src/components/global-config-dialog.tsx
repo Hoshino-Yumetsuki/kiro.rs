@@ -35,6 +35,7 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
   const [promptCacheAccountingEnabled, setPromptCacheAccountingEnabled] = useState(true)
   const [defaultEndpoint, setDefaultEndpoint] = useState('ide')
   const [enableCredentialCooldown, setEnableCredentialCooldown] = useState(true)
+  const [enableStickyRouting, setEnableStickyRouting] = useState(true)
   const [autoDisableInsufficientBalance, setAutoDisableInsufficientBalance] = useState(true)
   const [autoDisableRefreshFailure, setAutoDisableRefreshFailure] = useState(true)
 
@@ -66,6 +67,7 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
       setPromptCacheAccountingEnabled(globalConfig.promptCacheAccountingEnabled)
       setDefaultEndpoint(globalConfig.defaultEndpoint || 'ide')
       setEnableCredentialCooldown(globalConfig.enableCredentialCooldown)
+      setEnableStickyRouting(globalConfig.enableStickyRouting)
       setAutoDisableInsufficientBalance(globalConfig.autoDisableInsufficientBalance)
       setAutoDisableRefreshFailure(globalConfig.autoDisableRefreshFailure)
       const c = globalConfig.compression
@@ -122,6 +124,11 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
 
     if (enableCredentialCooldown !== (globalConfig?.enableCredentialCooldown ?? true)) {
       globalPayload.enableCredentialCooldown = enableCredentialCooldown
+      hasGlobalChanges = true
+    }
+
+    if (enableStickyRouting !== (globalConfig?.enableStickyRouting ?? true)) {
+      globalPayload.enableStickyRouting = enableStickyRouting
       hasGlobalChanges = true
     }
 
@@ -247,6 +254,12 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
               <div className="flex items-center justify-between">
                 <label className="text-sm font-medium">凭据冷却机制</label>
                 <Switch checked={enableCredentialCooldown} onCheckedChange={setEnableCredentialCooldown} disabled={isPending} aria-label="凭据冷却机制" />
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-sm font-medium">渠道亲和</label>
+                </div>
+                <Switch checked={enableStickyRouting} onCheckedChange={setEnableStickyRouting} disabled={isPending} aria-label="渠道亲和" />
               </div>
               <div className="flex items-center justify-between">
                 <div>

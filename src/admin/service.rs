@@ -819,6 +819,7 @@ impl AdminService {
             prompt_cache_accounting_enabled: config.prompt_cache_accounting_enabled,
             default_endpoint: config.default_endpoint.clone(),
             enable_credential_cooldown: config.enable_credential_cooldown,
+            enable_sticky_routing: config.enable_sticky_routing,
             auto_disable_insufficient_balance: config.auto_disable_insufficient_balance,
             auto_disable_refresh_failure: config.auto_disable_refresh_failure,
             compression: super::types::CompressionConfigResponse {
@@ -895,6 +896,10 @@ impl AdminService {
 
             if let Some(enabled) = req.enable_credential_cooldown {
                 config.enable_credential_cooldown = enabled;
+            }
+
+            if let Some(enabled) = req.enable_sticky_routing {
+                config.enable_sticky_routing = enabled;
             }
 
             if let Some(enabled) = req.auto_disable_insufficient_balance {
@@ -1065,6 +1070,7 @@ mod tests {
             prompt_cache_accounting_enabled: None,
             default_endpoint: Some("cli".to_string()),
             enable_credential_cooldown: None,
+            enable_sticky_routing: None,
             auto_disable_insufficient_balance: None,
             auto_disable_refresh_failure: None,
             compression: None,
@@ -1092,6 +1098,7 @@ mod tests {
             prompt_cache_accounting_enabled: None,
             default_endpoint: Some("".to_string()),
             enable_credential_cooldown: None,
+            enable_sticky_routing: None,
             auto_disable_insufficient_balance: None,
             auto_disable_refresh_failure: None,
             compression: None,
@@ -1118,6 +1125,7 @@ mod tests {
             prompt_cache_accounting_enabled: None,
             default_endpoint: Some("   ".to_string()),
             enable_credential_cooldown: None,
+            enable_sticky_routing: None,
             auto_disable_insufficient_balance: None,
             auto_disable_refresh_failure: None,
             compression: None,
@@ -1144,6 +1152,7 @@ mod tests {
             prompt_cache_accounting_enabled: None,
             default_endpoint: Some("unknown".to_string()),
             enable_credential_cooldown: None,
+            enable_sticky_routing: None,
             auto_disable_insufficient_balance: None,
             auto_disable_refresh_failure: None,
             compression: None,
@@ -1167,6 +1176,7 @@ mod tests {
             prompt_cache_accounting_enabled: None,
             default_endpoint: Some("  cli  ".to_string()),
             enable_credential_cooldown: None,
+            enable_sticky_routing: None,
             auto_disable_insufficient_balance: None,
             auto_disable_refresh_failure: None,
             compression: None,

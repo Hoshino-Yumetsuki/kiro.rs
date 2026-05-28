@@ -1403,6 +1403,8 @@ impl MultiTokenManager {
     ///
     /// 如果用户已绑定凭据且该凭据可用，优先使用绑定的凭据
     /// 否则使用默认的 acquire_context() 逻辑并建立新绑定
+    ///
+    /// 当 `enable_sticky_routing` 为 false 时，跳过亲和性逻辑，直接走负载均衡
     pub async fn acquire_context_for_user(
         &self,
         user_id: Option<&str>,
@@ -1412,6 +1414,11 @@ impl MultiTokenManager {
             Some(id) if !id.is_empty() => id,
             _ => return self.acquire_context().await,
         };
+
+        // 粘性路由关闭时，跳过亲和性，直接走负载均衡
+        if !self.config.read().enable_sticky_routing {
+            return self.acquire_context().await;
+        }
 
         // 默认保持用户绑定（用于连续对话）。当绑定凭据“临时不可用”（速率限制/短冷却）时，
         // 允许分流到其他凭据，但不强制重绑，避免频繁抖动。
@@ -1500,6 +1507,22 @@ impl MultiTokenManager {
             self.affinity.set(user_id, ctx.id);
         }
         Ok(ctx)
+    }
+
+    /// 移除指定用户的亲和性绑定（429 迁移时调用）
+    ///
+    /// 当凭据触发 429 限流时，调用此方法解除 session 与该凭据的绑定，
+    /// 使下次请求自动路由到其他可用凭据。
+    pub fn remove_affinity(&self, user_id: Option<&str>) {
+        if let Some(id) = user_id
+            && !id.is_empty()
+        {
+            tracing::info!(
+                user_id = %mask_user_id(Some(id)),
+                "429 触发会话迁移，移除亲和性绑定"
+            );
+            self.affinity.remove(id);
+        }
     }
 
     /// 获取缓存的余额（用于故障转移选择）
