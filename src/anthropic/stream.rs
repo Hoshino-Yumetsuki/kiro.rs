@@ -1750,4 +1750,3 @@ mod tests {
         assert!(!ctx.in_thinking_block);
     }
 }
-

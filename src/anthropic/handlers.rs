@@ -461,7 +461,10 @@ fn adaptive_shrink_request_body(
     }
 
     // 最终修复：压缩后修复 tool_use/tool_result 配对和空 content
-    if outcome.tool_result_compressed || outcome.tool_use_input_compressed || outcome.long_messages_compressed {
+    if outcome.tool_result_compressed
+        || outcome.tool_use_input_compressed
+        || outcome.long_messages_compressed
+    {
         super::compressor::repair_tool_pairing_and_content(&mut kiro_request.conversation_state);
         *request_body = serde_json::to_string(kiro_request)?;
         outcome.final_bytes = request_body.len();
@@ -1653,20 +1656,21 @@ fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
     }
 
     // 具体后缀必须在通用 "thinking" 之前匹配
-    let effort = if model_lower.ends_with("-thinking-minimal") || model_lower.ends_with("-thinking-low") {
-        "low"
-    } else if model_lower.ends_with("-thinking-medium") {
-        "medium"
-    } else if model_lower.ends_with("-thinking-high") || model_lower.ends_with("-thinking") {
-        "high"
-    } else if model_lower.ends_with("-thinking-xhigh") {
-        "xhigh"
-    } else if model_lower.ends_with("-thinking-max") {
-        "max"
-    } else {
-        // "thinking" 出现在模型名中但不是后缀（如 "thinking-model-v2"），不覆写
-        return;
-    };
+    let effort =
+        if model_lower.ends_with("-thinking-minimal") || model_lower.ends_with("-thinking-low") {
+            "low"
+        } else if model_lower.ends_with("-thinking-medium") {
+            "medium"
+        } else if model_lower.ends_with("-thinking-high") || model_lower.ends_with("-thinking") {
+            "high"
+        } else if model_lower.ends_with("-thinking-xhigh") {
+            "xhigh"
+        } else if model_lower.ends_with("-thinking-max") {
+            "max"
+        } else {
+            // "thinking" 出现在模型名中但不是后缀（如 "thinking-model-v2"），不覆写
+            return;
+        };
 
     tracing::info!(
         model = %payload.model,
@@ -2187,10 +2191,16 @@ mod tests {
         // 最早的 2 条历史消息图片应被清除，第 3 条保留
         // history[0] = User(msg0), history[1] = Assistant, history[2] = User(msg1), ...
         if let KiroMessage::User(u) = &kiro_request.conversation_state.history[0] {
-            assert!(u.user_input_message.images.is_empty(), "oldest should be cleared");
+            assert!(
+                u.user_input_message.images.is_empty(),
+                "oldest should be cleared"
+            );
         }
         if let KiroMessage::User(u) = &kiro_request.conversation_state.history[2] {
-            assert!(u.user_input_message.images.is_empty(), "second oldest should be cleared");
+            assert!(
+                u.user_input_message.images.is_empty(),
+                "second oldest should be cleared"
+            );
         }
         if let KiroMessage::User(u) = &kiro_request.conversation_state.history[4] {
             assert!(

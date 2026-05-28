@@ -274,8 +274,7 @@ pub fn process_image(
         MAX_IMAGE_BYTES
     };
 
-    let (data, final_bytes_len) =
-        encode_image_progressive_quality(&img, target_bytes)?;
+    let (data, final_bytes_len) = encode_image_progressive_quality(&img, target_bytes)?;
 
     tracing::info!(
         original_bytes = original_bytes_len,
