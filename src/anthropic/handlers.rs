@@ -194,6 +194,7 @@ struct AdaptiveCompressionOutcome {
     iters: usize,
     whitespace_compressed: bool,
     thinking_compressed: bool,
+    history_images_removed: bool,
     tool_schemas_simplified: bool,
     final_tool_description_max_chars: usize,
     tool_result_compressed: bool,
@@ -248,6 +249,7 @@ fn adaptive_shrink_request_body(
         iters: 0,
         whitespace_compressed: false,
         thinking_compressed: false,
+        history_images_removed: false,
         tool_schemas_simplified: false,
         final_tool_description_max_chars: 0,
         tool_result_compressed: false,
@@ -258,6 +260,7 @@ fn adaptive_shrink_request_body(
     // 自适应压缩策略（按风险递增顺序）：
     // 阶段 1: 空白压缩（一次性，无损）
     // 阶段 2: thinking 压缩（一次性，低损）
+    // 阶段 2.5: 历史图片丢弃（保留当前消息图片，丢弃历史会话图片）
     // 阶段 3: 工具定义 schema 简化（一次性，低损）
     // 阶段 4: 逐步截断工具 description（迭代 ×3/4）
     // 阶段 5: tool_result 截断（渐进式：8000→4000→2000→1000 chars）
@@ -291,6 +294,37 @@ fn adaptive_shrink_request_body(
         *request_body = serde_json::to_string(kiro_request)?;
         outcome.iters += 1;
         outcome.final_bytes = request_body.len();
+    }
+
+    // 阶段 2.5: 历史图片渐进丢弃（从最早的消息开始逐条清除，直到体积达标或历史图片全部清空）
+    if request_body.len() > max_body {
+        let mut total_removed = 0usize;
+        // 从最早的历史消息开始，逐条清除图片
+        for i in 0..kiro_request.conversation_state.history.len() {
+            if request_body.len() <= max_body {
+                break;
+            }
+            if let crate::kiro::model::requests::conversation::Message::User(user_msg) =
+                &mut kiro_request.conversation_state.history[i]
+            {
+                let count = user_msg.user_input_message.images.len();
+                if count > 0 {
+                    user_msg.user_input_message.images.clear();
+                    total_removed += count;
+                    *request_body = serde_json::to_string(&*kiro_request)?;
+                    outcome.iters += 1;
+                    outcome.final_bytes = request_body.len();
+                }
+            }
+        }
+        if total_removed > 0 {
+            outcome.history_images_removed = true;
+            tracing::info!(
+                removed_images = total_removed,
+                current_bytes = request_body.len(),
+                "自适应压缩：渐进丢弃历史会话图片（从最早到最近，保留当前消息图片）"
+            );
+        }
     }
 
     // 阶段 3: 工具 schema 简化
@@ -1039,6 +1073,7 @@ pub async fn post_messages(
                     iters = outcome.iters,
                     whitespace_compressed = outcome.whitespace_compressed,
                     thinking_compressed = outcome.thinking_compressed,
+                    history_images_removed = outcome.history_images_removed,
                     tool_schemas_simplified = outcome.tool_schemas_simplified,
                     final_tool_description_max_chars = outcome.final_tool_description_max_chars,
                     tool_result_compressed = outcome.tool_result_compressed,
@@ -1761,8 +1796,8 @@ mod tests {
     use super::*;
     use crate::anthropic::types::{Message, SystemMessage};
     use crate::kiro::model::requests::conversation::{
-        ConversationState, CurrentMessage, HistoryUserMessage, KiroImage, Message as KiroMessage,
-        UserInputMessage,
+        ConversationState, CurrentMessage, HistoryAssistantMessage, HistoryUserMessage, KiroImage,
+        Message as KiroMessage, UserInputMessage,
     };
     use crate::model::config::CompressionConfig;
 
@@ -2012,6 +2047,69 @@ mod tests {
             KiroMessage::User(user) => user.user_input_message.images.is_empty(),
             _ => false,
         });
+    }
+
+    #[test]
+    fn test_adaptive_shrink_progressive_image_removal() {
+        // 构造 3 条历史用户消息各带图片 + current_message 带图片
+        // 设置阈值使得只需移除前 2 条历史图片即可达标
+        let img_data = "B".repeat(10_000); // 每张图片 ~10KB
+        let mut history = Vec::new();
+        for i in 0..3 {
+            let mut user_msg = HistoryUserMessage::new(format!("msg{}", i), "model");
+            user_msg.user_input_message.images =
+                vec![KiroImage::from_base64("png", img_data.clone())];
+            history.push(KiroMessage::User(user_msg));
+            history.push(KiroMessage::Assistant(HistoryAssistantMessage::new(
+                format!("reply{}", i),
+            )));
+        }
+
+        let mut kiro_request = KiroRequest {
+            conversation_state: ConversationState::new("conv-1")
+                .with_current_message(CurrentMessage::new(
+                    UserInputMessage::new("current", "model")
+                        .with_images(vec![KiroImage::from_base64("png", img_data.clone())]),
+                ))
+                .with_history(history),
+            profile_arn: None,
+        };
+
+        let mut request_body = serde_json::to_string(&kiro_request).unwrap();
+        let config = CompressionConfig::default();
+        // 设置阈值：总体积减去 2 张图片后刚好能通过
+        let max_body = request_body.len() - 2 * img_data.len() + 500;
+
+        let outcome =
+            adaptive_shrink_request_body(&mut kiro_request, &config, max_body, &mut request_body)
+                .unwrap()
+                .expect("should trigger adaptive compression");
+
+        assert!(outcome.history_images_removed);
+        // current_message 图片应保留
+        assert_eq!(
+            kiro_request
+                .conversation_state
+                .current_message
+                .user_input_message
+                .images
+                .len(),
+            1
+        );
+        // 最早的 2 条历史消息图片应被清除，第 3 条保留
+        // history[0] = User(msg0), history[1] = Assistant, history[2] = User(msg1), ...
+        if let KiroMessage::User(u) = &kiro_request.conversation_state.history[0] {
+            assert!(u.user_input_message.images.is_empty(), "oldest should be cleared");
+        }
+        if let KiroMessage::User(u) = &kiro_request.conversation_state.history[2] {
+            assert!(u.user_input_message.images.is_empty(), "second oldest should be cleared");
+        }
+        if let KiroMessage::User(u) = &kiro_request.conversation_state.history[4] {
+            assert!(
+                !u.user_input_message.images.is_empty(),
+                "most recent history image should be preserved"
+            );
+        }
     }
 
     #[test]

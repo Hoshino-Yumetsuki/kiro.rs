@@ -74,7 +74,10 @@ impl ConversationState {
     }
 
     /// 移除历史用户消息中的所有图片，返回移除的图片数量
-    #[allow(dead_code)]
+    ///
+    /// 仅清除 history 中的图片，保留 current_message 中的图片。
+    /// 用于自适应压缩：当请求体超出阈值时，优先丢弃历史会话图片以降低体积。
+    #[cfg(test)]
     pub fn remove_history_images(&mut self) -> usize {
         let mut removed = 0;
         for msg in &mut self.history {
