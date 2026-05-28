@@ -15,8 +15,8 @@ sensitive-logs = []
 native-tls = ["reqwest/native-tls-vendored"]
 
 [dependencies]
-axum = "0.8"
-tokio = { version = "1.0", features = ["full"] }
+axum = "0.8.9"
+tokio = { version = "1.52.3", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["stream", "json", "socks", "rustls-tls-webpki-roots", "rustls-tls-native-roots", "http2", "system-proxy", "charset"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -24,12 +24,11 @@ serde_cbor = "0.11"   # CBOR 编解码（Web Portal API）
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1.0"
-http = "1.0"
+http = "1.4.1"
 futures = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1.10", features = ["v1", "v4", "fast-rng"] }
-fastrand = "2"
-sha2 = "0.10"
+uuid = { version = "1.23", features = ["v1", "v4", "fast-rng"] }
+fastrand = "2.4.1"
 hex = "0.4"
 crc = "3"           # CRC32C 计算
 bytes = "1"         # 高效的字节缓冲区
@@ -42,3 +41,5 @@ rust-embed = "8"      # 嵌入静态文件
 mime_guess = "2"      # MIME 类型推断
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }  # 图片处理
 base64 = "0.22"       # Base64 编解码
+pulldown-cmark = { version = "0.13", default-features = false }  # Markdown 解析（结构化输出 fence 剥离）
+sha2 = "0.11.0"

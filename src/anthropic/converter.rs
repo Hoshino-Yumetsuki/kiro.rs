@@ -266,7 +266,7 @@ fn is_valid_uuid(s: &str) -> bool {
 fn shorten_tool_name(name: &str, max_chars: usize) -> String {
     let mut hasher = Sha256::new();
     hasher.update(name.as_bytes());
-    let hash_hex = format!("{:x}", hasher.finalize());
+    let hash_hex = hex::encode(hasher.finalize());
     let hash_suffix = &hash_hex[..8];
     let prefix_max = max_chars.saturating_sub(1 + hash_suffix.len());
     let prefix = match name.char_indices().nth(prefix_max) {
@@ -1043,6 +1043,15 @@ fn build_history(
     // 仅在请求包含 Write/Edit 工具时注入分块写入策略
     let should_inject_chunked_policy = has_write_or_edit_tool(req);
 
+    // 生成结构化输出提示（如果需要）
+    let structured_output_instruction = req
+        .output_config
+        .as_ref()
+        .and_then(|c| c.format.as_ref())
+        .filter(|f| f.format_type == "json_schema")
+        .and_then(|f| f.schema.as_ref())
+        .map(super::structured_output::generate_schema_instruction);
+
     // 1. 处理系统消息
     if let Some(ref system) = req.system {
         let system_content: String = system
@@ -1053,11 +1062,16 @@ fn build_history(
 
         if !system_content.is_empty() {
             // 仅在存在 Write/Edit 工具时追加分块写入策略到系统消息
-            let final_content = if should_inject_chunked_policy {
+            let mut final_content = if should_inject_chunked_policy {
                 format!("{}\n{}", system_content, SYSTEM_CHUNKED_POLICY)
             } else {
                 system_content
             };
+
+            // 追加结构化输出指令
+            if let Some(ref instruction) = structured_output_instruction {
+                final_content = format!("{}\n\n{}", final_content, instruction);
+            }
 
             // 系统消息作为 user + assistant 配对
             let user_msg = HistoryUserMessage::new(final_content, model_id);
@@ -1066,9 +1080,20 @@ fn build_history(
             let assistant_msg = HistoryAssistantMessage::new("I will follow these instructions.");
             history.push(Message::Assistant(assistant_msg));
         }
-    } else if should_inject_chunked_policy {
-        // 没有系统消息但需要注入分块写入策略
-        let user_msg = HistoryUserMessage::new(SYSTEM_CHUNKED_POLICY, model_id);
+    } else if should_inject_chunked_policy || structured_output_instruction.is_some() {
+        // 没有系统消息但需要注入分块写入策略或结构化输出指令
+        let mut content = String::new();
+        if should_inject_chunked_policy {
+            content.push_str(SYSTEM_CHUNKED_POLICY);
+        }
+        if let Some(ref instruction) = structured_output_instruction {
+            if !content.is_empty() {
+                content.push_str("\n\n");
+            }
+            content.push_str(instruction);
+        }
+
+        let user_msg = HistoryUserMessage::new(content, model_id);
         history.push(Message::User(user_msg));
 
         let assistant_msg = HistoryAssistantMessage::new("I will follow these instructions.");

@@ -46,6 +46,7 @@ struct StreamRequestContext<'a> {
     thinking_enabled: bool,
     tool_name_map: std::collections::HashMap<String, String>,
     user_id: Option<&'a str>,
+    structured_output: bool,
 }
 
 struct NonStreamRequestContext<'a> {
@@ -56,6 +57,7 @@ struct NonStreamRequestContext<'a> {
     user_id: Option<&'a str>,
     cache_tracker: Option<&'a std::sync::Arc<crate::anthropic::cache_tracker::CacheTracker>>,
     cache_profile: Option<&'a crate::anthropic::cache_tracker::CacheProfile>,
+    structured_output: bool,
 }
 
 fn build_cache_profile(
@@ -1143,6 +1145,12 @@ pub async fn post_messages(
         .map(|t| t.is_enabled() && Thinking::model_supports_thinking(&payload.model))
         .unwrap_or(false);
 
+    // 检查是否启用了结构化输出
+    let structured_output = payload
+        .output_config
+        .as_ref()
+        .is_some_and(|c| c.has_structured_output());
+
     if payload.stream {
         // 流式响应
         let stream_request = StreamRequestContext {
@@ -1156,6 +1164,7 @@ pub async fn post_messages(
             thinking_enabled,
             tool_name_map: tool_name_map.clone(),
             user_id: user_id.as_deref(),
+            structured_output,
         };
         handle_stream_request(provider, stream_request).await
     } else {
@@ -1170,6 +1179,7 @@ pub async fn post_messages(
                 .accounting_enabled
                 .then_some(&prompt_cache.tracker),
             cache_profile: cache_profile.as_ref(),
+            structured_output,
         };
         handle_non_stream_request(provider, non_stream_request).await
     }
@@ -1215,6 +1225,7 @@ async fn handle_stream_request(
         final_cache_usage,
         context.thinking_enabled,
         context.tool_name_map,
+        context.structured_output,
     );
 
     // 生成初始事件
@@ -1570,9 +1581,15 @@ async fn handle_non_stream_request(
     }
 
     if !text_content.is_empty() {
+        // 结构化输出模式：剥离 markdown fence
+        let final_text = if context.structured_output {
+            super::structured_output::extract_json_from_response(&text_content)
+        } else {
+            text_content
+        };
         content.push(json!({
             "type": "text",
-            "text": text_content
+            "text": final_text
         }));
     }
 
@@ -1676,6 +1693,7 @@ fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
 
     payload.output_config = Some(OutputConfig {
         effort: effort.to_string(),
+        format: None,
     });
 }
 

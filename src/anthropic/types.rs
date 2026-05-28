@@ -141,6 +141,24 @@ where
 pub struct OutputConfig {
     #[serde(default = "default_effort")]
     pub effort: String,
+    /// 结构化输出格式配置
+    #[serde(default)]
+    pub format: Option<OutputFormat>,
+}
+
+/// 输出格式配置（模拟结构化输出）
+#[derive(Debug, Deserialize, Clone)]
+pub struct OutputFormat {
+    /// 格式类型，目前仅支持 "json_schema"
+    #[serde(rename = "type")]
+    pub format_type: String,
+    /// JSON Schema 定义
+    #[serde(default)]
+    pub schema: Option<serde_json::Value>,
+    /// Schema 名称（可选）
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub name: Option<String>,
 }
 
 impl OutputConfig {
@@ -153,6 +171,13 @@ impl OutputConfig {
                 "high"
             }
         }
+    }
+
+    /// 是否启用了结构化输出
+    pub fn has_structured_output(&self) -> bool {
+        self.format
+            .as_ref()
+            .is_some_and(|f| f.format_type == "json_schema" && f.schema.is_some())
     }
 }
 

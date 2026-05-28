@@ -24,6 +24,7 @@ mod handlers;
 mod middleware;
 mod router;
 mod stream;
+pub(crate) mod structured_output;
 mod tool_compression;
 mod truncation;
 pub mod types;
