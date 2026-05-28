@@ -848,8 +848,7 @@ impl MultiTokenManager {
                     id
                 });
                 if cred.machine_id.is_none() {
-                    let machine_id =
-                        machine_id::generate_from_credentials(&cred, config_ref);
+                    let machine_id = machine_id::generate_from_credentials(&cred, config_ref);
                     cred.machine_id = Some(machine_id);
                     if !cred.runtime_only {
                         has_new_machine_ids = true;
@@ -2360,10 +2359,18 @@ impl MultiTokenManager {
                             if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
                                 entry.disabled = true;
                                 entry.disable_reason = Some(DisableReason::InsufficientBalance);
-                                tracing::warn!("凭据 #{} 余额不足 ({:.2})，已自动禁用", id, remaining);
+                                tracing::warn!(
+                                    "凭据 #{} 余额不足 ({:.2})，已自动禁用",
+                                    id,
+                                    remaining
+                                );
                             }
                         } else {
-                            tracing::warn!("凭据 #{} 余额不足 ({:.2})，但自动禁用已关闭", id, remaining);
+                            tracing::warn!(
+                                "凭据 #{} 余额不足 ({:.2})，但自动禁用已关闭",
+                                id,
+                                remaining
+                            );
                         }
                     } else {
                         tracing::info!("凭据 #{} 余额初始化成功: {:.2}", id, remaining);

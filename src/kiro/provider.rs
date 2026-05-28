@@ -204,7 +204,11 @@ impl KiroProvider {
                             tm.mark_insufficient_balance(id);
                             tracing::warn!("凭据 #{} 余额不足 ({:.2})，已主动禁用", id, remaining);
                         } else {
-                            tracing::warn!("凭据 #{} 余额不足 ({:.2})，但自动禁用已关闭", id, remaining);
+                            tracing::warn!(
+                                "凭据 #{} 余额不足 ({:.2})，但自动禁用已关闭",
+                                id,
+                                remaining
+                            );
                         }
                     }
                 }

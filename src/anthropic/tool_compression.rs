@@ -339,10 +339,7 @@ mod tests {
             .collect();
 
         let original_size = estimate_tools_size(&tools);
-        assert!(
-            original_size > 20 * 1024,
-            "测试数据应超过阈值"
-        );
+        assert!(original_size > 20 * 1024, "测试数据应超过阈值");
 
         let result = compress_tools_if_needed(&tools, &CompressionConfig::default());
         let compressed_size = estimate_tools_size(&result);
