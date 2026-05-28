@@ -393,7 +393,7 @@ fn generate_websearch_events(
     cache_context: Option<WebSearchCacheContext>,
 ) -> Vec<SseEvent> {
     let mut events = Vec::new();
-    let message_id = format!("msg_{}", &Uuid::new_v4().to_string().replace('-', "")[..24]);
+    let message_id = super::stream::generate_anthropic_message_id();
     let billed_input_tokens = cache_context
         .map(|ctx| {
             billed_input_tokens(
@@ -768,7 +768,7 @@ pub async fn handle_websearch_request(
     }
 
     let response_body = json!({
-        "id": format!("msg_{}", &Uuid::new_v4().to_string().replace('-', "")[..24]),
+        "id": super::stream::generate_anthropic_message_id(),
         "type": "message",
         "role": "assistant",
         "model": model,

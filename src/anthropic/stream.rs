@@ -5,9 +5,29 @@
 use std::collections::HashMap;
 
 use serde_json::json;
-use uuid::Uuid;
 
 use crate::kiro::model::events::{Event, MeteringEvent, ReasoningContentEvent};
+
+/// Generate an Anthropic-style message ID: `msg_01` + 20 random alphanumeric characters.
+pub fn generate_anthropic_message_id() -> String {
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let suffix: String = (0..20)
+        .map(|_| {
+            let idx = fastrand::usize(..CHARSET.len());
+            CHARSET[idx] as char
+        })
+        .collect();
+    format!("msg_01{}", suffix)
+}
+
+/// Ensure a tool_use ID has the `toolu_` prefix expected by the Anthropic API.
+pub fn ensure_toolu_prefix(id: &str) -> String {
+    if id.starts_with("toolu_") {
+        id.to_string()
+    } else {
+        format!("toolu_{}", id)
+    }
+}
 
 /// SSE 事件
 #[derive(Debug, Clone)]
@@ -53,14 +73,12 @@ impl BlockState {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct FinalUsage<'a> {
-    input_tokens: i32,
+pub(crate) struct FinalUsage {
     output_tokens: i32,
-    cache_usage: Option<CacheUsageBreakdown>,
-    metering: Option<&'a MeteringEvent>,
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 pub(crate) struct CacheUsageBreakdown {
     pub cache_creation_input_tokens: i32,
     pub cache_read_input_tokens: i32,
@@ -132,12 +150,8 @@ impl SseStateManager {
     }
 
     /// stop_reason 优先级（索引越小优先级越高）
-    const STOP_REASON_PRIORITY: &'static [&'static str] = &[
-        "model_context_window_exceeded",
-        "max_tokens",
-        "tool_use",
-        "end_turn",
-    ];
+    const STOP_REASON_PRIORITY: &'static [&'static str] =
+        &["max_tokens", "tool_use", "end_turn"];
 
     /// 获取 stop_reason 的优先级（越小越高，未知原因返回 usize::MAX）
     fn stop_reason_priority(reason: &str) -> usize {
@@ -149,7 +163,7 @@ impl SseStateManager {
 
     /// 设置 stop_reason（高优先级原因可覆盖低优先级原因）
     ///
-    /// 优先级从高到低：model_context_window_exceeded > max_tokens > tool_use > end_turn
+    /// 优先级从高到低：max_tokens > tool_use > end_turn
     pub fn set_stop_reason(&mut self, reason: impl Into<String>) {
         let reason = reason.into();
         let new_priority = Self::stop_reason_priority(&reason);
@@ -280,7 +294,7 @@ impl SseStateManager {
     }
 
     /// 生成最终事件序列
-    pub fn generate_final_events(&mut self, usage: FinalUsage<'_>) -> Vec<SseEvent> {
+    pub fn generate_final_events(&mut self, usage: FinalUsage) -> Vec<SseEvent> {
         let mut events = Vec::new();
 
         // 关闭所有未关闭的块
@@ -300,24 +314,9 @@ impl SseStateManager {
         // 发送 message_delta
         if !self.message_delta_sent {
             self.message_delta_sent = true;
-            let mut usage_json = json!({
-                "input_tokens": usage.input_tokens,
+            let usage_json = json!({
                 "output_tokens": usage.output_tokens,
             });
-            if let Some(cache_usage) = usage.cache_usage {
-                usage_json["cache_creation_input_tokens"] =
-                    json!(cache_usage.cache_creation_input_tokens);
-                usage_json["cache_read_input_tokens"] = json!(cache_usage.cache_read_input_tokens);
-                usage_json["cache_creation"] = json!({
-                    "ephemeral_5m_input_tokens": cache_usage.cache_creation_5m_input_tokens,
-                    "ephemeral_1h_input_tokens": cache_usage.cache_creation_1h_input_tokens
-                });
-            }
-            if let Some(metering) = usage.metering {
-                usage_json["credit_usage"] = json!(metering.usage);
-                usage_json["credit_unit"] = json!(metering.unit);
-                usage_json["credit_unit_plural"] = json!(metering.unit_plural);
-            }
             events.push(SseEvent::new(
                 "message_delta",
                 json!({
@@ -390,7 +389,7 @@ impl StreamContext {
         Self {
             state_manager: SseStateManager::new(),
             model: model.into(),
-            message_id: format!("msg_{}", Uuid::new_v4().to_string().replace('-', "")),
+            message_id: generate_anthropic_message_id(),
             input_tokens,
             cache_usage,
             context_input_tokens: None,
@@ -420,7 +419,7 @@ impl StreamContext {
             .unwrap_or(self.input_tokens);
         let mut usage = json!({
             "input_tokens": billed_input_tokens,
-            "output_tokens": 1,
+            "output_tokens": 0,
         });
         if let Some(cache_usage) = self.cache_usage {
             usage["cache_creation_input_tokens"] = json!(cache_usage.cache_creation_input_tokens);
@@ -470,10 +469,9 @@ impl StreamContext {
                 let actual_input_tokens =
                     (context_usage.context_usage_percentage * context_window / 100.0) as i32;
                 self.context_input_tokens = Some(actual_input_tokens);
-                // 上下文使用量达到 100% 时，设置 stop_reason 为 model_context_window_exceeded
+                // 上下文使用量达到 100% 时，设置 stop_reason 为 max_tokens
                 if context_usage.context_usage_percentage >= 100.0 {
-                    self.state_manager
-                        .set_stop_reason("model_context_window_exceeded");
+                    self.state_manager.set_stop_reason("max_tokens");
                 }
                 tracing::debug!(
                     "收到 contextUsageEvent: {:.4}%, 计算 input_tokens: {} (context_window: {})",
@@ -730,13 +728,14 @@ impl StreamContext {
 
         self.state_manager.set_has_tool_use(true);
 
+        let tool_id = ensure_toolu_prefix(&tool_use.tool_use_id);
+
         // 获取或分配块索引
-        let block_index = if let Some(&idx) = self.tool_block_indices.get(&tool_use.tool_use_id) {
+        let block_index = if let Some(&idx) = self.tool_block_indices.get(&tool_id) {
             idx
         } else {
             let idx = self.state_manager.next_block_index();
-            self.tool_block_indices
-                .insert(tool_use.tool_use_id.clone(), idx);
+            self.tool_block_indices.insert(tool_id.clone(), idx);
             idx
         };
 
@@ -756,7 +755,7 @@ impl StreamContext {
                 "index": block_index,
                 "content_block": {
                     "type": "tool_use",
-                    "id": tool_use.tool_use_id,
+                    "id": tool_id,
                     "name": original_name,
                     "input": {}
                 }
@@ -837,38 +836,36 @@ impl StreamContext {
 
         // 始终基于本地估算输入与 cache 统计来生成 usage，
         // 避免因服务端压缩导致上游 token 统计偏低，使客户端误判上下文大小。
-        // credit usage 则仅透传上游 meteringEvent，不影响本地 input/cache usage 语义。
-        let final_input_tokens = self.input_tokens;
-        let billed_input_tokens = self
-            .cache_usage
-            .map(|cache_usage| {
-                billed_input_tokens(
-                    final_input_tokens,
-                    cache_usage.cache_creation_input_tokens,
-                    cache_usage.cache_read_input_tokens,
-                )
-            })
-            .unwrap_or(final_input_tokens);
-
         #[cfg(feature = "sensitive-logs")]
-        tracing::info!(
-            estimated_input_tokens = self.input_tokens,
-            context_input_tokens = ?self.context_input_tokens,
-            final_input_tokens,
-            output_tokens = self.output_tokens,
-            "StreamContext usage: final_input_tokens={} (估算值), billed_input_tokens={}, context_input_tokens={} (上游值), output_tokens={}",
-            final_input_tokens,
-            billed_input_tokens,
-            self.context_input_tokens.map_or("N/A".to_string(), |v| v.to_string()),
-            self.output_tokens
-        );
+        {
+            let final_input_tokens = self.input_tokens;
+            let billed_input_tokens = self
+                .cache_usage
+                .map(|cache_usage| {
+                    billed_input_tokens(
+                        final_input_tokens,
+                        cache_usage.cache_creation_input_tokens,
+                        cache_usage.cache_read_input_tokens,
+                    )
+                })
+                .unwrap_or(final_input_tokens);
+
+            tracing::info!(
+                estimated_input_tokens = self.input_tokens,
+                context_input_tokens = ?self.context_input_tokens,
+                final_input_tokens,
+                output_tokens = self.output_tokens,
+                "StreamContext usage: final_input_tokens={} (估算值), billed_input_tokens={}, context_input_tokens={} (上游值), output_tokens={}",
+                final_input_tokens,
+                billed_input_tokens,
+                self.context_input_tokens.map_or("N/A".to_string(), |v| v.to_string()),
+                self.output_tokens
+            );
+        }
 
         // 生成最终事件
         events.extend(self.state_manager.generate_final_events(FinalUsage {
-            input_tokens: billed_input_tokens,
             output_tokens: self.output_tokens,
-            cache_usage: self.cache_usage,
-            metering: self.metering.as_ref(),
         }));
         events
     }
@@ -979,7 +976,7 @@ mod tests {
     }
 
     #[test]
-    fn test_stream_context_includes_metering_in_message_delta_usage() {
+    fn test_stream_context_message_delta_only_has_output_tokens() {
         let mut ctx = StreamContext::new_with_thinking(
             "test-model",
             123,
@@ -1008,15 +1005,19 @@ mod tests {
             .map(|e| e.data["usage"].clone())
             .expect("message_delta should exist");
 
+        // message_start should have input_tokens and cache fields
         assert_eq!(message_start_usage["input_tokens"], json!(123));
         assert_eq!(message_start_usage["cache_creation_input_tokens"], json!(0));
         assert_eq!(message_start_usage["cache_read_input_tokens"], json!(0));
-        assert_eq!(message_delta_usage["input_tokens"], json!(123));
-        assert_eq!(message_delta_usage["cache_creation_input_tokens"], json!(0));
-        assert_eq!(message_delta_usage["cache_read_input_tokens"], json!(0));
-        assert_eq!(message_delta_usage["credit_usage"], json!(0.75));
-        assert_eq!(message_delta_usage["credit_unit"], json!("credit"));
-        assert_eq!(message_delta_usage["credit_unit_plural"], json!("credits"));
+
+        // message_delta.usage should ONLY have output_tokens (per Anthropic spec)
+        assert!(message_delta_usage.get("output_tokens").is_some());
+        assert!(message_delta_usage.get("input_tokens").is_none());
+        assert!(message_delta_usage.get("cache_creation_input_tokens").is_none());
+        assert!(message_delta_usage.get("cache_read_input_tokens").is_none());
+        assert!(message_delta_usage.get("credit_usage").is_none());
+        assert!(message_delta_usage.get("credit_unit").is_none());
+        assert!(message_delta_usage.get("credit_unit_plural").is_none());
     }
 
     #[test]
@@ -1064,9 +1065,11 @@ mod tests {
             .expect("message_delta should exist");
 
         assert_eq!(message_start_usage["input_tokens"], json!(306));
-        assert_eq!(message_delta_usage["input_tokens"], json!(306));
-        assert_eq!(message_delta_usage["cache_creation_input_tokens"], json!(7));
-        assert_eq!(message_delta_usage["cache_read_input_tokens"], json!(8));
+        // message_delta only has output_tokens
+        assert!(message_delta_usage.get("input_tokens").is_none());
+        assert!(message_delta_usage.get("cache_creation_input_tokens").is_none());
+        assert!(message_delta_usage.get("cache_read_input_tokens").is_none());
+        assert!(message_delta_usage.get("output_tokens").is_some());
     }
     #[test]
     fn test_stream_context_omits_cache_usage_fields_when_disabled() {
@@ -1093,7 +1096,9 @@ mod tests {
                 .is_none()
         );
         assert!(message_start_usage.get("cache_read_input_tokens").is_none());
-        assert_eq!(message_delta_usage["input_tokens"], json!(321));
+        // message_delta only has output_tokens regardless of cache setting
+        assert!(message_delta_usage.get("output_tokens").is_some());
+        assert!(message_delta_usage.get("input_tokens").is_none());
         assert!(
             message_delta_usage
                 .get("cache_creation_input_tokens")
@@ -1104,7 +1109,7 @@ mod tests {
     }
 
     #[test]
-    fn test_stream_context_extracts_cache_from_metering_event() {
+    fn test_stream_context_cache_in_message_start_not_delta() {
         let mut ctx = StreamContext::new_with_thinking(
             "test-model",
             1000,
@@ -1119,6 +1124,19 @@ mod tests {
             usage: 0.5,
         }));
 
+        let initial_events = ctx.generate_initial_events();
+        let message_start_usage = initial_events
+            .iter()
+            .find(|e| e.event == "message_start")
+            .map(|e| e.data["message"]["usage"].clone())
+            .expect("message_start should exist");
+
+        // message_start should have cache fields
+        assert_eq!(message_start_usage["cache_read_input_tokens"], json!(800));
+        assert_eq!(message_start_usage["cache_creation_input_tokens"], json!(50));
+        // billed input = 1000 - 50 - 800 = 150
+        assert_eq!(message_start_usage["input_tokens"], json!(150));
+
         let final_events = ctx.generate_final_events();
         let message_delta_usage = final_events
             .iter()
@@ -1126,20 +1144,13 @@ mod tests {
             .map(|e| e.data["usage"].clone())
             .expect("message_delta should exist");
 
-        assert_eq!(message_delta_usage["cache_read_input_tokens"], json!(800));
-        assert_eq!(
-            message_delta_usage["cache_creation_input_tokens"],
-            json!(50)
-        );
-        assert_eq!(
-            message_delta_usage["cache_creation"]["ephemeral_5m_input_tokens"],
-            json!(30)
-        );
-        assert_eq!(
-            message_delta_usage["cache_creation"]["ephemeral_1h_input_tokens"],
-            json!(20)
-        );
-        assert_eq!(message_delta_usage["input_tokens"], json!(150));
+        // message_delta should only have output_tokens
+        assert!(message_delta_usage.get("output_tokens").is_some());
+        assert!(message_delta_usage.get("input_tokens").is_none());
+        assert!(message_delta_usage.get("cache_read_input_tokens").is_none());
+        assert!(message_delta_usage.get("cache_creation_input_tokens").is_none());
+        assert!(message_delta_usage.get("cache_creation").is_none());
+        assert!(message_delta_usage.get("credit_usage").is_none());
     }
 
     #[test]
