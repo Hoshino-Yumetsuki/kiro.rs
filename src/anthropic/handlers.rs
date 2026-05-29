@@ -1728,7 +1728,19 @@ fn build_additional_model_request_fields(payload: &MessagesRequest) -> Option<se
         return None;
     }
 
-    // 如果没有 output_config，只传 thinking，不传 effort（使用后端默认）
+    // 旧版 enabled + budget_tokens 写法：映射为 adaptive + effort high
+    if thinking.thinking_type == "enabled" {
+        tracing::info!(
+            model = %payload.model,
+            "旧版 thinking.type=enabled (budget_tokens), 映射为 adaptive + effort=high"
+        );
+        return Some(serde_json::json!({
+            "thinking": { "type": "adaptive" },
+            "output_config": { "effort": "high" }
+        }));
+    }
+
+    // adaptive 模式：检查是否有 output_config.effort
     let output_config = payload.output_config.as_ref();
     if output_config.is_none() {
         tracing::info!(
