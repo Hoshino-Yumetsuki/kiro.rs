@@ -353,7 +353,7 @@ export function CredentialCard({
                 </span>
               ) : balance ? (
                 <span className="inline-flex flex-col gap-0.5 ml-1 align-top">
-                  <span className="font-medium tabular-nums">
+                  <span className={`font-medium tabular-nums ${balance.remaining < 0 ? 'text-destructive' : 'text-green-600'}`}>
                     {formatKiroCredits(balance.remaining)} / {formatKiroCredits(balance.usageLimit)}
                   </span>
                   <span className="text-xs text-muted-foreground tabular-nums">
@@ -362,7 +362,7 @@ export function CredentialCard({
                 </span>
               ) : cachedBalance && cachedBalance.ttlSecs > 0 && cachedBalance.usageLimit > 0 ? (
                 <span className="inline-flex flex-col gap-0.5 ml-1 align-top">
-                  <span className="font-medium tabular-nums">
+                  <span className={`font-medium tabular-nums ${cachedBalance.remaining < 0 ? 'text-destructive' : 'text-green-600'}`}>
                     {formatKiroCredits(cachedBalance.remaining)} / {formatKiroCredits(cachedBalance.usageLimit)}
                   </span>
                   <span className="text-xs text-muted-foreground tabular-nums">
@@ -371,7 +371,7 @@ export function CredentialCard({
                 </span>
               ) : cachedBalance && cachedBalance.ttlSecs > 0 ? (
                 <span className="inline-flex flex-col gap-0.5 ml-1 align-top">
-                  <span className="font-medium tabular-nums">{formatKiroCredits(cachedBalance.remaining)}</span>
+                  <span className={`font-medium tabular-nums ${cachedBalance.remaining < 0 ? 'text-destructive' : 'text-green-600'}`}>{formatKiroCredits(cachedBalance.remaining)}</span>
                   <span className="text-xs text-muted-foreground tabular-nums">
                     ≈ {formatKiroCreditsAsUsd(cachedBalance.remaining)} · {formatCacheAge(cachedBalance.cachedAt)}缓存
                   </span>
