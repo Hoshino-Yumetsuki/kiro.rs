@@ -531,5 +531,6 @@ MIT
 本项目的实现离不开前辈的努力:  
  - [kiro2api](https://github.com/caidaoli/kiro2api)
  - [proxycast](https://github.com/aiclientproxy/proxycast)
+ - [kiro.rs](https://github.com/hank9999/kiro.rs)
 
 本项目部分逻辑参考了以上的项目, 再次由衷的感谢!
