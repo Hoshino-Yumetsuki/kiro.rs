@@ -367,6 +367,12 @@ export interface GlobalConfigResponse {
   autoDisableInsufficientBalance: boolean
   autoDisableRefreshFailure: boolean
   compression: CompressionConfigResponse
+  rewriter: RewriterConfigResponse
+}
+
+export interface RewriterConfigResponse {
+  enabled: boolean
+  keywords: string[]
 }
 
 export interface UpdateCompressionConfigRequest {
@@ -393,4 +399,10 @@ export interface UpdateGlobalConfigRequest {
   autoDisableInsufficientBalance?: boolean
   autoDisableRefreshFailure?: boolean
   compression?: UpdateCompressionConfigRequest
+  rewriter?: UpdateRewriterConfigRequest
+}
+
+export interface UpdateRewriterConfigRequest {
+  enabled?: boolean
+  keywords?: string[]
 }

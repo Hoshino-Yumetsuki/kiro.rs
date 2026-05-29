@@ -77,6 +77,8 @@ pub struct AppState {
     pub compression_config: Arc<RwLock<CompressionConfig>>,
     /// Prompt Cache 运行时配置（共享引用，支持热更新）
     pub prompt_cache_runtime: Arc<RwLock<PromptCacheRuntime>>,
+    /// 响应关键词改写配置（共享引用，支持热更新）
+    pub rewriter_config: Arc<RwLock<super::rewriter::RewriterConfig>>,
 }
 
 impl AppState {
@@ -91,6 +93,7 @@ impl AppState {
             profile_arn: None,
             compression_config: Arc::new(RwLock::new(CompressionConfig::default())),
             prompt_cache_runtime,
+            rewriter_config: Arc::new(RwLock::new(super::rewriter::RewriterConfig::default())),
         }
     }
 

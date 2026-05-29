@@ -45,6 +45,7 @@ pub struct AdminService {
     kiro_provider: Option<Arc<KiroProvider>>,
     config: Arc<RwLock<Config>>,
     compression_config: Arc<RwLock<CompressionConfig>>,
+    rewriter_config: Arc<RwLock<crate::anthropic::rewriter::RewriterConfig>>,
     prompt_cache_runtime: Arc<RwLock<PromptCacheRuntime>>,
     balance_cache: Mutex<HashMap<u64, CachedBalance>>,
     cache_path: Option<PathBuf>,
@@ -57,6 +58,7 @@ impl AdminService {
         kiro_provider: Option<Arc<KiroProvider>>,
         config: Arc<RwLock<Config>>,
         compression_config: Arc<RwLock<CompressionConfig>>,
+        rewriter_config: Arc<RwLock<crate::anthropic::rewriter::RewriterConfig>>,
         prompt_cache_runtime: Arc<RwLock<PromptCacheRuntime>>,
         known_endpoints: impl IntoIterator<Item = String>,
     ) -> Self {
@@ -75,6 +77,7 @@ impl AdminService {
             kiro_provider,
             config,
             compression_config,
+            rewriter_config,
             prompt_cache_runtime,
             balance_cache: Mutex::new(balance_cache),
             cache_path,
@@ -812,6 +815,7 @@ impl AdminService {
     pub fn get_global_config(&self) -> super::types::GlobalConfigResponse {
         let config = self.config.read();
         let c = self.compression_config.read();
+        let r = self.rewriter_config.read();
         super::types::GlobalConfigResponse {
             region: config.region.clone(),
             credential_rpm: config.credential_rpm,
@@ -833,6 +837,10 @@ impl AdminService {
                 max_request_body_bytes: c.max_request_body_bytes,
                 adaptive_compression: c.adaptive_compression,
                 adaptive_compression_max_iters: c.adaptive_compression_max_iters,
+            },
+            rewriter: super::types::RewriterConfigResponse {
+                enabled: r.enabled,
+                keywords: r.keywords.clone(),
             },
         }
     }
@@ -914,6 +922,15 @@ impl AdminService {
                 Self::apply_compression_fields(&mut config.compression, c);
             }
 
+            if let Some(r) = &req.rewriter {
+                if let Some(enabled) = r.enabled {
+                    config.rewriter.enabled = enabled;
+                }
+                if let Some(ref keywords) = r.keywords {
+                    config.rewriter.keywords = keywords.clone();
+                }
+            }
+
             config
                 .save()
                 .map_err(|e| AdminServiceError::InternalError(e.to_string()))?;
@@ -956,6 +973,17 @@ impl AdminService {
         if let Some(c) = &req.compression {
             let mut runtime = self.compression_config.write();
             Self::apply_compression_fields(&mut runtime, c);
+        }
+
+        // 热更新改写配置到运行时 Arc<RwLock<RewriterConfig>>
+        if let Some(r) = &req.rewriter {
+            let mut runtime = self.rewriter_config.write();
+            if let Some(enabled) = r.enabled {
+                runtime.enabled = enabled;
+            }
+            if let Some(ref keywords) = r.keywords {
+                runtime.keywords = keywords.clone();
+            }
         }
 
         Ok(())
@@ -1048,6 +1076,7 @@ mod tests {
             Some(provider),
             config,
             compression_config,
+            Arc::new(RwLock::new(crate::anthropic::rewriter::RewriterConfig::default())),
             prompt_cache_runtime,
             known_endpoints,
         )
@@ -1064,17 +1093,18 @@ mod tests {
         let service = create_test_service();
 
         let req = super::super::types::UpdateGlobalConfigRequest {
-            region: None,
-            credential_rpm: None,
-            prompt_cache_ttl_seconds: None,
-            prompt_cache_accounting_enabled: None,
-            default_endpoint: Some("cli".to_string()),
-            enable_credential_cooldown: None,
-            enable_sticky_routing: None,
-            auto_disable_insufficient_balance: None,
-            auto_disable_refresh_failure: None,
-            compression: None,
-        };
+                    region: None,
+                    credential_rpm: None,
+                    prompt_cache_ttl_seconds: None,
+                    prompt_cache_accounting_enabled: None,
+                    default_endpoint: Some("cli".to_string()),
+                    enable_credential_cooldown: None,
+                    enable_sticky_routing: None,
+                    auto_disable_insufficient_balance: None,
+                    auto_disable_refresh_failure: None,
+                    compression: None,
+                    rewriter: None,
+                };
 
         let result = service.update_global_config(req).await;
         assert!(result.is_ok());
@@ -1092,17 +1122,18 @@ mod tests {
         let service = create_test_service();
 
         let req = super::super::types::UpdateGlobalConfigRequest {
-            region: None,
-            credential_rpm: None,
-            prompt_cache_ttl_seconds: None,
-            prompt_cache_accounting_enabled: None,
-            default_endpoint: Some("".to_string()),
-            enable_credential_cooldown: None,
-            enable_sticky_routing: None,
-            auto_disable_insufficient_balance: None,
-            auto_disable_refresh_failure: None,
-            compression: None,
-        };
+                    region: None,
+                    credential_rpm: None,
+                    prompt_cache_ttl_seconds: None,
+                    prompt_cache_accounting_enabled: None,
+                    default_endpoint: Some("".to_string()),
+                    enable_credential_cooldown: None,
+                    enable_sticky_routing: None,
+                    auto_disable_insufficient_balance: None,
+                    auto_disable_refresh_failure: None,
+                    compression: None,
+                    rewriter: None,
+                };
 
         let result = service.update_global_config(req).await;
         assert!(result.is_err());
@@ -1119,17 +1150,18 @@ mod tests {
         let service = create_test_service();
 
         let req = super::super::types::UpdateGlobalConfigRequest {
-            region: None,
-            credential_rpm: None,
-            prompt_cache_ttl_seconds: None,
-            prompt_cache_accounting_enabled: None,
-            default_endpoint: Some("   ".to_string()),
-            enable_credential_cooldown: None,
-            enable_sticky_routing: None,
-            auto_disable_insufficient_balance: None,
-            auto_disable_refresh_failure: None,
-            compression: None,
-        };
+                    region: None,
+                    credential_rpm: None,
+                    prompt_cache_ttl_seconds: None,
+                    prompt_cache_accounting_enabled: None,
+                    default_endpoint: Some("   ".to_string()),
+                    enable_credential_cooldown: None,
+                    enable_sticky_routing: None,
+                    auto_disable_insufficient_balance: None,
+                    auto_disable_refresh_failure: None,
+                    compression: None,
+                    rewriter: None,
+                };
 
         let result = service.update_global_config(req).await;
         assert!(result.is_err());
@@ -1146,17 +1178,18 @@ mod tests {
         let service = create_test_service();
 
         let req = super::super::types::UpdateGlobalConfigRequest {
-            region: None,
-            credential_rpm: None,
-            prompt_cache_ttl_seconds: None,
-            prompt_cache_accounting_enabled: None,
-            default_endpoint: Some("unknown".to_string()),
-            enable_credential_cooldown: None,
-            enable_sticky_routing: None,
-            auto_disable_insufficient_balance: None,
-            auto_disable_refresh_failure: None,
-            compression: None,
-        };
+                    region: None,
+                    credential_rpm: None,
+                    prompt_cache_ttl_seconds: None,
+                    prompt_cache_accounting_enabled: None,
+                    default_endpoint: Some("unknown".to_string()),
+                    enable_credential_cooldown: None,
+                    enable_sticky_routing: None,
+                    auto_disable_insufficient_balance: None,
+                    auto_disable_refresh_failure: None,
+                    compression: None,
+                    rewriter: None,
+                };
 
         let result = service.update_global_config(req).await;
         assert!(result.is_err());
@@ -1170,17 +1203,18 @@ mod tests {
         let service = create_test_service();
 
         let req = super::super::types::UpdateGlobalConfigRequest {
-            region: None,
-            credential_rpm: None,
-            prompt_cache_ttl_seconds: None,
-            prompt_cache_accounting_enabled: None,
-            default_endpoint: Some("  cli  ".to_string()),
-            enable_credential_cooldown: None,
-            enable_sticky_routing: None,
-            auto_disable_insufficient_balance: None,
-            auto_disable_refresh_failure: None,
-            compression: None,
-        };
+                    region: None,
+                    credential_rpm: None,
+                    prompt_cache_ttl_seconds: None,
+                    prompt_cache_accounting_enabled: None,
+                    default_endpoint: Some("  cli  ".to_string()),
+                    enable_credential_cooldown: None,
+                    enable_sticky_routing: None,
+                    auto_disable_insufficient_balance: None,
+                    auto_disable_refresh_failure: None,
+                    compression: None,
+                    rewriter: None,
+                };
 
         let result = service.update_global_config(req).await;
         assert!(result.is_ok());
