@@ -83,12 +83,4 @@ impl UserAffinityManager {
         let mut map = self.affinity.lock();
         map.retain(|_, entry| entry.credential_id != credential_id);
     }
-
-    /// 清理过期条目
-    #[allow(dead_code)]
-    pub fn cleanup(&self) {
-        let mut map = self.affinity.lock();
-        let ttl = self.ttl;
-        map.retain(|_, entry| entry.last_used.elapsed() < ttl);
-    }
 }

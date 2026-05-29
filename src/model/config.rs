@@ -324,7 +324,6 @@ impl Config {
 
     /// 获取有效的 API Region（用于 API 请求）
     /// 优先使用 api_region，未配置时回退到 region
-    #[allow(dead_code)]
     pub fn effective_api_region(&self) -> &str {
         self.api_region.as_deref().unwrap_or(&self.region)
     }
@@ -347,13 +346,12 @@ impl Config {
     }
 
     /// 获取配置文件路径（如果有）
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn config_path(&self) -> Option<&Path> {
         self.config_path.as_deref()
     }
 
     /// 将当前配置写回原始配置文件
-    #[allow(dead_code)]
     pub fn save(&self) -> anyhow::Result<()> {
         let path = self
             .config_path
