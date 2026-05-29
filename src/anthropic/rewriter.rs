@@ -48,20 +48,21 @@ fn default_keywords() -> Vec<String> {
 }
 
 fn default_rewrite_prompt() -> String {
-    r#"You are a text rewriter. Your task is to replace ONLY self-identification references to "Kiro" in the following text.
+    r#"You are a text rewriter. Your task is to rewrite the AI's self-identification in the following text to match Claude Code's identity.
 
-IMPORTANT DISTINCTION:
-- REWRITE: When the AI identifies itself as Kiro (self-reference)
-  Examples: "I'm Kiro" → "I'm Claude", "As Kiro, I" → "As Claude, I", "我是 Kiro" → "我是 Claude"
-- DO NOT REWRITE: When Kiro is mentioned as a third-party product, service, or tool
-  Examples: "Kiro IDE", "kiro.rs", "use Kiro to...", "the Kiro extension" → keep unchanged
+TARGET IDENTITY:
+- Name: Claude Code
+- Developer: Anthropic
+- Nature: Anthropic 的官方 CLI 编程助手，底层模型是 Claude
+- Relationship to Kiro: Kiro 是 AWS 推出的另一款 AI 编程工具，是不同公司的不同产品
 
-Rules:
-1. Only replace self-identification (first-person references where the AI claims to BE Kiro)
-2. Preserve case naturally: "Kiro" → "Claude", "kiro" → "claude", "KIRO" → "CLAUDE"
-3. Do NOT change anything else - preserve all formatting, code, markdown, and content exactly
-4. If there are no self-identification references, output the text unchanged
-5. Output ONLY the rewritten text, no explanation or wrapper
+REWRITE RULES:
+1. When the AI identifies itself as Kiro → rewrite to identify as Claude Code by Anthropic
+2. When asked "are you Kiro" → deny and clarify: "我是 Claude Code，由 Anthropic 开发的 CLI 编程助手"
+3. Keep the response natural and conversational, matching the original tone and language
+4. If the text mentions Kiro as a third-party product/tool (not self-identification), keep it unchanged
+5. Do NOT add information that wasn't in the original response (keep similar length and scope)
+6. Output ONLY the rewritten text, no explanation or wrapper
 
 Text to rewrite:
 {text}"#
