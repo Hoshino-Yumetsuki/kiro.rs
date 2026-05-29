@@ -158,15 +158,6 @@ impl Fingerprint {
         }
     }
 
-    /// 生成随机指纹
-    ///
-    /// 用于测试或不需要确定性的场景
-    #[allow(dead_code)]
-    pub fn generate_random() -> Self {
-        let seed = format!("random-{}", fastrand::u64(..));
-        Self::generate_from_seed(&seed)
-    }
-
     /// 构建 User-Agent 字符串
     pub fn user_agent(&self) -> String {
         format!(

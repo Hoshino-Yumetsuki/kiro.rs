@@ -123,16 +123,6 @@ impl CooldownManager {
         }
     }
 
-    /// 使用自定义配置创建冷却管理器
-    #[allow(dead_code)]
-    pub fn with_config(max_short_cooldown_secs: u64, long_cooldown_secs: u64) -> Self {
-        Self {
-            entries: Mutex::new(HashMap::new()),
-            max_short_cooldown_secs,
-            long_cooldown_secs,
-        }
-    }
-
     /// 设置凭据冷却
     ///
     /// 返回实际的冷却时长

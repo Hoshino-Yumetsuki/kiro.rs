@@ -1524,27 +1524,6 @@ impl MultiTokenManager {
         }
     }
 
-    /// 获取缓存的余额（用于故障转移选择）
-    #[allow(dead_code)]
-    fn get_cached_balance(&self, id: u64) -> f64 {
-        let cache = self.balance_cache.lock();
-        if let Some(entry) = cache.get(&id) {
-            // 动态 TTL：低余额 > 低频 > 高频
-            let ttl = if entry.remaining < LOW_BALANCE_THRESHOLD {
-                BALANCE_TTL_LOW_BALANCE_SECS
-            } else if entry.recent_usage >= HIGH_FREQ_THRESHOLD {
-                BALANCE_TTL_HIGH_FREQ_SECS
-            } else {
-                BALANCE_TTL_LOW_FREQ_SECS
-            };
-            if entry.cached_at.elapsed().as_secs() < ttl {
-                return entry.remaining;
-            }
-        }
-        // 缓存不存在或过期，返回 0（会回退到优先级选择）
-        0.0
-    }
-
     /// 更新余额缓存
     pub fn update_balance_cache(&self, id: u64, remaining: f64) {
         let mut cache = self.balance_cache.lock();
@@ -2298,21 +2277,6 @@ impl MultiTokenManager {
             entry.disable_reason = Some(DisableReason::InsufficientBalance);
             tracing::warn!("凭据 #{} 已标记为余额不足", id);
         }
-    }
-
-    /// 获取全局恢复时间（用于 Admin API）
-    #[allow(dead_code)]
-    pub fn get_recovery_time(&self) -> Option<DateTime<Utc>> {
-        *self.global_recovery_time.lock()
-    }
-
-    /// 获取使用额度信息
-    #[allow(dead_code)]
-    pub async fn get_usage_limits(&self) -> anyhow::Result<UsageLimitsResponse> {
-        let config = self.config.read().clone();
-        let ctx = self.acquire_context().await?;
-        let proxy = self.proxy.read().clone();
-        get_usage_limits(&ctx.credentials, &config, &ctx.token, proxy.as_ref()).await
     }
 
     /// 初始化所有凭据的余额缓存
