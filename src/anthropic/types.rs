@@ -107,20 +107,26 @@ impl Thinking {
     }
 
     /// 判断模型是否支持 additionalModelRequestFields.thinking 参数
-    /// 只有 Claude 4+ 系列模型支持，非 Claude 模型不支持
+    /// 只有 Claude Sonnet 4.5+ 和 Opus 4.5+ 系列模型支持
+    /// Haiku 系列不支持 additionalModelRequestFields
     pub fn model_supports_thinking(model: &str) -> bool {
         let lower = model.to_lowercase();
         if !lower.contains("claude") {
             return false;
         }
-        // claude-3.x 不支持原生 thinking
+        // claude-3.x 不支持
         if lower.contains("claude-3-") || lower.contains("claude-3.") {
+            return false;
+        }
+        // haiku 系列不支持 additionalModelRequestFields
+        if lower.contains("haiku") {
             return false;
         }
         // auto 模型由后端决定，保守不传
         if lower == "auto" {
             return false;
         }
+        // sonnet 4.5+, opus 4.5+ 支持
         true
     }
 }
