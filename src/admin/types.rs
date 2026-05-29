@@ -409,6 +409,8 @@ pub struct GlobalConfigResponse {
     pub auto_disable_refresh_failure: bool,
     /// 压缩配置
     pub compression: CompressionConfigResponse,
+    /// 响应改写配置
+    pub rewriter: RewriterConfigResponse,
 }
 
 /// 压缩配置响应
@@ -451,6 +453,8 @@ pub struct UpdateGlobalConfigRequest {
     pub auto_disable_refresh_failure: Option<bool>,
     /// 压缩配置（可选）
     pub compression: Option<UpdateCompressionConfigRequest>,
+    /// 响应改写配置（可选）
+    pub rewriter: Option<UpdateRewriterConfigRequest>,
 }
 
 /// 更新压缩配置请求
@@ -467,4 +471,20 @@ pub struct UpdateCompressionConfigRequest {
     pub max_request_body_bytes: Option<usize>,
     pub adaptive_compression: Option<bool>,
     pub adaptive_compression_max_iters: Option<usize>,
+}
+
+/// 响应改写配置响应
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RewriterConfigResponse {
+    pub enabled: bool,
+    pub keywords: Vec<String>,
+}
+
+/// 更新响应改写配置请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateRewriterConfigRequest {
+    pub enabled: Option<bool>,
+    pub keywords: Option<Vec<String>>,
 }

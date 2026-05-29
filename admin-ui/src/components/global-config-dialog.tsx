@@ -15,7 +15,7 @@ import {
   useGlobalConfig,
   useUpdateGlobalConfig,
 } from '@/hooks/use-credentials'
-import type { UpdateGlobalConfigRequest, UpdateCompressionConfigRequest } from '@/types/api'
+import type { UpdateGlobalConfigRequest, UpdateCompressionConfigRequest, UpdateRewriterConfigRequest } from '@/types/api'
 
 interface GlobalConfigDialogProps {
   open: boolean
@@ -56,6 +56,9 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
   const [cAdaptive, setCAdaptive] = useState(false)
   const [cAdaptiveMaxIters, setCAdaptiveMaxIters] = useState('')
 
+  // 改写配置
+  const [rewriterEnabled, setRewriterEnabled] = useState(false)
+
   const isLoading = proxyLoading || globalLoading
   const isPending = proxyPending || globalPending
 
@@ -81,6 +84,8 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
       setCMaxRequestBodyBytes(c.maxRequestBodyBytes.toString())
       setCAdaptive(c.adaptiveCompression)
       setCAdaptiveMaxIters(c.adaptiveCompressionMaxIters.toString())
+      // 改写配置
+      setRewriterEnabled(globalConfig.rewriter.enabled)
     }
     if (open && proxyConfig) {
       setProxyUrl(proxyConfig.proxyUrl || '')
@@ -164,6 +169,18 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
       setIf('adaptiveCompressionMaxIters', parseInt(cAdaptiveMaxIters) || 0, oc.adaptiveCompressionMaxIters)
       if (hasCompChanges) {
         globalPayload.compression = comp
+        hasGlobalChanges = true
+      }
+
+      // 改写配置 diff
+      const rewriter: UpdateRewriterConfigRequest = {}
+      let hasRewriterChanges = false
+      if (rewriterEnabled !== globalConfig.rewriter.enabled) {
+        rewriter.enabled = rewriterEnabled
+        hasRewriterChanges = true
+      }
+      if (hasRewriterChanges) {
+        globalPayload.rewriter = rewriter
         hasGlobalChanges = true
       }
     }
@@ -348,6 +365,18 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
                 <Switch checked={cAdaptive} onCheckedChange={setCAdaptive} disabled={isPending} aria-label="启用自适应压缩" />
               </div>
               {numInput('gcAdaptiveMaxIters', '最大迭代次数', cAdaptiveMaxIters, setCAdaptiveMaxIters)}
+            </div>
+
+            {/* 响应改写 */}
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold text-muted-foreground">响应改写</h3>
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-sm font-medium">启用响应改写</label>
+                  <p className="text-xs text-muted-foreground">检测到自我认知关键词时，调用模型改写为 Claude 身份</p>
+                </div>
+                <Switch checked={rewriterEnabled} onCheckedChange={setRewriterEnabled} disabled={isPending} aria-label="启用响应改写" />
+              </div>
             </div>
 
             <DialogFooter>

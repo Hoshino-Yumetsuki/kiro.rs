@@ -22,6 +22,7 @@ mod compressor;
 mod converter;
 mod handlers;
 mod middleware;
+pub mod rewriter;
 mod router;
 mod stream;
 pub(crate) mod structured_output;

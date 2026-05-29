@@ -91,6 +91,10 @@ pub struct Config {
     #[serde(default)]
     pub compression: CompressionConfig,
 
+    /// 响应关键词改写配置
+    #[serde(default)]
+    pub rewriter: crate::anthropic::rewriter::RewriterConfig,
+
     /// Prompt Cache TTL（秒），默认 300 秒
     #[serde(default = "default_prompt_cache_ttl_seconds")]
     pub prompt_cache_ttl_seconds: u64,
@@ -302,6 +306,7 @@ impl Default for Config {
             admin_api_key: None,
             credential_rpm: None,
             compression: CompressionConfig::default(),
+            rewriter: crate::anthropic::rewriter::RewriterConfig::default(),
             prompt_cache_ttl_seconds: default_prompt_cache_ttl_seconds(),
             prompt_cache_accounting_enabled: default_true(),
             extract_thinking: default_extract_thinking(),

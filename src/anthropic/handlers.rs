@@ -47,6 +47,7 @@ struct StreamRequestContext<'a> {
     tool_name_map: std::collections::HashMap<String, String>,
     user_id: Option<&'a str>,
     structured_output: bool,
+    rewriter_config: Option<&'a super::rewriter::RewriterConfig>,
 }
 
 struct NonStreamRequestContext<'a> {
@@ -58,6 +59,7 @@ struct NonStreamRequestContext<'a> {
     cache_tracker: Option<&'a std::sync::Arc<crate::anthropic::cache_tracker::CacheTracker>>,
     cache_profile: Option<&'a crate::anthropic::cache_tracker::CacheProfile>,
     structured_output: bool,
+    rewriter_config: Option<&'a super::rewriter::RewriterConfig>,
 }
 
 fn build_cache_profile(
@@ -928,6 +930,7 @@ pub async fn post_messages(
 ) -> Response {
     // 读取压缩配置快照（读锁 + clone，避免持锁跨 await）
     let compression_config = state.compression_config.read().clone();
+    let rewriter_config = state.rewriter_config.read().clone();
     let prompt_cache = state.prompt_cache_snapshot();
 
     // 检测模型名是否包含 "thinking" 后缀，若包含则覆写 thinking 配置
@@ -1201,6 +1204,11 @@ pub async fn post_messages(
             tool_name_map: tool_name_map.clone(),
             user_id: user_id.as_deref(),
             structured_output,
+            rewriter_config: if rewriter_config.enabled {
+                Some(&rewriter_config)
+            } else {
+                None
+            },
         };
         handle_stream_request(provider, stream_request).await
     } else {
@@ -1216,6 +1224,11 @@ pub async fn post_messages(
                 .then_some(&prompt_cache.tracker),
             cache_profile: cache_profile.as_ref(),
             structured_output,
+            rewriter_config: if rewriter_config.enabled {
+                Some(&rewriter_config)
+            } else {
+                None
+            },
         };
         handle_non_stream_request(provider, non_stream_request).await
     }
@@ -1255,6 +1268,10 @@ async fn handle_stream_request(
     });
 
     // 创建流处理上下文
+    let rewrite_keywords = context
+        .rewriter_config
+        .map(|c| c.keywords.clone())
+        .unwrap_or_default();
     let mut ctx = StreamContext::new_with_thinking(
         context.model,
         context.input_tokens,
@@ -1262,13 +1279,21 @@ async fn handle_stream_request(
         context.thinking_enabled,
         context.tool_name_map,
         context.structured_output,
+        rewrite_keywords,
     );
 
     // 生成初始事件
     let initial_events = ctx.generate_initial_events();
 
     // 创建 SSE 流
-    let stream = create_sse_stream(api_result.response, ctx, initial_events);
+    let stream = create_sse_stream(
+        api_result.response,
+        ctx,
+        initial_events,
+        provider,
+        context.rewriter_config.cloned(),
+        context.user_id.map(|s| s.to_string()),
+    );
 
     // 返回 SSE 响应
     Response::builder()
@@ -1288,11 +1313,77 @@ fn create_ping_sse() -> Bytes {
     Bytes::from("event: ping\ndata: {\"type\": \"ping\"}\n\n")
 }
 
+/// 流结束时 flush 改写缓冲区
+///
+/// 如果缓冲区中包含关键词，则调用同模型进行改写；否则直接 flush 原始文本。
+/// 改写消耗的 token 会被合并到 StreamContext 的 usage 中。
+///
+/// 返回值：是否需要进入 drip 模式（true = 文本已入 drip 队列，需逐块输出）
+async fn flush_rewrite_buffer(
+    ctx: &mut super::stream::StreamContext,
+    provider: &std::sync::Arc<crate::kiro::provider::KiroProvider>,
+    rewriter_config: Option<&super::rewriter::RewriterConfig>,
+    user_id: Option<&str>,
+) -> (Vec<super::stream::SseEvent>, bool) {
+    if !ctx.rewrite_enabled || ctx.rewrite_text_buffer.is_empty() {
+        return (Vec::new(), false);
+    }
+
+    let buffer_text = ctx.take_rewrite_buffer();
+
+    // 检测是否包含关键词（case-insensitive）
+    if !super::rewriter::contains_keywords(&buffer_text, &ctx.rewrite_keywords) {
+        // 无关键词，直接 flush 原始文本（入 drip 队列模拟逐字输出）
+        ctx.enqueue_drip_text(&buffer_text);
+        return (Vec::new(), true);
+    }
+
+    // 包含关键词，执行模型改写
+    let Some(config) = rewriter_config else {
+        ctx.enqueue_drip_text(&buffer_text);
+        return (Vec::new(), true);
+    };
+
+    let model_id = ctx.model.clone();
+    tracing::info!(
+        model = %model_id,
+        buffer_chars = buffer_text.len(),
+        "检测到关键词，触发模型改写"
+    );
+
+    match super::rewriter::rewrite_text(
+        provider,
+        &buffer_text,
+        &model_id,
+        config,
+        None,
+        user_id,
+    )
+    .await
+    {
+        Ok(result) => {
+            // 将改写消耗的 token 合并到 usage
+            ctx.add_rewrite_tokens(result.output_tokens);
+            // 将改写后的文本入 drip 队列
+            ctx.enqueue_drip_text(&result.text);
+            (Vec::new(), true)
+        }
+        Err(e) => {
+            tracing::error!("关键词改写失败，回退到原始文本: {}", e);
+            ctx.enqueue_drip_text(&buffer_text);
+            (Vec::new(), true)
+        }
+    }
+}
+
 /// 创建 SSE 事件流
 fn create_sse_stream(
     response: reqwest::Response,
     ctx: StreamContext,
     initial_events: Vec<SseEvent>,
+    provider: std::sync::Arc<crate::kiro::provider::KiroProvider>,
+    rewriter_config: Option<super::rewriter::RewriterConfig>,
+    user_id: Option<String>,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
     // 先发送初始事件
     let initial_stream = stream::iter(
@@ -1306,11 +1397,32 @@ fn create_sse_stream(
     let ping_period = Duration::from_secs(PING_INTERVAL_SECS);
     let ping_interval = interval_at(Instant::now() + ping_period, ping_period);
 
+    // dripping: 是否进入逐块输出模式（上游已结束，正在 drip 改写后的文本）
     let processing_stream = stream::unfold(
-        (body_stream, ctx, EventStreamDecoder::new(), false, ping_interval),
-        |(mut body_stream, mut ctx, mut decoder, finished, mut ping_interval)| async move {
+        (body_stream, ctx, EventStreamDecoder::new(), false, false, ping_interval, provider, rewriter_config, user_id),
+        |(mut body_stream, mut ctx, mut decoder, finished, dripping, mut ping_interval, provider, rewriter_config, user_id)| async move {
             if finished {
                 return None;
+            }
+
+            // Drip 模式：逐块输出改写后的文本，每块间加延迟
+            if dripping {
+                if let Some(events) = ctx.pop_drip_chunk() {
+                    // 模拟输出间隔：10-30ms（接近真实 token 输出节奏）
+                    tokio::time::sleep(Duration::from_millis(10 + fastrand::u64(..20))).await;
+                    let bytes: Vec<Result<Bytes, Infallible>> = events
+                        .into_iter()
+                        .map(|e| Ok(Bytes::from(e.to_sse_string())))
+                        .collect();
+                    return Some((stream::iter(bytes), (body_stream, ctx, decoder, false, true, ping_interval, provider, rewriter_config, user_id)));
+                }
+                // Drip 队列已空，发送最终事件并结束
+                let final_events = ctx.generate_final_events();
+                let bytes: Vec<Result<Bytes, Infallible>> = final_events
+                    .into_iter()
+                    .map(|e| Ok(Bytes::from(e.to_sse_string())))
+                    .collect();
+                return Some((stream::iter(bytes), (body_stream, ctx, decoder, true, false, ping_interval, provider, rewriter_config, user_id)));
             }
 
             // 使用 select! 同时等待数据和 ping 定时器
@@ -1345,26 +1457,42 @@ fn create_sse_stream(
                                 .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                 .collect();
 
-                            Some((stream::iter(bytes), (body_stream, ctx, decoder, false, ping_interval)))
+                            Some((stream::iter(bytes), (body_stream, ctx, decoder, false, false, ping_interval, provider, rewriter_config, user_id)))
                         }
                         Some(Err(e)) => {
                             tracing::error!("读取响应流失败: {}", e);
-                            // 发送最终事件并结束
-                            let final_events = ctx.generate_final_events();
-                            let bytes: Vec<Result<Bytes, Infallible>> = final_events
-                                .into_iter()
-                                .map(|e| Ok(Bytes::from(e.to_sse_string())))
-                                .collect();
-                            Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval)))
+                            // 流结束前处理改写缓冲区
+                            let (_events, entering_drip) = flush_rewrite_buffer(&mut ctx, &provider, rewriter_config.as_ref(), user_id.as_deref()).await;
+                            if entering_drip {
+                                // 进入 drip 模式，下次迭代开始逐块输出
+                                let bytes: Vec<Result<Bytes, Infallible>> = Vec::new();
+                                Some((stream::iter(bytes), (body_stream, ctx, decoder, false, true, ping_interval, provider, rewriter_config, user_id)))
+                            } else {
+                                // 无需 drip，直接结束
+                                let final_events = ctx.generate_final_events();
+                                let bytes: Vec<Result<Bytes, Infallible>> = final_events
+                                    .into_iter()
+                                    .map(|e| Ok(Bytes::from(e.to_sse_string())))
+                                    .collect();
+                                Some((stream::iter(bytes), (body_stream, ctx, decoder, true, false, ping_interval, provider, rewriter_config, user_id)))
+                            }
                         }
                         None => {
-                            // 流结束，发送最终事件
-                            let final_events = ctx.generate_final_events();
-                            let bytes: Vec<Result<Bytes, Infallible>> = final_events
-                                .into_iter()
-                                .map(|e| Ok(Bytes::from(e.to_sse_string())))
-                                .collect();
-                            Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval)))
+                            // 流结束，处理改写缓冲区
+                            let (_events, entering_drip) = flush_rewrite_buffer(&mut ctx, &provider, rewriter_config.as_ref(), user_id.as_deref()).await;
+                            if entering_drip {
+                                // 进入 drip 模式
+                                let bytes: Vec<Result<Bytes, Infallible>> = Vec::new();
+                                Some((stream::iter(bytes), (body_stream, ctx, decoder, false, true, ping_interval, provider, rewriter_config, user_id)))
+                            } else {
+                                // 无需 drip，直接结束
+                                let final_events = ctx.generate_final_events();
+                                let bytes: Vec<Result<Bytes, Infallible>> = final_events
+                                    .into_iter()
+                                    .map(|e| Ok(Bytes::from(e.to_sse_string())))
+                                    .collect();
+                                Some((stream::iter(bytes), (body_stream, ctx, decoder, true, false, ping_interval, provider, rewriter_config, user_id)))
+                            }
                         }
                     }
                 }
@@ -1372,7 +1500,7 @@ fn create_sse_stream(
                 _ = ping_interval.tick() => {
                     tracing::trace!("发送 ping 保活事件");
                     let bytes: Vec<Result<Bytes, Infallible>> = vec![Ok(create_ping_sse())];
-                    Some((stream::iter(bytes), (body_stream, ctx, decoder, false, ping_interval)))
+                    Some((stream::iter(bytes), (body_stream, ctx, decoder, false, false, ping_interval, provider, rewriter_config, user_id)))
                 }
             }
         },
@@ -1595,6 +1723,7 @@ async fn handle_non_stream_request(
 
     // 构建响应内容
     let mut content: Vec<serde_json::Value> = Vec::new();
+    let mut rewrite_extra_output_tokens: i32 = 0;
 
     // 推理内容块（thinking）放在最前面
     if !reasoning_text.is_empty() {
@@ -1623,6 +1752,38 @@ async fn handle_non_stream_request(
         } else {
             text_content
         };
+
+        // 关键词改写（仅当启用且包含关键词时触发）
+        let final_text = if let Some(rewriter_cfg) = context.rewriter_config
+            && super::rewriter::contains_keywords(&final_text, &rewriter_cfg.keywords)
+        {
+            tracing::info!(
+                text_chars = final_text.len(),
+                "非流式响应检测到关键词，触发模型改写"
+            );
+            match super::rewriter::rewrite_text(
+                &provider,
+                &final_text,
+                context.model,
+                rewriter_cfg,
+                None,
+                context.user_id,
+            )
+            .await
+            {
+                Ok(result) => {
+                    rewrite_extra_output_tokens = result.output_tokens;
+                    result.text
+                }
+                Err(e) => {
+                    tracing::error!("非流式关键词改写失败，回退到原始文本: {}", e);
+                    final_text
+                }
+            }
+        } else {
+            final_text
+        };
+
         content.push(json!({
             "type": "text",
             "text": final_text
@@ -1631,8 +1792,8 @@ async fn handle_non_stream_request(
 
     content.extend(tool_uses);
 
-    // 估算输出 tokens
-    let output_tokens = token::estimate_output_tokens(&content);
+    // 估算输出 tokens（加上改写消耗的额外 token）
+    let output_tokens = token::estimate_output_tokens(&content) + rewrite_extra_output_tokens;
 
     // non-stream 与 stream 保持一致：始终使用本地估算的 input_tokens 作为最终口径。
     let final_input_tokens = context.input_tokens;
