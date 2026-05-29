@@ -6,6 +6,7 @@ mod http_client;
 pub mod image;
 mod kiro;
 mod model;
+mod pdf;
 pub mod token;
 
 use std::collections::HashMap;

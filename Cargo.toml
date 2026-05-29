@@ -42,4 +42,5 @@ mime_guess = "2.0.5"      # MIME 类型推断
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }  # 图片处理
 base64 = "0.22.1"       # Base64 编解码
 pulldown-cmark = { version = "0.13.4", default-features = false }  # Markdown 解析（结构化输出 fence 剥离）
+oxidize-pdf = "2.6"      # PDF 文本提取
 sha2 = "0.11.0"

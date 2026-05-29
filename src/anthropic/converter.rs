@@ -380,7 +380,7 @@ pub fn convert_request(
             if let Ok(block) = serde_json::from_value::<ContentBlock>(item.clone()) {
                 match block.block_type.as_str() {
                     "text" => block.text.as_ref().is_some_and(|t| !t.trim().is_empty()),
-                    "image" | "tool_use" | "tool_result" => true,
+                    "image" | "document" | "tool_use" | "tool_result" => true,
                     _ => false,
                 }
             } else {
@@ -755,6 +755,49 @@ fn process_message_content(
                                     Some(if is_error { "error" } else { "success" }.to_string());
 
                                 tool_results.push(result);
+                            }
+                        }
+                        "document" => {
+                            // PDF/文档文本提取：将 document 块转换为文本
+                            if let Some(source) = &block.source {
+                                let extracted = match source.source_type.as_str() {
+                                    "base64"
+                                        if source
+                                            .media_type
+                                            .eq_ignore_ascii_case("application/pdf") =>
+                                    {
+                                        match crate::pdf::extract_text_from_base64(&source.data) {
+                                            Ok(text) => Some(text),
+                                            Err(e) => {
+                                                tracing::warn!("PDF 文本提取失败: {e}");
+                                                None
+                                            }
+                                        }
+                                    }
+                                    "text" => {
+                                        // plain text source: 数据已经是文本
+                                        Some(source.data.clone())
+                                    }
+                                    _ => {
+                                        tracing::warn!(
+                                            "不支持的 document source 类型: {}",
+                                            source.source_type
+                                        );
+                                        None
+                                    }
+                                };
+
+                                if let Some(text) = extracted {
+                                    let mut doc_text = String::new();
+                                    if let Some(title) = &block.title {
+                                        doc_text.push_str(&format!("[Document: {title}]\n"));
+                                    }
+                                    if let Some(context) = &block.context {
+                                        doc_text.push_str(&format!("[Context: {context}]\n"));
+                                    }
+                                    doc_text.push_str(&text);
+                                    text_parts.push(doc_text);
+                                }
                             }
                         }
                         "tool_use" => {

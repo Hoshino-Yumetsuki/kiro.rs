@@ -355,14 +355,22 @@ pub struct ContentBlock {
     pub is_error: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<ImageSource>,
+    /// 文档标题（document 类型专用）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// 文档上下文提示（document 类型专用）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
 }
 
-/// 图片数据源
+/// 图片/文档数据源
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ImageSource {
     #[serde(rename = "type")]
     pub source_type: String,
+    #[serde(default)]
     pub media_type: String,
+    #[serde(default)]
     pub data: String,
 }
 
