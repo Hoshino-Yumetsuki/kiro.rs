@@ -104,7 +104,7 @@ pub fn contains_keywords(text: &str, keywords: &[String]) -> bool {
 
 /// 构建改写请求体
 ///
-/// 使用与原始请求相同的 model_id，构造一个最小化的 Kiro 请求
+/// 使用与原始请求相同的模型（经过 map_model 转换为 Kiro model_id）
 fn build_rewrite_request(
     original_text: &str,
     model_id: &str,
@@ -114,10 +114,14 @@ fn build_rewrite_request(
     // 构建用户消息：将原始文本嵌入到改写 prompt 中
     let prompt = config.rewrite_prompt.replace("{text}", original_text);
 
+    // 模型映射：Anthropic 模型名 → Kiro 模型 ID
+    let kiro_model_id = super::converter::map_model(model_id)
+        .unwrap_or_else(|| model_id.to_string());
+
     let user_input_message = UserInputMessage {
         user_input_message_context: UserInputMessageContext::default(),
         content: prompt,
-        model_id: model_id.to_string(),
+        model_id: kiro_model_id,
         images: Vec::new(),
         origin: Some("AI_EDITOR".to_string()),
     };
