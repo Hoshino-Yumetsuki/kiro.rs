@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* 使用 class 策略控制暗色模式，而非系统偏好 */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* 自定义主题配置 */
 @theme {
   --color-border: hsl(var(--border));
