@@ -621,7 +621,8 @@ impl SseStateManager {
     }
 
     /// stop_reason 优先级（索引越小优先级越高）
-    const STOP_REASON_PRIORITY: &'static [&'static str] = &["max_tokens", "tool_use", "end_turn"];
+    const STOP_REASON_PRIORITY: &'static [&'static str] =
+        &["max_tokens", "refusal", "pause_turn", "tool_use", "end_turn"];
 
     /// 获取 stop_reason 的优先级（越小越高，未知原因返回 usize::MAX）
     fn stop_reason_priority(reason: &str) -> usize {
@@ -633,7 +634,7 @@ impl SseStateManager {
 
     /// 设置 stop_reason（高优先级原因可覆盖低优先级原因）
     ///
-    /// 优先级从高到低：max_tokens > tool_use > end_turn
+    /// 优先级从高到低：max_tokens > refusal > pause_turn > tool_use > end_turn
     pub fn set_stop_reason(&mut self, reason: impl Into<String>) {
         let reason = reason.into();
         let new_priority = Self::stop_reason_priority(&reason);
@@ -3221,5 +3222,33 @@ mod tests {
             "should emit content_block_stop"
         );
         assert!(!ctx.in_thinking_block);
+    }
+
+    #[test]
+    fn test_stop_reason_refusal_over_end_turn() {
+        let mut mgr = SseStateManager::new();
+        mgr.set_stop_reason("end_turn");
+        assert_eq!(mgr.get_stop_reason(), "end_turn");
+        mgr.set_stop_reason("refusal");
+        assert_eq!(mgr.get_stop_reason(), "refusal");
+    }
+
+    #[test]
+    fn test_stop_reason_pause_turn_over_end_turn() {
+        let mut mgr = SseStateManager::new();
+        mgr.set_stop_reason("end_turn");
+        assert_eq!(mgr.get_stop_reason(), "end_turn");
+        mgr.set_stop_reason("pause_turn");
+        assert_eq!(mgr.get_stop_reason(), "pause_turn");
+    }
+
+    #[test]
+    fn test_stop_reason_max_tokens_wins_over_all() {
+        let mut mgr = SseStateManager::new();
+        mgr.set_stop_reason("end_turn");
+        mgr.set_stop_reason("pause_turn");
+        mgr.set_stop_reason("refusal");
+        mgr.set_stop_reason("max_tokens");
+        assert_eq!(mgr.get_stop_reason(), "max_tokens");
     }
 }
