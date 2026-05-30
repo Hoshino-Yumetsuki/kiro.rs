@@ -3,6 +3,7 @@ import { storage } from '@/lib/storage'
 import { LoginPage } from '@/components/login-page'
 import { Dashboard } from '@/components/dashboard'
 import { Toaster } from '@/components/ui/sonner'
+import { TooltipProvider } from '@/components/ui/tooltip'
 
 function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false)
@@ -23,14 +24,14 @@ function App() {
   }
 
   return (
-    <>
+    <TooltipProvider>
       {isLoggedIn ? (
         <Dashboard onLogout={handleLogout} />
       ) : (
         <LoginPage onLogin={handleLogin} />
       )}
       <Toaster position="top-right" />
-    </>
+    </TooltipProvider>
   )
 }
 
