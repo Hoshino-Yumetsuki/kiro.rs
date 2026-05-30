@@ -1,48 +1,54 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Loader2 } from 'lucide-react'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import type { CredentialStatusItem } from '@/types/api'
 
-interface CredentialEditPopoverProps {
-  field: 'priority' | 'region' | 'endpoint'
+interface CredentialEditDialogProps {
+  field: 'priority' | 'region' | 'endpoint' | null
   credential: CredentialStatusItem
   onSave: (field: string, value: string | number | Record<string, string | null>) => void
+  onClose: () => void
   isPending?: boolean
-  trigger: React.ReactNode
-  defaultOpen?: boolean
-  onClose?: () => void
 }
 
-export function CredentialEditPopover({
+const FIELD_TITLES: Record<NonNullable<CredentialEditDialogProps['field']>, string> = {
+  priority: '编辑优先级',
+  region: '编辑 Region',
+  endpoint: '编辑 Endpoint',
+}
+
+export function CredentialEditDialog({
   field,
   credential,
   onSave,
-  isPending = false,
-  trigger,
-  defaultOpen = false,
   onClose,
-}: CredentialEditPopoverProps) {
-  const [open, setOpen] = useState(defaultOpen)
+  isPending = false,
+}: CredentialEditDialogProps) {
   const [priorityValue, setPriorityValue] = useState(String(credential.priority))
   const [regionValue, setRegionValue] = useState(credential.region ?? '')
   const [apiRegionValue, setApiRegionValue] = useState(credential.apiRegion ?? '')
   const [endpointValue, setEndpointValue] = useState(credential.endpoint ?? '')
 
-  const handleOpenChange = (newOpen: boolean) => {
-    if (newOpen) {
+  useEffect(() => {
+    if (field) {
       setPriorityValue(String(credential.priority))
       setRegionValue(credential.region ?? '')
       setApiRegionValue(credential.apiRegion ?? '')
       setEndpointValue(credential.endpoint ?? '')
     }
-    setOpen(newOpen)
-    if (!newOpen) onClose?.()
-  }
+  }, [field, credential])
 
   const handleSave = () => {
+    if (!field) return
     switch (field) {
       case 'priority': {
         const parsed = parseFloat(priorityValue)
@@ -51,7 +57,6 @@ export function CredentialEditPopover({
           return
         }
         onSave('priority', parsed)
-        setOpen(false)
         break
       }
       case 'region': {
@@ -59,7 +64,6 @@ export function CredentialEditPopover({
           region: regionValue.trim() || null,
           apiRegion: apiRegionValue.trim() || null,
         })
-        setOpen(false)
         break
       }
       case 'endpoint': {
@@ -69,23 +73,25 @@ export function CredentialEditPopover({
           return
         }
         onSave('endpoint', trimmed)
-        setOpen(false)
         break
       }
     }
   }
 
-  return (
-    <Popover open={open} onOpenChange={handleOpenChange}>
-      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      <PopoverContent className="w-72" align="start">
-        <div className="space-y-3">
-          <h4 className="font-medium text-sm">
-            {field === 'priority' && '编辑优先级'}
-            {field === 'region' && '编辑 Region'}
-            {field === 'endpoint' && '编辑 Endpoint'}
-          </h4>
+  const handleOpenChange = (open: boolean) => {
+    if (!open) onClose()
+  }
 
+  const isOpen = field !== null
+
+  return (
+    <Dialog open={isOpen} onOpenChange={handleOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{field ? FIELD_TITLES[field] : ''}</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-3">
           {field === 'priority' && (
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">优先级</label>
@@ -97,6 +103,7 @@ export function CredentialEditPopover({
                 onChange={(e) => setPriorityValue(e.target.value)}
                 placeholder="输入非负整数"
                 disabled={isPending}
+                autoFocus
               />
             </div>
           )}
@@ -110,6 +117,7 @@ export function CredentialEditPopover({
                   onChange={(e) => setRegionValue(e.target.value)}
                   placeholder="留空使用全局默认"
                   disabled={isPending}
+                  autoFocus
                 />
               </div>
               <div>
@@ -132,30 +140,29 @@ export function CredentialEditPopover({
                 onChange={(e) => setEndpointValue(e.target.value)}
                 placeholder={credential.effectiveEndpoint}
                 disabled={isPending}
+                autoFocus
               />
             </div>
           )}
-
-          <div className="flex justify-end gap-2 pt-1">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setOpen(false)}
-              disabled={isPending}
-            >
-              取消
-            </Button>
-            <Button
-              size="sm"
-              onClick={handleSave}
-              disabled={isPending}
-            >
-              {isPending && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
-              保存
-            </Button>
-          </div>
         </div>
-      </PopoverContent>
-    </Popover>
+
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={onClose}
+            disabled={isPending}
+          >
+            取消
+          </Button>
+          <Button
+            onClick={handleSave}
+            disabled={isPending}
+          >
+            {isPending && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+            保存
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
