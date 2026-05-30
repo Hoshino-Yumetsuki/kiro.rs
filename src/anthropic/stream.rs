@@ -271,8 +271,13 @@ pub(super) fn normalize_signature_for_sse(sig: &str, model: &str) -> String {
         return cleanup_existing_thinking_signature(sig, external_model.as_deref())
             .unwrap_or_else(|| sig.to_string());
     }
-    normalize_thinking_signature_with_mode(sig, has_external_marker, true, external_model.as_deref())
-        .unwrap_or_else(|| sig.to_string())
+    normalize_thinking_signature_with_mode(
+        sig,
+        has_external_marker,
+        true,
+        external_model.as_deref(),
+    )
+    .unwrap_or_else(|| sig.to_string())
 }
 
 fn signature_model_marker_for_request(model: &str) -> Option<String> {
@@ -1052,7 +1057,7 @@ impl StreamContext {
         self.thinking_buffer.push_str(content);
 
         loop {
-            if !self.in_thinking_block && !self.thinking_extracted {
+            if !self.in_thinking_block {
                 // 查找 <thinking> 开始标签（跳过被反引号包裹的）
                 if let Some(start_pos) = find_real_thinking_start_tag(&self.thinking_buffer) {
                     // 发送 <thinking> 之前的内容作为 text_delta
@@ -1107,7 +1112,8 @@ impl StreamContext {
                     }
                     break;
                 }
-            } else if self.in_thinking_block {
+            } else {
+                // in_thinking_block == true
                 // 剥离 <thinking> 标签后紧跟的换行符（可能跨 chunk）
                 if self.strip_thinking_leading_newline {
                     if self.thinking_buffer.starts_with('\n') {
@@ -1176,14 +1182,6 @@ impl StreamContext {
                     }
                     break;
                 }
-            } else {
-                // thinking 已提取完成，剩余内容作为 text_delta
-                if !self.thinking_buffer.is_empty() {
-                    let remaining = self.thinking_buffer.clone();
-                    self.thinking_buffer.clear();
-                    events.extend(self.create_text_delta_events(&remaining));
-                }
-                break;
             }
         }
 
@@ -1458,12 +1456,8 @@ impl StreamContext {
 
         // thinking 模式下，process_content_with_thinking 可能会为了探测 `<thinking>` 而暂存一小段尾部文本。
         // 如果此时直接开始 tool_use，状态机会自动关闭 text block，导致这段"待输出文本"看起来被 tool_use 吞掉。
-        // 约束：只在尚未进入 thinking block、且 thinking 尚未被提取时，将缓冲区当作普通文本 flush。
-        if self.thinking_enabled
-            && !self.in_thinking_block
-            && !self.thinking_extracted
-            && !self.thinking_buffer.is_empty()
-        {
+        // tool_use 到达意味着不会再有新的 <thinking> 标签，将缓冲区当作普通文本 flush。
+        if self.thinking_enabled && !self.in_thinking_block && !self.thinking_buffer.is_empty() {
             let buffered = std::mem::take(&mut self.thinking_buffer);
             events.extend(self.create_text_delta_events(&buffered));
         }
@@ -1986,8 +1980,7 @@ mod tests {
             OPUS_4_6_NATIVE_SIGNATURE
         );
 
-        let normalized =
-            normalize_signature_for_sse(OPUS_4_6_NATIVE_SIGNATURE, "claude-opus-4-6");
+        let normalized = normalize_signature_for_sse(OPUS_4_6_NATIVE_SIGNATURE, "claude-opus-4-6");
         assert_ne!(normalized, OPUS_4_6_NATIVE_SIGNATURE);
         assert!(
             decode_signature(&normalized)
@@ -3208,6 +3201,126 @@ mod tests {
         assert_eq!(
             msg_start["message"]["stop_sequence"],
             serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn test_multiple_thinking_blocks_via_tags() {
+        // 模拟模型输出两个 <thinking> 块，确保第二个块也能被正确解析
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
+        let _initial_events = ctx.generate_initial_events();
+
+        // 第一个 thinking 块
+        let events1 = ctx.process_assistant_response("<thinking>\nFirst thought\n</thinking>\n\n");
+        assert!(
+            events1.iter().any(|e| {
+                e.event == "content_block_start" && e.data["content_block"]["type"] == "thinking"
+            }),
+            "should start first thinking block"
+        );
+        assert!(
+            events1.iter().any(|e| { e.event == "content_block_stop" }),
+            "should stop first thinking block"
+        );
+
+        // 中间有一些文本
+        let text_events = ctx.process_assistant_response("Some text between blocks\n\n");
+        assert!(
+            text_events.iter().any(|e| {
+                e.event == "content_block_delta"
+                    && e.data["delta"]["type"] == "text_delta"
+                    && e.data["delta"]["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains("Some text")
+            }),
+            "should emit text between thinking blocks"
+        );
+
+        // 第二个 thinking 块
+        let events2 = ctx.process_assistant_response("<thinking>\nSecond thought\n</thinking>\n\n");
+        assert!(
+            events2.iter().any(|e| {
+                e.event == "content_block_start" && e.data["content_block"]["type"] == "thinking"
+            }),
+            "should start second thinking block"
+        );
+        assert!(
+            events2.iter().any(|e| {
+                e.event == "content_block_delta"
+                    && e.data["delta"]["type"] == "thinking_delta"
+                    && e.data["delta"]["thinking"]
+                        .as_str()
+                        .unwrap()
+                        .contains("Second thought")
+            }),
+            "should emit thinking_delta for second block"
+        );
+        assert!(
+            events2.iter().any(|e| { e.event == "content_block_stop" }),
+            "should stop second thinking block"
+        );
+    }
+
+    #[test]
+    fn test_consecutive_thinking_blocks_via_tags() {
+        // 两个 thinking 块之间没有文本
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
+        let _initial_events = ctx.generate_initial_events();
+
+        // 一次性输入两个连续的 thinking 块
+        let events = ctx.process_assistant_response(
+            "<thinking>\nFirst\n</thinking>\n\n<thinking>\nSecond\n</thinking>\n\n",
+        );
+
+        // 应该有两个 content_block_start (thinking)
+        let thinking_starts: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                e.event == "content_block_start" && e.data["content_block"]["type"] == "thinking"
+            })
+            .collect();
+        assert_eq!(
+            thinking_starts.len(),
+            2,
+            "should start two thinking blocks, got {}",
+            thinking_starts.len()
+        );
+
+        // 应该有两个 content_block_stop
+        let stops: Vec<_> = events
+            .iter()
+            .filter(|e| e.event == "content_block_stop")
+            .collect();
+        assert_eq!(
+            stops.len(),
+            2,
+            "should stop two thinking blocks, got {}",
+            stops.len()
+        );
+
+        // 第一个和第二个块的 index 应该不同
+        let first_index = thinking_starts[0].data["index"].as_i64().unwrap();
+        let second_index = thinking_starts[1].data["index"].as_i64().unwrap();
+        assert_ne!(
+            first_index, second_index,
+            "thinking blocks should have different indices"
         );
     }
 }
