@@ -409,6 +409,9 @@ fn generate_websearch_events(
     let mut message_start_usage = json!({
         "input_tokens": billed_input_tokens,
         "output_tokens": 0,
+        "server_tool_use": {
+            "web_search_requests": 1
+        }
     });
     if let Some(cache_context) = cache_context {
         message_start_usage["cache_creation_input_tokens"] =
@@ -583,19 +586,9 @@ fn generate_websearch_events(
     // 10. message_delta
     // 官方 API 的 message_delta.delta 中没有 stop_sequence 字段
     let output_tokens = (summary.len() as i32 + 3) / 4; // 简单估算
-    let mut message_delta_usage = json!({
-        "input_tokens": billed_input_tokens,
+    let message_delta_usage = json!({
         "output_tokens": output_tokens,
-        "server_tool_use": {
-            "web_search_requests": 1
-        }
     });
-    if let Some(cache_context) = cache_context {
-        message_delta_usage["cache_creation_input_tokens"] =
-            json!(cache_context.cache_creation_input_tokens);
-        message_delta_usage["cache_read_input_tokens"] =
-            json!(cache_context.cache_read_input_tokens);
-    }
     events.push(SseEvent::new(
         "message_delta",
         json!({
@@ -916,13 +909,25 @@ mod tests {
             message_start.data["message"]["usage"]["cache_read_input_tokens"],
             9
         );
-
-        assert_eq!(message_delta.data["usage"]["input_tokens"], 107);
         assert_eq!(
-            message_delta.data["usage"]["cache_creation_input_tokens"],
-            7
+            message_start.data["message"]["usage"]["server_tool_use"]
+                ["web_search_requests"],
+            1
         );
-        assert_eq!(message_delta.data["usage"]["cache_read_input_tokens"], 9);
+
+        assert!(message_delta.data["usage"].get("input_tokens").is_none());
+        assert!(message_delta.data["usage"]
+            .get("cache_creation_input_tokens")
+            .is_none());
+        assert!(message_delta.data["usage"]
+            .get("cache_read_input_tokens")
+            .is_none());
+        assert!(message_delta.data["usage"]
+            .get("server_tool_use")
+            .is_none());
+        assert!(
+            message_delta.data["usage"].get("output_tokens").is_some()
+        );
     }
 
     #[test]
@@ -945,12 +950,22 @@ mod tests {
                 .get("cache_creation_input_tokens")
                 .is_none()
         );
+        assert_eq!(
+            message_start.data["message"]["usage"]["server_tool_use"]
+                ["web_search_requests"],
+            1
+        );
         assert!(
             message_delta.data["usage"]
                 .get("cache_read_input_tokens")
                 .is_none()
         );
         assert!(message_delta.data["usage"].get("cache_creation").is_none());
+        assert!(message_delta.data["usage"].get("input_tokens").is_none());
+        assert!(message_delta.data["usage"].get("server_tool_use").is_none());
+        assert!(
+            message_delta.data["usage"].get("output_tokens").is_some()
+        );
     }
 
     #[test]
@@ -990,13 +1005,50 @@ mod tests {
             message_start.data["message"]["usage"]["cache_read_input_tokens"],
             0
         );
-        assert_eq!(message_delta.data["usage"]["input_tokens"], billed);
         assert_eq!(
-            message_delta.data["usage"]["cache_creation_input_tokens"],
-            0
+            message_start.data["message"]["usage"]["server_tool_use"]
+                ["web_search_requests"],
+            1
         );
-        assert_eq!(message_delta.data["usage"]["cache_read_input_tokens"], 0);
+        assert!(message_delta.data["usage"].get("input_tokens").is_none());
+        assert!(message_delta.data["usage"]
+            .get("cache_creation_input_tokens")
+            .is_none());
+        assert!(message_delta.data["usage"]
+            .get("cache_read_input_tokens")
+            .is_none());
+        assert!(message_delta.data["usage"]
+            .get("server_tool_use")
+            .is_none());
         assert_eq!(message_delta.data["usage"]["output_tokens"], output_tokens);
+    }
+
+    #[test]
+    fn test_websearch_message_delta_usage_only_has_output_tokens_key() {
+        let events = generate_websearch_events(
+            "claude-sonnet-4",
+            "rust",
+            "srvtoolu_test",
+            None,
+            123,
+            None,
+        );
+
+        let message_delta = events
+            .iter()
+            .find(|e| e.event == "message_delta")
+            .expect("should have message_delta");
+
+        use std::collections::HashSet;
+        let keys: HashSet<&str> = message_delta.data["usage"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+        let mut expected = HashSet::new();
+        expected.insert("output_tokens");
+        assert_eq!(keys, expected);
     }
 
     #[test]
