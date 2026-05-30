@@ -394,9 +394,6 @@ pub struct ImageSource {
     pub media_type: String,
     #[serde(default)]
     pub data: String,
-    /// URL image source (not supported by this proxy)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
 }
 
 // === Count Tokens 端点类型 ===
