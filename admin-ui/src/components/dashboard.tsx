@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, Trash2, RotateCcw, CheckCircle2, Globe, ArrowUp, ArrowDown, Wallet, Eraser } from 'lucide-react'
+import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, Trash2, RotateCcw, CheckCircle2, ArrowUp, ArrowDown, Wallet, Eraser, Settings } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { storage } from '@/lib/storage'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -77,8 +77,8 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const { mutate: deleteCredential } = useDeleteCredential()
   const { mutate: resetFailure } = useResetFailure()
   const { mutate: forceRefreshToken } = useForceRefreshToken()
-  const { data: proxyConfig } = useProxyConfig()
-  const { data: globalConfig } = useGlobalConfig()
+  useProxyConfig()
+  useGlobalConfig()
 
   // 构建 id -> cachedBalance 的映射
   const cachedBalanceMap = new Map(
@@ -608,57 +608,32 @@ export function Dashboard({ onLogout }: DashboardProps) {
 
       {/* 主内容 */}
       <main className="container mx-auto px-4 md:px-8 py-6">
-        {/* 统计卡片 */}
-        <div className="grid gap-4 md:grid-cols-3 mb-6">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                凭据总数
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{data?.total || 0}</div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                可用凭据
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-green-600">{data?.available || 0}</div>
-            </CardContent>
-          </Card>
-          <Card
-            className="cursor-pointer hover:border-primary/50 transition-colors"
-            onClick={() => setGlobalConfigDialogOpen(true)}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setGlobalConfigDialogOpen(true) } }}
-            role="button"
-            tabIndex={0}
-            aria-label="打开全局配置"
-          >
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1.5">
-                <Globe className="h-4 w-4" aria-hidden="true" />
-                全局配置
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-xs space-y-0.5">
-                <div className="truncate">{globalConfig?.region || '-'} | RPM: {globalConfig?.credentialRpm ?? '默认'}</div>
-                <div className="truncate">Endpoint: {globalConfig?.defaultEndpoint || 'ide'} | 压缩: {globalConfig?.compression.enabled ? '开' : '关'}</div>
-                <div className="truncate">代理: {proxyConfig?.proxyUrl || '无'}</div>
-              </div>
-            </CardContent>
-          </Card>
+        {/* 摘要栏 */}
+        <div className="flex items-center justify-between rounded-lg border bg-card px-4 py-3 mb-6">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <span className="text-foreground">{data?.total || 0} 凭据</span>
+            <span className="text-muted-foreground">
+              ({data?.available || 0} 可用 / {disabledCredentialCount} 已禁用)
+            </span>
+          </div>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setGlobalConfigDialogOpen(true)}
+              aria-label="全局配置"
+              title="全局配置"
+            >
+              <Settings className="h-5 w-5" aria-hidden="true" />
+            </Button>
+          </div>
         </div>
 
         {/* 凭据列表 */}
         <div className="space-y-4">
+          {/* 工具栏：始终可见行 */}
           <div className="flex items-center justify-between flex-wrap gap-2">
-            <div className="flex items-center gap-4">
-              <h2 className="text-xl font-semibold">凭据管理</h2>
+            <div className="flex items-center gap-2">
               {/* 排序控件 */}
               <div className="flex items-center gap-1">
                 {([
@@ -685,72 +660,34 @@ export function Dashboard({ onLogout }: DashboardProps) {
                   )
                 })}
               </div>
-              {selectedIds.size > 0 && (
-                <div className="flex items-center gap-2">
-                  <Badge variant="secondary">已选择 {selectedIds.size} 个</Badge>
-                  <Button onClick={deselectAll} size="sm" variant="ghost">
-                    取消选择
-                  </Button>
-                </div>
-              )}
             </div>
-            <div className="flex gap-2">
-              {selectedIds.size > 0 && (
-                <>
-                  <Button onClick={handleBatchVerify} size="sm" variant="outline">
-                    <CheckCircle2 className="h-4 w-4 mr-2" aria-hidden="true" />
-                    批量验活
-                  </Button>
-                  <Button onClick={handleBatchForceRefresh} size="sm" variant="outline">
-                    <RefreshCw className="h-4 w-4 mr-2" aria-hidden="true" />
-                    批量刷新
-                  </Button>
-                  <Button onClick={handleBatchResetFailure} size="sm" variant="outline">
-                    <RotateCcw className="h-4 w-4 mr-2" aria-hidden="true" />
-                    恢复异常
-                  </Button>
-                  <Button
-                    onClick={handleBatchDelete}
-                    size="sm"
-                    variant="destructive"
-                    disabled={selectedDisabledCount === 0}
-                    title={selectedDisabledCount === 0 ? '只能删除已禁用凭据' : undefined}
-                  >
-                    <Trash2 className="h-4 w-4 mr-2" aria-hidden="true" />
-                    批量删除
-                  </Button>
-                </>
-              )}
+            <div className="flex items-center gap-2">
               {verifying && !verifyDialogOpen && (
                 <Button onClick={() => setVerifyDialogOpen(true)} size="sm" variant="secondary">
                   <CheckCircle2 className="h-4 w-4 mr-2 animate-spin" aria-hidden="true" />
                   验活中… {verifyProgress.current}/{verifyProgress.total}
                 </Button>
               )}
-              {data?.credentials && data.credentials.length > 0 && (
-                <Button
-                  onClick={handleQueryCurrentPageInfo}
-                  size="sm"
-                  variant="outline"
-                  disabled={queryingInfo}
-                >
-                  <Wallet className={`h-4 w-4 mr-2 ${queryingInfo ? 'animate-pulse' : ''}`} aria-hidden="true" />
-                  {queryingInfo ? `查询中… ${queryInfoProgress.current}/${queryInfoProgress.total}` : '查询信息'}
-                </Button>
-              )}
-              {data?.credentials && data.credentials.length > 0 && (
-                <Button
-                  onClick={handleClearAll}
-                  size="sm"
-                  variant="outline"
-                  className="text-destructive hover:text-destructive"
-                  disabled={disabledCredentialCount === 0}
-                  title={disabledCredentialCount === 0 ? '没有可清除的已禁用凭据' : undefined}
-                >
-                  <Eraser className="h-4 w-4 mr-2" aria-hidden="true" />
-                  清除已禁用
-                </Button>
-              )}
+              <Button
+                onClick={handleQueryCurrentPageInfo}
+                size="sm"
+                variant="outline"
+                disabled={queryingInfo || !data?.credentials || data.credentials.length === 0}
+              >
+                <Wallet className={`h-4 w-4 mr-2 ${queryingInfo ? 'animate-pulse' : ''}`} aria-hidden="true" />
+                {queryingInfo ? `查询中… ${queryInfoProgress.current}/${queryInfoProgress.total}` : '查询信息'}
+              </Button>
+              <Button
+                onClick={handleClearAll}
+                size="sm"
+                variant="outline"
+                className="text-destructive hover:text-destructive"
+                disabled={disabledCredentialCount === 0}
+                title={disabledCredentialCount === 0 ? '没有可清除的已禁用凭据' : undefined}
+              >
+                <Eraser className="h-4 w-4 mr-2" aria-hidden="true" />
+                清除已禁用
+              </Button>
               <Button variant="outline" onClick={() => setImportDialogOpen(true)} size="sm">
                 <Upload className="h-4 w-4 mr-2" aria-hidden="true" />
                 导入凭据
@@ -761,6 +698,40 @@ export function Dashboard({ onLogout }: DashboardProps) {
               </Button>
             </div>
           </div>
+
+          {/* 批量操作栏：选中时显示 */}
+          {selectedIds.size > 0 && (
+            <div className="flex items-center gap-2 rounded-lg border bg-muted/50 px-4 py-2">
+              <Badge variant="secondary">已选 {selectedIds.size} 项</Badge>
+              <Button onClick={deselectAll} size="sm" variant="ghost" className="h-7 text-xs">
+                取消选择
+              </Button>
+              <div className="ml-auto flex items-center gap-2">
+                <Button onClick={handleBatchVerify} size="sm" variant="outline">
+                  <CheckCircle2 className="h-4 w-4 mr-2" aria-hidden="true" />
+                  批量验活
+                </Button>
+                <Button onClick={handleBatchForceRefresh} size="sm" variant="outline">
+                  <RefreshCw className="h-4 w-4 mr-2" aria-hidden="true" />
+                  批量刷新
+                </Button>
+                <Button onClick={handleBatchResetFailure} size="sm" variant="outline">
+                  <RotateCcw className="h-4 w-4 mr-2" aria-hidden="true" />
+                  重置失败
+                </Button>
+                <Button
+                  onClick={handleBatchDelete}
+                  size="sm"
+                  variant="destructive"
+                  disabled={selectedDisabledCount === 0}
+                  title={selectedDisabledCount === 0 ? '只能删除已禁用凭据' : undefined}
+                >
+                  <Trash2 className="h-4 w-4 mr-2" aria-hidden="true" />
+                  批量删除
+                </Button>
+              </div>
+            </div>
+          )}
           {data?.credentials.length === 0 ? (
             <Card>
               <CardContent className="py-12 text-center">
