@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 use crate::common::utf8::floor_char_boundary;
 use crate::kiro::model::events::{Event, MeteringEvent, ReasoningContentEvent};
@@ -278,6 +279,15 @@ pub(super) fn normalize_signature_for_sse(sig: &str, model: &str) -> String {
         external_model.as_deref(),
     )
     .unwrap_or_else(|| sig.to_string())
+}
+
+pub(super) fn synthetic_thinking_signature(model: &str, seed: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"kiro-rs synthetic thinking signature\0");
+    hasher.update(model.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(seed.as_bytes());
+    format!("kiro-rs-synthetic-{}", hex::encode(hasher.finalize()))
 }
 
 fn signature_model_marker_for_request(model: &str) -> Option<String> {
@@ -1146,6 +1156,7 @@ impl StreamContext {
                     if let Some(thinking_index) = self.thinking_block_index {
                         // 先发送空的 thinking_delta
                         events.push(self.create_thinking_delta_event(thinking_index, ""));
+                        events.push(self.create_synthetic_signature_delta_event(thinking_index));
                         // 再发送 content_block_stop
                         if let Some(stop_event) =
                             self.state_manager.handle_content_block_stop(thinking_index)
@@ -1263,6 +1274,25 @@ impl StreamContext {
         )
     }
 
+    fn create_signature_delta_event(&self, index: i32, signature: &str) -> SseEvent {
+        SseEvent::new(
+            "content_block_delta",
+            json!({
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {
+                    "type": "signature_delta",
+                    "signature": signature
+                }
+            }),
+        )
+    }
+
+    fn create_synthetic_signature_delta_event(&self, index: i32) -> SseEvent {
+        let seed = format!("{}:{}", self.message_id, index);
+        self.create_signature_delta_event(index, &synthetic_thinking_signature(&self.model, &seed))
+    }
+
     /// 处理原生推理内容事件（reasoningContentEvent）
     fn process_reasoning_content(&mut self, reasoning: &ReasoningContentEvent) -> Vec<SseEvent> {
         let mut events = Vec::new();
@@ -1275,17 +1305,12 @@ impl StreamContext {
                     // 发送 signature_delta（如果有待发送的签名）
                     if let Some(sig) = self.pending_signature.take() {
                         let normalized_sig = normalize_signature_for_sse(&sig, &self.model);
-                        events.push(SseEvent::new(
-                            "content_block_delta",
-                            json!({
-                                "type": "content_block_delta",
-                                "index": thinking_index,
-                                "delta": {
-                                    "type": "signature_delta",
-                                    "signature": normalized_sig
-                                }
-                            }),
-                        ));
+                        events.push(
+                            self.create_signature_delta_event(thinking_index, &normalized_sig),
+                        );
+                    } else {
+                        events.push(self.create_thinking_delta_event(thinking_index, ""));
+                        events.push(self.create_synthetic_signature_delta_event(thinking_index));
                     }
                     if let Some(stop_event) =
                         self.state_manager.handle_content_block_stop(thinking_index)
@@ -1380,17 +1405,7 @@ impl StreamContext {
                         events.push(self.create_thinking_delta_event(thinking_index, ""));
                     }
                     let normalized_sig = normalize_signature_for_sse(sig, &self.model);
-                    events.push(SseEvent::new(
-                        "content_block_delta",
-                        json!({
-                            "type": "content_block_delta",
-                            "index": thinking_index,
-                            "delta": {
-                                "type": "signature_delta",
-                                "signature": normalized_sig
-                            }
-                        }),
-                    ));
+                    events.push(self.create_signature_delta_event(thinking_index, &normalized_sig));
                     if let Some(stop_event) =
                         self.state_manager.handle_content_block_stop(thinking_index)
                     {
@@ -1437,6 +1452,7 @@ impl StreamContext {
             if let Some(thinking_index) = self.thinking_block_index {
                 // 先发送空的 thinking_delta
                 events.push(self.create_thinking_delta_event(thinking_index, ""));
+                events.push(self.create_synthetic_signature_delta_event(thinking_index));
                 // 再发送 content_block_stop
                 if let Some(stop_event) =
                     self.state_manager.handle_content_block_stop(thinking_index)
@@ -1549,6 +1565,7 @@ impl StreamContext {
                     // 关闭 thinking 块：先发送空的 thinking_delta，再发送 content_block_stop
                     if let Some(thinking_index) = self.thinking_block_index {
                         events.push(self.create_thinking_delta_event(thinking_index, ""));
+                        events.push(self.create_synthetic_signature_delta_event(thinking_index));
                         if let Some(stop_event) =
                             self.state_manager.handle_content_block_stop(thinking_index)
                         {
@@ -1576,6 +1593,7 @@ impl StreamContext {
                     if let Some(thinking_index) = self.thinking_block_index {
                         // 先发送空的 thinking_delta
                         events.push(self.create_thinking_delta_event(thinking_index, ""));
+                        events.push(self.create_synthetic_signature_delta_event(thinking_index));
                         // 再发送 content_block_stop
                         if let Some(stop_event) =
                             self.state_manager.handle_content_block_stop(thinking_index)
@@ -1598,17 +1616,10 @@ impl StreamContext {
                 // 发送 signature_delta（如果有待发送的签名）
                 if let Some(sig) = self.pending_signature.take() {
                     let normalized_sig = normalize_signature_for_sse(&sig, &self.model);
-                    events.push(SseEvent::new(
-                        "content_block_delta",
-                        json!({
-                            "type": "content_block_delta",
-                            "index": thinking_index,
-                            "delta": {
-                                "type": "signature_delta",
-                                "signature": normalized_sig
-                            }
-                        }),
-                    ));
+                    events.push(self.create_signature_delta_event(thinking_index, &normalized_sig));
+                } else {
+                    events.push(self.create_thinking_delta_event(thinking_index, ""));
+                    events.push(self.create_synthetic_signature_delta_event(thinking_index));
                 }
                 // 发送 content_block_stop
                 if let Some(stop_event) =
@@ -2687,6 +2698,40 @@ mod tests {
     }
 
     #[test]
+    fn test_tag_based_thinking_emits_synthetic_signature() {
+        let mut ctx = StreamContext::new_with_thinking(
+            "claude-sonnet-4.6",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
+        let _initial_events = ctx.generate_initial_events();
+
+        let events = ctx.process_kiro_event(&Event::AssistantResponse(
+            serde_json::from_value(
+                json!({"content": "<thinking>visible thought</thinking>\n\nanswer"}),
+            )
+            .unwrap(),
+        ));
+
+        let signature_delta = events
+            .iter()
+            .find(|e| {
+                e.event == "content_block_delta" && e.data["delta"]["type"] == "signature_delta"
+            })
+            .expect("tag-based thinking should close with a signature_delta");
+        assert!(
+            signature_delta.data["delta"]["signature"]
+                .as_str()
+                .is_some_and(|sig| sig.starts_with("kiro-rs-synthetic-")),
+            "synthetic signature should be non-empty and namespaced"
+        );
+    }
+
+    #[test]
     fn test_reasoning_content_emits_normalized_opus_4_6_signature() {
         let mut ctx = StreamContext::new_with_thinking(
             "claude-opus-4-6",
@@ -3038,6 +3083,99 @@ mod tests {
             final_events.iter().any(|e| e.event == "content_block_stop"),
             "should emit content_block_stop during final flush"
         );
+    }
+
+    #[test]
+    fn test_generate_final_events_closes_open_thinking_block_with_synthetic_signature() {
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
+        let _initial_events = ctx.generate_initial_events();
+
+        ctx.process_kiro_event(&Event::ReasoningContent(ReasoningContentEvent {
+            text: Some("still thinking...".to_string()),
+            signature: None,
+            redacted_content: None,
+        }));
+
+        let final_events = ctx.generate_final_events();
+        let sequence: Vec<&str> = final_events
+            .iter()
+            .filter_map(|event| match event.event.as_str() {
+                "content_block_delta" => event.data["delta"]["type"].as_str(),
+                "content_block_stop" => Some("content_block_stop"),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            sequence.starts_with(&["thinking_delta", "signature_delta", "content_block_stop",])
+        );
+        let signature = final_events
+            .iter()
+            .find(|e| {
+                e.event == "content_block_delta" && e.data["delta"]["type"] == "signature_delta"
+            })
+            .and_then(|e| e.data["delta"]["signature"].as_str())
+            .expect("signature_delta should be emitted during final flush");
+        assert!(signature.starts_with("kiro-rs-synthetic-"));
+    }
+
+    #[test]
+    fn test_redacted_thinking_closes_open_block_with_synthetic_signature() {
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
+        let _initial_events = ctx.generate_initial_events();
+
+        ctx.process_kiro_event(&Event::ReasoningContent(ReasoningContentEvent {
+            text: Some("plain thinking".to_string()),
+            signature: None,
+            redacted_content: None,
+        }));
+
+        let events = ctx.process_kiro_event(&Event::ReasoningContent(ReasoningContentEvent {
+            text: None,
+            signature: None,
+            redacted_content: Some("encrypted_data_here".to_string()),
+        }));
+
+        let sequence: Vec<&str> = events
+            .iter()
+            .filter_map(|event| match event.event.as_str() {
+                "content_block_delta" => event.data["delta"]["type"].as_str(),
+                "content_block_stop" => Some("content_block_stop"),
+                "content_block_start" => event.data["content_block"]["type"].as_str(),
+                _ => None,
+            })
+            .collect();
+
+        assert!(sequence.starts_with(&[
+            "thinking_delta",
+            "signature_delta",
+            "content_block_stop",
+            "redacted_thinking",
+        ]));
+        let signature = events
+            .iter()
+            .find(|e| {
+                e.event == "content_block_delta" && e.data["delta"]["type"] == "signature_delta"
+            })
+            .and_then(|e| e.data["delta"]["signature"].as_str())
+            .expect("signature_delta should close the open thinking block");
+        assert!(signature.starts_with("kiro-rs-synthetic-"));
     }
 
     /// 辅助函数：从事件列表中提取所有 thinking_delta 的拼接内容

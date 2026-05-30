@@ -22,7 +22,10 @@ use tokio::time::{Instant, interval_at};
 
 use super::converter::{ConversionError, convert_request};
 use super::middleware::AppState;
-use super::stream::{CacheUsageBreakdown, SseEvent, StreamContext, normalize_signature_for_sse};
+use super::stream::{
+    CacheUsageBreakdown, SseEvent, StreamContext, normalize_signature_for_sse,
+    synthetic_thinking_signature,
+};
 use super::types::{
     CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, ModelInfo,
     ModelsResponse, Thinking,
@@ -2201,7 +2204,7 @@ fn build_thinking_content_block(
     });
     let sig = reasoning_signature
         .map(|s| normalize_signature_for_sse(s, model))
-        .unwrap_or_default();
+        .unwrap_or_else(|| synthetic_thinking_signature(model, reasoning_text));
     thinking_block["signature"] = json!(sig);
 
     Some(thinking_block)
@@ -2539,6 +2542,21 @@ mod tests {
     }
 
     #[test]
+    fn test_build_thinking_content_block_emits_synthetic_signature() {
+        let block = build_thinking_content_block("visible thought", None, "claude-sonnet-4.6")
+            .expect("thinking text should create a block");
+
+        assert_eq!(block["type"], "thinking");
+        assert_eq!(block["thinking"], "visible thought");
+        assert!(
+            block["signature"]
+                .as_str()
+                .is_some_and(|sig| sig.starts_with("kiro-rs-synthetic-")),
+            "non-stream thinking blocks need a replayable signature"
+        );
+    }
+
+    #[test]
     fn test_extract_tag_echo_normalizer_for_direct_test_tag_prompt() {
         let mut payload = sample_messages_request();
         payload.messages = vec![Message {
@@ -2677,7 +2695,12 @@ mod tests {
     fn test_build_thinking_content_block_always_emits_signature_when_none() {
         let block = build_thinking_content_block("thinking text", None, "claude-sonnet-4-20250514")
             .expect("thinking block should be built");
-        assert_eq!(block["signature"], json!(""));
+        assert!(
+            block["signature"]
+                .as_str()
+                .is_some_and(|sig| sig.starts_with("kiro-rs-synthetic-")),
+            "missing upstream signatures should be replaced for OpenCode replay"
+        );
     }
 
     #[test]
