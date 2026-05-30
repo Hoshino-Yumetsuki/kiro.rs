@@ -215,6 +215,7 @@ pub enum ConversionError {
     UnsupportedModel(String),
     EmptyMessages,
     EmptyMessageContent,
+    UrlImageNotSupported,
 }
 
 impl std::fmt::Display for ConversionError {
@@ -223,6 +224,9 @@ impl std::fmt::Display for ConversionError {
             ConversionError::UnsupportedModel(model) => write!(f, "模型不支持: {}", model),
             ConversionError::EmptyMessages => write!(f, "消息列表为空"),
             ConversionError::EmptyMessageContent => write!(f, "消息内容为空"),
+            ConversionError::UrlImageNotSupported => {
+                write!(f, "URL image sources are not supported by this proxy")
+            }
         }
     }
 }
@@ -371,7 +375,22 @@ pub fn convert_request(
         &req.messages
     };
 
-    // 2.6. 验证最后一条消息内容不为空
+    // 2.6. 检查 URL 图片源（不支持）
+    // 遍历所有消息的内容块，若发现 image 类型且 source.url 存在，则拒绝
+    for msg in messages {
+        if let serde_json::Value::Array(arr) = &msg.content {
+            for item in arr {
+                if let Ok(block) = serde_json::from_value::<ContentBlock>(item.clone())
+                    && block.block_type == "image"
+                    && block.source.as_ref().is_some_and(|s| s.url.is_some())
+                {
+                    return Err(ConversionError::UrlImageNotSupported);
+                }
+            }
+        }
+    }
+
+    // 2.7. 验证最后一条消息内容不为空
     // 检查最后一条消息（经过 prefill 处理后）是否有有效内容
     let last_message = messages.last().unwrap();
     let has_valid_content = match &last_message.content {
@@ -3267,6 +3286,45 @@ mod tests {
         assert!(
             result.assistant_response_message.content.is_empty(),
             "仅 tool_use 时合并阶段不应主动补 '.'"
+        );
+    }
+
+    #[test]
+    fn test_convert_request_rejects_url_image_source() {
+        // URL 图片源应返回 UrlImageNotSupported 错误
+        use super::super::types::Message as AnthropicMessage;
+
+        let req = MessagesRequest {
+            model: "claude-sonnet-4".to_string(),
+            max_tokens: 1024,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "url",
+                            "url": "https://example.com/image.jpg",
+                            "media_type": "image/jpeg"
+                        }
+                    },
+                    {"type": "text", "text": "describe this image"}
+                ]),
+            }],
+            stream: false,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: None,
+        };
+
+        let err = convert_request(&req, &CompressionConfig::default()).unwrap_err();
+        assert!(
+            matches!(err, ConversionError::UrlImageNotSupported),
+            "URL 图片源应返回 UrlImageNotSupported，实际: {:?}",
+            err
         );
     }
 }

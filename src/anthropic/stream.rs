@@ -300,10 +300,7 @@ fn normalize_model_alias_marker(meta: &mut Vec<u8>, external_model: Option<&str>
 }
 
 fn model_marker_matches_external_model(marker: &[u8], external_model: &str) -> bool {
-    marker == external_model.as_bytes()
-        || signature_model_aliases(external_model)
-            .iter()
-            .any(|alias| marker == *alias)
+    marker == external_model.as_bytes() || signature_model_aliases(external_model).contains(&marker)
 }
 
 fn signature_model_aliases(external_model: &str) -> &'static [&'static [u8]] {
@@ -621,7 +618,13 @@ impl SseStateManager {
     }
 
     /// stop_reason 优先级（索引越小优先级越高）
-    const STOP_REASON_PRIORITY: &'static [&'static str] = &["max_tokens", "tool_use", "end_turn"];
+    const STOP_REASON_PRIORITY: &'static [&'static str] = &[
+        "max_tokens",
+        "refusal",
+        "pause_turn",
+        "tool_use",
+        "end_turn",
+    ];
 
     /// 获取 stop_reason 的优先级（越小越高，未知原因返回 usize::MAX）
     fn stop_reason_priority(reason: &str) -> usize {
@@ -633,7 +636,7 @@ impl SseStateManager {
 
     /// 设置 stop_reason（高优先级原因可覆盖低优先级原因）
     ///
-    /// 优先级从高到低：max_tokens > tool_use > end_turn
+    /// 优先级从高到低：max_tokens > refusal > pause_turn > tool_use > end_turn
     pub fn set_stop_reason(&mut self, reason: impl Into<String>) {
         let reason = reason.into();
         let new_priority = Self::stop_reason_priority(&reason);
@@ -1084,8 +1087,7 @@ impl StreamContext {
                             "index": thinking_index,
                             "content_block": {
                                 "type": "thinking",
-                                "thinking": "",
-                                "signature": ""
+                                "thinking": ""
                             }
                         }),
                     );
@@ -1336,12 +1338,11 @@ impl StreamContext {
                     thinking_index,
                     "thinking",
                     json!({
-                        "type": "content_block_start",
-                        "index": thinking_index,
+                            "type": "content_block_start",
+                            "index": thinking_index,
                         "content_block": {
                             "type": "thinking",
-                            "thinking": "",
-                            "signature": ""
+                            "thinking": ""
                         }
                     }),
                 );
@@ -1369,12 +1370,11 @@ impl StreamContext {
                     thinking_index,
                     "thinking",
                     json!({
-                        "type": "content_block_start",
-                        "index": thinking_index,
+                            "type": "content_block_start",
+                            "index": thinking_index,
                         "content_block": {
                             "type": "thinking",
-                            "thinking": "",
-                            "signature": ""
+                            "thinking": ""
                         }
                     }),
                 );
@@ -3221,5 +3221,51 @@ mod tests {
             "should emit content_block_stop"
         );
         assert!(!ctx.in_thinking_block);
+    }
+
+    #[test]
+    fn test_stop_reason_refusal_over_end_turn() {
+        let mut mgr = SseStateManager::new();
+        mgr.set_stop_reason("end_turn");
+        assert_eq!(mgr.get_stop_reason(), "end_turn");
+        mgr.set_stop_reason("refusal");
+        assert_eq!(mgr.get_stop_reason(), "refusal");
+    }
+
+    #[test]
+    fn test_stop_reason_pause_turn_over_end_turn() {
+        let mut mgr = SseStateManager::new();
+        mgr.set_stop_reason("end_turn");
+        assert_eq!(mgr.get_stop_reason(), "end_turn");
+        mgr.set_stop_reason("pause_turn");
+        assert_eq!(mgr.get_stop_reason(), "pause_turn");
+    }
+
+    #[test]
+    fn test_stop_reason_max_tokens_wins_over_all() {
+        let mut mgr = SseStateManager::new();
+        mgr.set_stop_reason("end_turn");
+        mgr.set_stop_reason("pause_turn");
+        mgr.set_stop_reason("refusal");
+        mgr.set_stop_reason("max_tokens");
+        assert_eq!(mgr.get_stop_reason(), "max_tokens");
+    }
+
+    #[test]
+    fn test_message_start_includes_stop_sequence_null() {
+        let ctx = StreamContext::new_with_thinking(
+            "test-model",
+            123,
+            None,
+            false,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
+        let msg_start = ctx.create_message_start_event();
+        assert_eq!(
+            msg_start["message"]["stop_sequence"],
+            serde_json::Value::Null
+        );
     }
 }

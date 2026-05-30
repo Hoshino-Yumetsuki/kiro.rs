@@ -10,7 +10,7 @@ use anyhow::Error;
 use axum::{
     Json as JsonExtractor,
     body::Body,
-    extract::{OriginalUri, State},
+    extract::{OriginalUri, Path, State},
     http::{StatusCode, header},
     response::{IntoResponse, Json, Response},
 };
@@ -24,8 +24,8 @@ use super::converter::{ConversionError, convert_request};
 use super::middleware::AppState;
 use super::stream::{CacheUsageBreakdown, SseEvent, StreamContext, normalize_signature_for_sse};
 use super::types::{
-    CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, Model, ModelsResponse,
-    OutputConfig, Thinking,
+    CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, ModelInfo,
+    ModelsResponse, OutputConfig, Thinking,
 };
 use super::websearch;
 
@@ -53,6 +53,7 @@ struct StreamRequestContext<'a> {
     user_id: Option<&'a str>,
     structured_output: bool,
     rewriter_config: Option<&'a super::rewriter::RewriterConfig>,
+    request_id: &'a str,
 }
 
 struct NonStreamRequestContext<'a> {
@@ -65,6 +66,7 @@ struct NonStreamRequestContext<'a> {
     cache_profile: Option<&'a crate::anthropic::cache_tracker::CacheProfile>,
     structured_output: bool,
     rewriter_config: Option<&'a super::rewriter::RewriterConfig>,
+    request_id: &'a str,
 }
 
 fn build_cache_profile(
@@ -122,6 +124,61 @@ fn billed_input_tokens(
         .saturating_sub(cache_creation_input_tokens)
         .saturating_sub(cache_read_input_tokens)
         .max(0)
+}
+
+fn generate_request_id() -> String {
+    format!("req_{}", uuid::Uuid::new_v4().simple())
+}
+
+fn attach_request_id_header(mut response: Response, request_id: &str) -> Response {
+    if let Ok(value) = axum::http::HeaderValue::from_str(request_id) {
+        response.headers_mut().insert("x-request-id", value);
+    }
+    response
+}
+
+/// Header name for the Anthropic compatibility warning emitted when a request
+/// uses a feature that this proxy cannot fully forward to the Kiro upstream.
+const ANTHROPIC_COMPAT_WARNING_HEADER: &str = "x-anthropic-compat-warning";
+
+/// Header value emitted when `tool_choice` is set to a non-default value.
+const TOOL_CHOICE_IGNORED_WARNING: &str = "tool_choice ignored by upstream";
+
+/// Returns `Some(value)` when the request's `tool_choice` is non-default and
+/// therefore silently dropped by the proxy. A non-default `tool_choice` is any
+/// value other than `null`, missing, or `{"type":"auto"}`.
+///
+/// The returned reference is to the original `tool_choice` JSON so callers can
+/// log it for observability.
+fn tool_choice_warning_value(payload: &MessagesRequest) -> Option<&serde_json::Value> {
+    let value = payload.tool_choice.as_ref()?;
+    if value.is_null() {
+        return None;
+    }
+    let is_auto = value
+        .as_object()
+        .and_then(|obj| obj.get("type"))
+        .and_then(|t| t.as_str())
+        == Some("auto");
+    if is_auto {
+        return None;
+    }
+    Some(value)
+}
+
+/// Attach the `x-anthropic-compat-warning` header for a non-default
+/// `tool_choice`. Safe to call with non-warning responses (no-op when
+/// `should_warn` is false).
+fn attach_tool_choice_warning_header(mut response: Response, should_warn: bool) -> Response {
+    if !should_warn {
+        return response;
+    }
+    if let Ok(value) = axum::http::HeaderValue::from_str(TOOL_CHOICE_IGNORED_WARNING) {
+        response
+            .headers_mut()
+            .insert(ANTHROPIC_COMPAT_WARNING_HEADER, value);
+    }
+    response
 }
 
 fn is_input_too_long_error(err: &Error) -> bool {
@@ -475,21 +532,29 @@ fn adaptive_shrink_request_body(
     Ok(Some(outcome))
 }
 
-fn map_kiro_provider_error_to_response(request_body: &str, err: Error) -> Response {
+fn map_kiro_provider_error_to_response(
+    request_body: &str,
+    err: Error,
+    request_id: &str,
+) -> Response {
     if is_input_too_long_error(&err) {
         tracing::warn!(
             kiro_request_body_bytes = request_body.len(),
             error = %err,
             "上游拒绝请求：输入上下文过长（不应重试）"
         );
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse::new(
-                "invalid_request_error",
-                "Input is too long (CONTENT_LENGTH_EXCEEDS_THRESHOLD). Reduce conversation history/system/tools; retrying the same request will not help.",
-            )),
-        )
-            .into_response();
+        return attach_request_id_header(
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::new(
+                    "invalid_request_error",
+                    "Input is too long (CONTENT_LENGTH_EXCEEDS_THRESHOLD). Reduce conversation history/system/tools; retrying the same request will not help.",
+                    request_id,
+                )),
+            )
+                .into_response(),
+            request_id,
+        );
     }
 
     if is_improperly_formed_request_error(&err) {
@@ -498,26 +563,34 @@ fn map_kiro_provider_error_to_response(request_body: &str, err: Error) -> Respon
             kiro_request_body_bytes = request_body.len(),
             "上游拒绝请求：请求格式错误（可能由超大请求体、消息/工具序列异常或空内容块导致）"
         );
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse::new(
-                "invalid_request_error",
-                "Improperly formed request. This is often caused by oversized payloads, malformed message/tool sequences, or empty content blocks.",
-            )),
-        )
-            .into_response();
+        return attach_request_id_header(
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::new(
+                    "invalid_request_error",
+                    "Improperly formed request. This is often caused by oversized payloads, malformed message/tool sequences, or empty content blocks.",
+                    request_id,
+                )),
+            )
+                .into_response(),
+            request_id,
+        );
     }
 
     if is_no_credentials_error(&err) {
         tracing::error!(error = %err, "没有可用的凭据");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse::new(
-                "service_unavailable",
-                "No credentials available. Please add or enable credentials via Admin API or credentials.json.",
-            )),
-        )
-            .into_response();
+        return attach_request_id_header(
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse::new(
+                    "service_unavailable",
+                    "No credentials available. Please add or enable credentials via Admin API or credentials.json.",
+                    request_id,
+                )),
+            )
+                .into_response(),
+            request_id,
+        );
     }
 
     let (cooling, retry_after) = is_all_credentials_cooling_down_error(&err);
@@ -528,51 +601,70 @@ fn map_kiro_provider_error_to_response(request_body: &str, err: Error) -> Respon
             retry_after_secs = secs,
             "所有凭据临时冷却，返回 429 + Retry-After"
         );
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            [(header::RETRY_AFTER, secs.to_string())],
-            Json(ErrorResponse::new(
-                "rate_limit_error",
-                format!(
-                    "All credentials are temporarily cooling down. Retry after {}s.",
-                    secs
-                ),
-            )),
-        )
-            .into_response();
+        return attach_request_id_header(
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(header::RETRY_AFTER, secs.to_string())],
+                Json(ErrorResponse::new(
+                    "rate_limit_error",
+                    format!(
+                        "All credentials are temporarily cooling down. Retry after {}s.",
+                        secs
+                    ),
+                    request_id,
+                )),
+            )
+                .into_response(),
+            request_id,
+        );
     }
 
     if is_quota_exhausted_error(&err) {
         tracing::warn!(error = %err, "所有凭据配额已耗尽");
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(ErrorResponse::new(
-                "rate_limit_error",
-                "All credentials quota exhausted. Please wait for quota reset or add new credentials.",
-            )),
-        )
-            .into_response();
+        return attach_request_id_header(
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(ErrorResponse::new(
+                    "rate_limit_error",
+                    "All credentials quota exhausted. Please wait for quota reset or add new credentials.",
+                    request_id,
+                )),
+            )
+                .into_response(),
+            request_id,
+        );
     }
 
     if is_transient_upstream_error(&err) {
         let err_str = err.to_string().to_lowercase();
         if is_network_error(&err_str) {
             tracing::warn!(error = %err, "上游网络错误，不输出请求体");
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(ErrorResponse::new(
-                    "api_error",
-                    format!("上游网络错误: {}", err),
-                )),
-            )
-                .into_response();
+            return attach_request_id_header(
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(ErrorResponse::new(
+                        "api_error",
+                        format!("上游网络错误: {}", err),
+                        request_id,
+                    )),
+                )
+                    .into_response(),
+                request_id,
+            );
         }
         tracing::warn!(error = %err, "上游瞬态错误（429/5xx），不输出请求体");
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(ErrorResponse::new("rate_limit_error", err.to_string())),
-        )
-            .into_response();
+        return attach_request_id_header(
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(ErrorResponse::new(
+                    "rate_limit_error",
+                    err.to_string(),
+                    request_id,
+                )),
+            )
+                .into_response(),
+            request_id,
+        );
     }
 
     tracing::error!("Kiro API 调用失败: {}", err);
@@ -582,14 +674,18 @@ fn map_kiro_provider_error_to_response(request_body: &str, err: Error) -> Respon
         "上游报错，请求体大小: {} bytes",
         request_body.len()
     );
-    (
-        StatusCode::BAD_GATEWAY,
-        Json(ErrorResponse::new(
-            "api_error",
-            format!("上游 API 调用失败: {}", err),
-        )),
+    attach_request_id_header(
+        (
+            StatusCode::BAD_GATEWAY,
+            Json(ErrorResponse::new(
+                "api_error",
+                format!("上游 API 调用失败: {}", err),
+                request_id,
+            )),
+        )
+            .into_response(),
+        request_id,
     )
-        .into_response()
 }
 
 /// 对 user_id 进行掩码处理，保护隐私
@@ -934,7 +1030,12 @@ fn is_response_rewrite_enabled(rewriter_config: Option<&super::rewriter::Rewrite
     rewriter_config.is_some_and(|config| config.enabled)
 }
 
-fn build_local_text_response(payload: &MessagesRequest, text: &str, input_tokens: i32) -> Response {
+fn build_local_text_response(
+    payload: &MessagesRequest,
+    text: &str,
+    input_tokens: i32,
+    request_id: &str,
+) -> Response {
     let output_tokens = token::count_tokens(text) as i32;
     let usage = json!({
         "input_tokens": input_tokens,
@@ -948,17 +1049,20 @@ fn build_local_text_response(payload: &MessagesRequest, text: &str, input_tokens
     });
 
     if !payload.stream {
-        return Json(json!({
-            "id": super::stream::generate_anthropic_message_id(),
-            "type": "message",
-            "role": "assistant",
-            "model": payload.model,
-            "content": [{"type": "text", "text": text}],
-            "stop_reason": "end_turn",
-            "stop_sequence": null,
-            "usage": usage,
-        }))
-        .into_response();
+        return attach_request_id_header(
+            Json(json!({
+                "id": super::stream::generate_anthropic_message_id(),
+                "type": "message",
+                "role": "assistant",
+                "model": payload.model,
+                "content": [{"type": "text", "text": text}],
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": usage,
+            }))
+            .into_response(),
+            request_id,
+        );
     }
 
     let message_id = super::stream::generate_anthropic_message_id();
@@ -1019,6 +1123,7 @@ fn build_local_text_response(payload: &MessagesRequest, text: &str, input_tokens
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
+        .header("x-request-id", request_id)
         .body(Body::from(body))
         .unwrap()
 }
@@ -1026,271 +1131,194 @@ fn build_local_text_response(payload: &MessagesRequest, text: &str, input_tokens
 /// GET /v1/models
 ///
 /// 返回可用的模型列表。
-pub async fn get_models(OriginalUri(uri): OriginalUri) -> impl IntoResponse {
+pub async fn get_models(OriginalUri(uri): OriginalUri) -> Response {
+    let request_id = generate_request_id();
     tracing::info!(
         path = %uri.path(),
+        request_id = %request_id,
         "Received request"
     );
 
-    let models = vec![
-        Model {
-            id: "claude-sonnet-4-6".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.6".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-sonnet-4-6-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.6 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-sonnet-4-6-agentic".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.6 (Agentic)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-sonnet-4-5-20250929".to_string(),
-            object: "model".to_string(),
-            created: 1727568000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(200_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-sonnet-4-5-20250929-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1727568000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.5 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(200_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-sonnet-4-5-20250929-agentic".to_string(),
-            object: "model".to_string(),
-            created: 1727568000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.5 (Agentic)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(200_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-5-20251101".to_string(),
-            object: "model".to_string(),
-            created: 1730419200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(200_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-5-20251101-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1730419200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.5 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(200_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-5-20251101-agentic".to_string(),
-            object: "model".to_string(),
-            created: 1730419200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.5 (Agentic)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(200_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-6".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.6".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(128_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-6-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.6 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(128_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-6-agentic".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.6 (Agentic)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(128_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-7".to_string(),
-            object: "model".to_string(),
-            created: 1772992800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.7".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(128_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-7-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1772992800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.7 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(128_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-7-agentic".to_string(),
-            object: "model".to_string(),
-            created: 1772992800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.7 (Agentic)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(128_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-8".to_string(),
-            object: "model".to_string(),
-            created: 1775671200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.8".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(128_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-8-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1775671200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.8 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(128_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-8-agentic".to_string(),
-            object: "model".to_string(),
-            created: 1775671200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.8 (Agentic)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(128_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-haiku-4-5-20251001".to_string(),
-            object: "model".to_string(),
-            created: 1727740800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Haiku 4.5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(200_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-haiku-4-5-20251001-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1727740800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Haiku 4.5 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(200_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-haiku-4-5-20251001-agentic".to_string(),
-            object: "model".to_string(),
-            created: 1727740800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Haiku 4.5 (Agentic)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(200_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-    ];
+    let models = models_list();
+    let first_id = models.first().map(|m| m.id.clone());
+    let last_id = models.last().map(|m| m.id.clone());
 
-    Json(ModelsResponse {
-        object: "list".to_string(),
-        data: models,
-    })
+    attach_request_id_header(
+        (
+            StatusCode::OK,
+            Json(ModelsResponse {
+                data: models,
+                has_more: false,
+                first_id,
+                last_id,
+            }),
+        )
+            .into_response(),
+        &request_id,
+    )
+}
+
+/// 返回可用的模型列表（与 `get_models` 共享的数据）。
+fn models_list() -> Vec<ModelInfo> {
+    vec![
+        ModelInfo {
+            id: "claude-sonnet-4-6".to_string(),
+            created_at: 1770314400,
+            display_name: "Claude Sonnet 4.6".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-sonnet-4-6-thinking".to_string(),
+            created_at: 1770314400,
+            display_name: "Claude Sonnet 4.6 (Thinking)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-sonnet-4-6-agentic".to_string(),
+            created_at: 1770314400,
+            display_name: "Claude Sonnet 4.6 (Agentic)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-sonnet-4-5-20250929".to_string(),
+            created_at: 1727568000,
+            display_name: "Claude Sonnet 4.5".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-sonnet-4-5-20250929-thinking".to_string(),
+            created_at: 1727568000,
+            display_name: "Claude Sonnet 4.5 (Thinking)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-sonnet-4-5-20250929-agentic".to_string(),
+            created_at: 1727568000,
+            display_name: "Claude Sonnet 4.5 (Agentic)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-5-20251101".to_string(),
+            created_at: 1730419200,
+            display_name: "Claude Opus 4.5".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-5-20251101-thinking".to_string(),
+            created_at: 1730419200,
+            display_name: "Claude Opus 4.5 (Thinking)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-5-20251101-agentic".to_string(),
+            created_at: 1730419200,
+            display_name: "Claude Opus 4.5 (Agentic)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-6".to_string(),
+            created_at: 1770314400,
+            display_name: "Claude Opus 4.6".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-6-thinking".to_string(),
+            created_at: 1770314400,
+            display_name: "Claude Opus 4.6 (Thinking)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-6-agentic".to_string(),
+            created_at: 1770314400,
+            display_name: "Claude Opus 4.6 (Agentic)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-7".to_string(),
+            created_at: 1772992800,
+            display_name: "Claude Opus 4.7".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-7-thinking".to_string(),
+            created_at: 1772992800,
+            display_name: "Claude Opus 4.7 (Thinking)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-7-agentic".to_string(),
+            created_at: 1772992800,
+            display_name: "Claude Opus 4.7 (Agentic)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-8".to_string(),
+            created_at: 1775671200,
+            display_name: "Claude Opus 4.8".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-8-thinking".to_string(),
+            created_at: 1775671200,
+            display_name: "Claude Opus 4.8 (Thinking)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-8-agentic".to_string(),
+            created_at: 1775671200,
+            display_name: "Claude Opus 4.8 (Agentic)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-haiku-4-5-20251001".to_string(),
+            created_at: 1727740800,
+            display_name: "Claude Haiku 4.5".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-haiku-4-5-20251001-thinking".to_string(),
+            created_at: 1727740800,
+            display_name: "Claude Haiku 4.5 (Thinking)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-haiku-4-5-20251001-agentic".to_string(),
+            created_at: 1727740800,
+            display_name: "Claude Haiku 4.5 (Agentic)".to_string(),
+            model_type: "model".to_string(),
+        },
+    ]
+}
+
+/// GET /v1/models/{id}
+///
+/// 返回指定 ID 的模型信息。如果模型不存在则返回 404。
+pub async fn get_model(Path(id): Path<String>) -> Response {
+    let request_id = generate_request_id();
+    tracing::info!(
+        model_id = %id,
+        request_id = %request_id,
+        "Received request"
+    );
+
+    let models = models_list();
+    match models.into_iter().find(|m| m.id == id) {
+        Some(model) => {
+            attach_request_id_header((StatusCode::OK, Json(model)).into_response(), &request_id)
+        }
+        None => attach_request_id_header(
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse::new(
+                    "not_found_error",
+                    format!("Model '{}' not found", id),
+                    &request_id,
+                )),
+            )
+                .into_response(),
+            &request_id,
+        ),
+    }
 }
 
 /// POST /v1/messages
@@ -1299,8 +1327,23 @@ pub async fn get_models(OriginalUri(uri): OriginalUri) -> impl IntoResponse {
 pub async fn post_messages(
     OriginalUri(uri): OriginalUri,
     State(state): State<AppState>,
-    JsonExtractor(mut payload): JsonExtractor<MessagesRequest>,
+    JsonExtractor(payload): JsonExtractor<MessagesRequest>,
 ) -> Response {
+    let warn_value = tool_choice_warning_value(&payload).cloned();
+    if let Some(value) = warn_value.as_ref() {
+        tracing::debug!(target: "anthropic_compat", "tool_choice {:?} ignored", value);
+    }
+    let response = post_messages_inner(uri, state, payload).await;
+    attach_tool_choice_warning_header(response, warn_value.is_some())
+}
+
+async fn post_messages_inner(
+    uri: axum::http::Uri,
+    state: AppState,
+    mut payload: MessagesRequest,
+) -> Response {
+    let request_id = generate_request_id();
+
     // 读取压缩配置快照（读锁 + clone，避免持锁跨 await）
     let compression_config = state.compression_config.read().clone();
     let rewriter_config = state.rewriter_config.read().clone();
@@ -1322,6 +1365,7 @@ pub async fn post_messages(
 
     tracing::info!(
         path = %uri.path(),
+        request_id = %request_id,
         model = %payload.model,
         max_tokens = %payload.max_tokens,
         stream = %payload.stream,
@@ -1335,14 +1379,18 @@ pub async fn post_messages(
         Some(p) => p.clone(),
         None => {
             tracing::error!("KiroProvider 未配置");
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse::new(
-                    "service_unavailable",
-                    "Kiro API provider not configured",
-                )),
-            )
-                .into_response();
+            return attach_request_id_header(
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(ErrorResponse::new(
+                        "service_unavailable",
+                        "Kiro API provider not configured",
+                        &request_id,
+                    )),
+                )
+                    .into_response(),
+                &request_id,
+            );
         }
     };
 
@@ -1356,7 +1404,7 @@ pub async fn post_messages(
     });
     if websearch::should_handle_websearch_request(&payload) {
         tracing::info!("检测到纯 WebSearch 请求，路由到本地 WebSearch 处理");
-        return websearch::handle_websearch_request(
+        let response = websearch::handle_websearch_request(
             provider,
             &payload,
             if prompt_cache.accounting_enabled {
@@ -1368,6 +1416,7 @@ pub async fn post_messages(
             estimated_input_tokens,
         )
         .await;
+        return attach_request_id_header(response, &request_id);
     }
 
     // 混合工具场景：剔除 web_search 后转发上游
@@ -1389,12 +1438,17 @@ pub async fn post_messages(
 
     if let Some(normalizer) = &tag_echo_normalizer {
         tracing::info!("检测到 antml test tag 复读请求，使用本地 tag 结果直接返回");
-        return build_local_text_response(&payload, &normalizer.full_tag, estimated_input_tokens);
+        return build_local_text_response(
+            &payload,
+            &normalizer.full_tag,
+            estimated_input_tokens,
+            &request_id,
+        );
     }
 
     if let Some(answer) = extract_pdf_text_answer(&payload) {
         tracing::info!("检测到 PDF 纯文本抽取请求，使用本地抽取结果直接返回");
-        return build_local_text_response(&payload, &answer, estimated_input_tokens);
+        return build_local_text_response(&payload, &answer, estimated_input_tokens, &request_id);
     }
 
     let cache_profile = prompt_cache.accounting_enabled.then(|| {
@@ -1432,13 +1486,20 @@ pub async fn post_messages(
                 ConversionError::EmptyMessageContent => {
                     ("invalid_request_error", "消息内容为空".to_string())
                 }
+                ConversionError::UrlImageNotSupported => (
+                    "invalid_request_error",
+                    "URL image sources are not supported by this proxy".to_string(),
+                ),
             };
             tracing::warn!("请求转换失败: {}", e);
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse::new(error_type, message)),
-            )
-                .into_response();
+            return attach_request_id_header(
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse::new(error_type, message, &request_id)),
+                )
+                    .into_response(),
+                &request_id,
+            );
         }
     };
 
@@ -1473,14 +1534,18 @@ pub async fn post_messages(
         Ok(body) => body,
         Err(e) => {
             tracing::error!("序列化请求失败: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse::new(
-                    "internal_error",
-                    format!("序列化请求失败: {}", e),
-                )),
-            )
-                .into_response();
+            return attach_request_id_header(
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse::new(
+                        "internal_error",
+                        format!("序列化请求失败: {}", e),
+                        &request_id,
+                    )),
+                )
+                    .into_response(),
+                &request_id,
+            );
         }
     };
 
@@ -1515,14 +1580,18 @@ pub async fn post_messages(
             Ok(None) => {}
             Err(e) => {
                 tracing::error!("自适应二次压缩序列化失败: {}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse::new(
-                        "internal_error",
-                        format!("序列化请求失败: {}", e),
-                    )),
-                )
-                    .into_response();
+                return attach_request_id_header(
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse::new(
+                            "internal_error",
+                            format!("序列化请求失败: {}", e),
+                            &request_id,
+                        )),
+                    )
+                        .into_response(),
+                    &request_id,
+                );
             }
         }
     }
@@ -1544,20 +1613,24 @@ pub async fn post_messages(
             "自适应压缩仍超限，完整请求体（用于诊断）: {}",
             truncate_base64_in_request_body(&request_body)
         );
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse::new(
-                "invalid_request_error",
-                format!(
-                    "Request too large ({} bytes total; images {} bytes; non-image {} bytes; limit {}). Reduce conversation history/tool output or number/size of images.",
-                    request_body.len(),
-                    final_img_bytes,
-                    final_effective_len,
-                    max_body
-                ),
-            )),
-        )
-            .into_response();
+        return attach_request_id_header(
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::new(
+                    "invalid_request_error",
+                    format!(
+                        "Request too large ({} bytes total; images {} bytes; non-image {} bytes; limit {}). Reduce conversation history/tool output or number/size of images.",
+                        request_body.len(),
+                        final_img_bytes,
+                        final_effective_len,
+                        max_body
+                    ),
+                    &request_id,
+                )),
+            )
+                .into_response(),
+            &request_id,
+        );
     }
 
     tracing::debug!(
@@ -1597,6 +1670,7 @@ pub async fn post_messages(
             } else {
                 None
             },
+            request_id: &request_id,
         };
         handle_stream_request(provider, stream_request).await
     } else {
@@ -1617,6 +1691,7 @@ pub async fn post_messages(
             } else {
                 None
             },
+            request_id: &request_id,
         };
         handle_non_stream_request(provider, non_stream_request).await
     }
@@ -1631,7 +1706,13 @@ async fn handle_stream_request(
         .await
     {
         Ok(resp) => resp,
-        Err(e) => return map_kiro_provider_error_to_response(context.request_body, e),
+        Err(e) => {
+            return map_kiro_provider_error_to_response(
+                context.request_body,
+                e,
+                context.request_id,
+            );
+        }
     };
 
     let final_cache_context = match (context.cache_tracker, context.cache_profile) {
@@ -1690,6 +1771,7 @@ async fn handle_stream_request(
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
+        .header("x-request-id", context.request_id)
         .body(Body::from_stream(stream))
         .unwrap()
 }
@@ -1909,7 +1991,13 @@ async fn handle_non_stream_request(
         .await
     {
         Ok(resp) => resp,
-        Err(e) => return map_kiro_provider_error_to_response(context.request_body, e),
+        Err(e) => {
+            return map_kiro_provider_error_to_response(
+                context.request_body,
+                e,
+                context.request_id,
+            );
+        }
     };
 
     let final_cache_context = match (context.cache_tracker, context.cache_profile) {
@@ -1932,14 +2020,18 @@ async fn handle_non_stream_request(
         Ok(bytes) => bytes,
         Err(e) => {
             tracing::error!("读取响应体失败: {}", e);
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(ErrorResponse::new(
-                    "api_error",
-                    format!("读取响应失败: {}", e),
-                )),
-            )
-                .into_response();
+            return attach_request_id_header(
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(ErrorResponse::new(
+                        "api_error",
+                        format!("读取响应失败: {}", e),
+                        context.request_id,
+                    )),
+                )
+                    .into_response(),
+                context.request_id,
+            );
         }
     };
 
@@ -2089,10 +2181,10 @@ async fn handle_non_stream_request(
                                 redacted_thinking_blocks.push(redacted.clone());
                             }
                         }
-                        Event::Exception { exception_type, .. } => {
-                            if exception_type == "ContentLengthExceededException" {
-                                stop_reason = "max_tokens".to_string();
-                            }
+                        Event::Exception { exception_type, .. }
+                            if exception_type == "ContentLengthExceededException" =>
+                        {
+                            stop_reason = "max_tokens".to_string();
                         }
                         _ => {}
                     }
@@ -2230,7 +2322,10 @@ async fn handle_non_stream_request(
         })
     };
 
-    (StatusCode::OK, Json(response_body)).into_response()
+    attach_request_id_header(
+        (StatusCode::OK, Json(response_body)).into_response(),
+        context.request_id,
+    )
 }
 
 fn build_thinking_content_block(
@@ -2246,9 +2341,10 @@ fn build_thinking_content_block(
         "type": "thinking",
         "thinking": reasoning_text
     });
-    if let Some(sig) = reasoning_signature {
-        thinking_block["signature"] = json!(normalize_signature_for_sse(sig, model));
-    }
+    let sig = reasoning_signature
+        .map(|s| normalize_signature_for_sse(s, model))
+        .unwrap_or_default();
+    thinking_block["signature"] = json!(sig);
 
     Some(thinking_block)
 }
@@ -2390,9 +2486,11 @@ fn build_additional_model_request_fields(payload: &MessagesRequest) -> Option<se
 pub async fn count_tokens(
     OriginalUri(uri): OriginalUri,
     JsonExtractor(payload): JsonExtractor<CountTokensRequest>,
-) -> impl IntoResponse {
+) -> Response {
+    let request_id = generate_request_id();
     tracing::info!(
         path = %uri.path(),
+        request_id = %request_id,
         model = %payload.model,
         message_count = %payload.messages.len(),
         "Received request"
@@ -2405,9 +2503,13 @@ pub async fn count_tokens(
         payload.tools.clone(),
     ) as i32;
 
-    Json(CountTokensResponse {
-        input_tokens: total_tokens.max(1) as i32,
-    })
+    attach_request_id_header(
+        Json(CountTokensResponse {
+            input_tokens: total_tokens.max(1),
+        })
+        .into_response(),
+        &request_id,
+    )
 }
 
 /// 截断字符串中间部分，保留头尾各 `keep` 个字符
@@ -2761,6 +2863,21 @@ mod tests {
     }
 
     #[test]
+    fn test_build_thinking_content_block_always_emits_signature_when_some() {
+        let block =
+            build_thinking_content_block("thinking text", Some("sig"), "claude-sonnet-4-20250514")
+                .expect("thinking block should be built");
+        assert_eq!(block["signature"], json!("sig"));
+    }
+
+    #[test]
+    fn test_build_thinking_content_block_always_emits_signature_when_none() {
+        let block = build_thinking_content_block("thinking text", None, "claude-sonnet-4-20250514")
+            .expect("thinking block should be built");
+        assert_eq!(block["signature"], json!(""));
+    }
+
+    #[test]
     fn test_build_thinking_content_block_normalizes_opus_4_8_signature() {
         const CAPTURED_OPUS_4_8_SIGNATURE: &str = "EpIECmMIDhABGAIqQO1JSL2DsiN2K5nm/MsmMj7aYlm3EDWep9jVZmYoGh/vL2dNlBR8HZL3RQ08KAW2goV8552GI/5psxvgdO10pRUyDWNsYXVkZS1xdWluY2U4AEIIdGhpbmtpbmcSDDGr9CGvpiPycCX6ihoMbuTNqiYdVlqEslfrIjC+CLSCrK0oKnmfm1jAhSAz+KrbEuBK8m5wccq1R/UX3gqMcEvmhNZEBLtvYclSyOgq3AKdk7urfodjAZjIIwQ0mKQWIOGmtnIAKl1G1Q8csz33RxVwVdABBHPphTh8wigMjjEKVG4WVDmDOdaZN5HcALlcQmfO1SPiswGMlfjdAbM09NDcpc/SVq00lFt2tsQ48HeYJf5s5PaaFFGM8+lxmTqOGLpWnln+KOp+OK7PsGOsFRLu10gjHETF8ok82/WHX1KjbQcKRGnaB8noSPEjbyFnDoUzsBAcVIMdkZxAWYKX4R9WCJWOpLOXaTIhsEUhaAJ2e4p1WI+kblnbb7pf9ntP/lZeguwiK67lENlr/MV57M/JDd3d/gCZaEzLSr5z1XRQB/b0tonGT64nXvp/ZbzZmzDFhoPIhvW/19eGu4OY1GSZO4hZDugm+f02yLTwMBT0YozkI5W/jQ5QJJ45XjW6dI4IgxZiQGIrnRkg/okSbAuLY7qiNcjwKEeBoafa1TZf2hFuaeizNkd1V+UYAQ==";
 
@@ -2863,7 +2980,7 @@ mod tests {
     #[tokio::test]
     async fn test_build_local_text_response_uses_anthropic_message_id_non_stream() {
         let payload = pdf_text_payload("Extract the text from this PDF and return only the text.");
-        let response = build_local_text_response(&payload, "hvoyowse", 10);
+        let response = build_local_text_response(&payload, "hvoyowse", 10, "req_test_nonstream");
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
@@ -2878,7 +2995,7 @@ mod tests {
             pdf_text_payload("Extract the text from this PDF and return only the text.");
         payload.stream = true;
 
-        let response = build_local_text_response(&payload, "hvoyowse", 10);
+        let response = build_local_text_response(&payload, "hvoyowse", 10, "req_test_stream");
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
@@ -3082,8 +3199,10 @@ mod tests {
             additional_model_request_fields: None,
         };
         let mut request_body = serde_json::to_string(&kiro_request).unwrap();
-        let mut config = CompressionConfig::default();
-        config.adaptive_compression = false;
+        let config = CompressionConfig {
+            adaptive_compression: false,
+            ..Default::default()
+        };
 
         let outcome = adaptive_shrink_request_body(
             &mut kiro_request,
@@ -3101,7 +3220,195 @@ mod tests {
         let response = map_kiro_provider_error_to_response(
             "{}",
             anyhow::anyhow!("400 Improperly formed request"),
+            "req_test_improperly_formed",
         );
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn test_generate_request_id_uses_req_prefix_and_simple_uuid() {
+        let id = generate_request_id();
+
+        assert!(
+            id.starts_with("req_"),
+            "request_id should start with req_, got {id}"
+        );
+        let suffix = &id["req_".len()..];
+        assert_eq!(
+            suffix.len(),
+            32,
+            "uuid simple form should be 32 chars, got {suffix}"
+        );
+        assert!(
+            suffix.bytes().all(|b| b.is_ascii_hexdigit()),
+            "uuid simple form should be hex, got {suffix}"
+        );
+    }
+
+    #[test]
+    fn test_generate_request_id_returns_unique_values() {
+        let a = generate_request_id();
+        let b = generate_request_id();
+        assert_ne!(a, b);
+    }
+
+    #[tokio::test]
+    async fn test_build_local_text_response_non_stream_sets_x_request_id_header() {
+        let payload = pdf_text_payload("Extract the text from this PDF and return only the text.");
+        let request_id = "req_consistency_check_nonstream";
+        let response = build_local_text_response(&payload, "hvoyowse", 10, request_id);
+
+        let header_value = response
+            .headers()
+            .get("x-request-id")
+            .expect("x-request-id header should be set");
+        assert_eq!(header_value.to_str().unwrap(), request_id);
+    }
+
+    #[tokio::test]
+    async fn test_build_local_text_response_stream_sets_x_request_id_header() {
+        let mut payload =
+            pdf_text_payload("Extract the text from this PDF and return only the text.");
+        payload.stream = true;
+        let request_id = "req_consistency_check_stream";
+
+        let response = build_local_text_response(&payload, "hvoyowse", 10, request_id);
+
+        let header_value = response
+            .headers()
+            .get("x-request-id")
+            .expect("x-request-id header should be set on SSE response");
+        assert_eq!(header_value.to_str().unwrap(), request_id);
+    }
+
+    #[tokio::test]
+    async fn test_map_kiro_provider_error_response_request_id_header_matches_body() {
+        let request_id = "req_error_consistency_check";
+        let response = map_kiro_provider_error_to_response(
+            "{}",
+            anyhow::anyhow!("CONTENT_LENGTH_EXCEEDS_THRESHOLD: input too long"),
+            request_id,
+        );
+
+        let header_value = response
+            .headers()
+            .get("x-request-id")
+            .expect("error response should set x-request-id header")
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(header_value, request_id);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["request_id"].as_str(), Some(request_id));
+    }
+
+    #[tokio::test]
+    async fn test_map_kiro_provider_error_response_includes_request_id_for_no_credentials() {
+        let request_id = "req_no_credentials_check";
+        let response = map_kiro_provider_error_to_response(
+            "{}",
+            anyhow::anyhow!("没有可用的凭据"),
+            request_id,
+        );
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-request-id")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            request_id
+        );
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["request_id"].as_str(), Some(request_id));
+    }
+
+    #[tokio::test]
+    async fn test_map_kiro_provider_error_response_includes_request_id_for_cooling() {
+        let request_id = "req_cooling_check";
+        let response = map_kiro_provider_error_to_response(
+            "{}",
+            anyhow::anyhow!("所有凭据均处于冷却/速率限制（retry_after_secs=42）"),
+            request_id,
+        );
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-request-id")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            request_id
+        );
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["request_id"].as_str(), Some(request_id));
+    }
+
+    #[tokio::test]
+    async fn test_attach_request_id_header_sets_header_on_existing_response() {
+        let response = (StatusCode::OK, Json(json!({"ok": true}))).into_response();
+        let response = attach_request_id_header(response, "req_attach_test");
+
+        let header_value = response.headers().get("x-request-id").unwrap();
+        assert_eq!(header_value.to_str().unwrap(), "req_attach_test");
+    }
+
+    #[tokio::test]
+    async fn test_get_models_response_includes_x_request_id_header() {
+        let uri: axum::http::Uri = "/v1/models".parse().unwrap();
+        let response = get_models(OriginalUri(uri)).await;
+        let response = response.into_response();
+
+        let header = response
+            .headers()
+            .get("x-request-id")
+            .expect("get_models should set x-request-id header");
+        let value = header.to_str().unwrap();
+        assert!(
+            value.starts_with("req_"),
+            "header value should start with req_, got {value}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_count_tokens_response_includes_x_request_id_header() {
+        let uri: axum::http::Uri = "/v1/messages/count_tokens".parse().unwrap();
+        let payload = CountTokensRequest {
+            model: "claude-sonnet-4-5-20250929".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: serde_json::json!("hi"),
+            }],
+            system: None,
+            tools: None,
+        };
+        let response = count_tokens(OriginalUri(uri), JsonExtractor(payload)).await;
+        let response = response.into_response();
+
+        let header = response
+            .headers()
+            .get("x-request-id")
+            .expect("count_tokens should set x-request-id header");
+        let value = header.to_str().unwrap();
+        assert!(
+            value.starts_with("req_"),
+            "header value should start with req_, got {value}"
+        );
     }
 }

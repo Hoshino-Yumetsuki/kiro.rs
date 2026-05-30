@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use uuid::Uuid;
 
 // === 缓存控制 ===
 
@@ -16,10 +17,22 @@ pub struct CacheControl {
 
 // === 错误响应 ===
 
-/// API 错误响应
+/// API 错误响应（Anthropic 错误信封格式）
+///
+/// 序列化为:
+/// ```json
+/// {
+///     "type": "error",
+///     "error": { "type": "invalid_request_error", "message": "..." },
+///     "request_id": "req_..."
+/// }
+/// ```
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
+    #[serde(rename = "type")]
+    pub response_type: String,
     pub error: ErrorDetail,
+    pub request_id: String,
 }
 
 /// 错误详情
@@ -31,48 +44,58 @@ pub struct ErrorDetail {
 }
 
 impl ErrorResponse {
-    /// 创建新的错误响应
-    pub fn new(error_type: impl Into<String>, message: impl Into<String>) -> Self {
+    /// 创建新的错误响应（指定 request_id）
+    pub fn new(
+        error_type: &str,
+        message: impl Into<String>,
+        request_id: impl Into<String>,
+    ) -> Self {
         Self {
+            response_type: "error".to_string(),
             error: ErrorDetail {
-                error_type: error_type.into(),
+                error_type: error_type.to_string(),
                 message: message.into(),
             },
+            request_id: request_id.into(),
         }
+    }
+
+    /// 创建错误响应（自动生成 request_id）
+    ///
+    /// 生成格式为 `req_{uuid_v4_simple}` 的 request_id。
+    /// T7 将改为传入真实 request_id，此方法届时可移除。
+    pub fn without_request_id(error_type: &str, message: impl Into<String>) -> Self {
+        let request_id = format!("req_{}", Uuid::new_v4().simple());
+        Self::new(error_type, message, request_id)
     }
 
     /// 创建认证错误响应
     pub fn authentication_error() -> Self {
-        Self::new("authentication_error", "Invalid API key")
+        Self::without_request_id("authentication_error", "Invalid API key")
     }
 }
 
 // === Models 端点类型 ===
 
-/// 模型信息
+/// 模型信息（Anthropic List Models API 格式）
 #[derive(Debug, Serialize)]
-pub struct Model {
+pub struct ModelInfo {
     pub id: String,
-    pub object: String,
-    pub created: i64,
-    pub owned_by: String,
-    pub display_name: String,
     #[serde(rename = "type")]
     pub model_type: String,
-    pub max_tokens: i32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_length: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_completion_tokens: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thinking: Option<bool>,
+    pub display_name: String,
+    pub created_at: i64,
 }
 
-/// 模型列表响应
+/// 模型列表响应（Anthropic List Models API 格式）
 #[derive(Debug, Serialize)]
 pub struct ModelsResponse {
-    pub object: String,
-    pub data: Vec<Model>,
+    pub data: Vec<ModelInfo>,
+    pub has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_id: Option<String>,
 }
 
 // === Messages 端点类型 ===
@@ -210,7 +233,6 @@ pub struct MessagesRequest {
     #[serde(default, deserialize_with = "deserialize_system")]
     pub system: Option<Vec<SystemMessage>>,
     pub tools: Option<Vec<Tool>>,
-    #[allow(dead_code)]
     pub tool_choice: Option<serde_json::Value>,
     pub thinking: Option<Thinking>,
     pub output_config: Option<OutputConfig>,
@@ -372,6 +394,9 @@ pub struct ImageSource {
     pub media_type: String,
     #[serde(default)]
     pub data: String,
+    /// URL image source (not supported by this proxy)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 // === Count Tokens 端点类型 ===
@@ -409,5 +434,67 @@ pub fn get_context_window_size(model: &str) -> i32 {
         1_000_000
     } else {
         200_000
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_unsupported_fields_silently() {
+        let json = r#"{
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 1024,
+            "stream": false,
+            "messages": [{"role": "user", "content": "hello"}],
+            "temperature": 0.5,
+            "top_p": 0.9,
+            "top_k": 50,
+            "stop_sequences": ["X"],
+            "cache_control": {"type": "ephemeral"},
+            "container": "abc",
+            "service_tier": "auto",
+            "inference_geo": "us",
+            "mcp_servers": [],
+            "thinking": {"type": "enabled", "budget_tokens": 10000, "display": "summarized"},
+            "output_config": {"effort": "high", "task_budget": {"some": 123}}
+        }"#;
+
+        let req: MessagesRequest =
+            serde_json::from_str(json).expect("should silently drop unsupported fields");
+
+        assert_eq!(req.model, "claude-sonnet-4-20250514");
+        assert_eq!(req.max_tokens, 1024);
+        assert!(!req.stream);
+        assert_eq!(req.messages.len(), 1);
+        assert!(req.tools.is_none());
+        assert!(req.tool_choice.is_none());
+        assert!(req.metadata.is_none());
+
+        let thinking = req.thinking.expect("thinking should be present");
+        assert_eq!(thinking.thinking_type, "enabled");
+        assert_eq!(thinking.budget_tokens, 10000);
+
+        let output_config = req.output_config.expect("output_config should be present");
+        assert_eq!(output_config.effort, "high");
+        assert!(output_config.format.is_none());
+    }
+
+    #[test]
+    fn error_response_serializes_in_anthropic_envelope() {
+        let err = ErrorResponse::without_request_id("invalid_request_error", "test message");
+        let body = serde_json::to_value(&err).expect("should serialize");
+
+        assert_eq!(body["type"], "error");
+        assert!(
+            body["request_id"]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("req_")
+        );
+        assert!(!body["request_id"].as_str().unwrap().is_empty());
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert_eq!(body["error"]["message"], "test message");
     }
 }
