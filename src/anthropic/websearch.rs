@@ -427,6 +427,7 @@ fn generate_websearch_events(
                 "model": model,
                 "content": [],
                 "stop_reason": null,
+                "stop_sequence": null,
                 "usage": message_start_usage
             }
         }),
@@ -1276,4 +1277,32 @@ mod tests {
         assert!(summary.contains("https://example.com"));
         assert!(summary.contains("This is a test snippet"));
     }
+
+
+    #[test]
+    fn test_message_start_contains_stop_sequence() {
+        let events =
+            generate_websearch_events("test-model", "test query", "toolu_test_id", None, 100, None);
+
+        assert!(!events.is_empty());
+        assert_eq!(events[0].event, "message_start");
+
+        let message = &events[0].data["message"];
+
+        assert!(
+            message
+                .as_object()
+                .unwrap()
+                .keys()
+                .any(|k| k == "stop_sequence"),
+            "message object must contain 'stop_sequence' key"
+        );
+
+        assert_eq!(
+            message["stop_sequence"],
+            serde_json::Value::Null,
+            "stop_sequence must be null"
+        );
+    }
+
 }
