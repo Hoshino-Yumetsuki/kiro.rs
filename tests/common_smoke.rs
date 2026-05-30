@@ -99,3 +99,83 @@ async fn get_models_returns_anthropic_shape() {
         "last_id mismatch"
     );
 }
+
+#[tokio::test]
+async fn get_model_by_id_returns_200_and_model() {
+    let app = common::build_test_app();
+
+    let req = Request::builder()
+        .uri("/v1/models/claude-sonnet-4-6")
+        .header("x-api-key", common::TEST_API_KEY)
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = common::request(app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    // Extract header before consuming body
+    let request_id = resp
+        .headers()
+        .get("x-request-id")
+        .expect("response should have x-request-id header")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        request_id.starts_with("req_"),
+        "x-request-id should start with req_"
+    );
+
+    let json = common::body_json(resp).await;
+    assert_eq!(json["id"], "claude-sonnet-4-6");
+    assert_eq!(json["type"], "model");
+    assert_eq!(json["display_name"], "Claude Sonnet 4.6");
+    assert!(json["created_at"].is_i64() || json["created_at"].is_u64());
+}
+
+#[tokio::test]
+async fn get_model_by_id_returns_404_on_miss() {
+    let app = common::build_test_app();
+
+    let req = Request::builder()
+        .uri("/v1/models/nonexistent-model")
+        .header("x-api-key", common::TEST_API_KEY)
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = common::request(app, req).await;
+    assert_eq!(resp.status(), 404);
+
+    // Extract header before consuming body
+    let header_value = resp
+        .headers()
+        .get("x-request-id")
+        .expect("404 response should have x-request-id header")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        header_value.starts_with("req_"),
+        "header x-request-id should start with req_"
+    );
+
+    let json = common::body_json(resp).await;
+
+    // Error envelope shape
+    assert_eq!(json["type"], "error");
+    assert_eq!(json["error"]["type"], "not_found_error");
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("nonexistent-model"),
+        "error message should contain the requested model ID"
+    );
+
+    // request_id in body matches header
+    assert_eq!(
+        json["request_id"].as_str().unwrap(),
+        &header_value,
+        "body request_id should match header"
+    );
+}
