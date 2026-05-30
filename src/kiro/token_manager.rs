@@ -3861,5 +3861,4 @@ mod tests {
             .unwrap_or(&config.region);
         assert_eq!(region, "us-west-2");
     }
-
 }

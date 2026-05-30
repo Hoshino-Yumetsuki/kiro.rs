@@ -570,7 +570,10 @@ fn map_kiro_provider_error_to_response(request_body: &str, err: Error) -> Respon
         tracing::warn!(error = %err, "上游瞬态错误（429/5xx），不输出请求体");
         return (
             StatusCode::TOO_MANY_REQUESTS,
-            Json(ErrorResponse::without_request_id("rate_limit_error", err.to_string())),
+            Json(ErrorResponse::without_request_id(
+                "rate_limit_error",
+                err.to_string(),
+            )),
         )
             .into_response();
     }
@@ -1061,15 +1064,25 @@ pub async fn get_model(
     let models = get_all_model_infos();
     match models.into_iter().find(|m| m.id == model_id) {
         Some(model) => (
-            [(axum::http::header::HeaderName::from_static("x-request-id"), request_id)],
+            [(
+                axum::http::header::HeaderName::from_static("x-request-id"),
+                request_id,
+            )],
             Json(model),
         )
             .into_response(),
         None => {
-            let error = ErrorResponse::new("not_found_error", format!("model_not_found: {model_id}"), &request_id);
+            let error = ErrorResponse::new(
+                "not_found_error",
+                format!("model_not_found: {model_id}"),
+                &request_id,
+            );
             (
                 axum::http::StatusCode::NOT_FOUND,
-                [(axum::http::header::HeaderName::from_static("x-request-id"), request_id)],
+                [(
+                    axum::http::header::HeaderName::from_static("x-request-id"),
+                    request_id,
+                )],
                 Json(error),
             )
                 .into_response()
@@ -1080,27 +1093,132 @@ pub async fn get_model(
 /// 获取所有可用模型列表（Anthropic ModelInfo 格式）
 fn get_all_model_infos() -> Vec<ModelInfo> {
     vec![
-        ModelInfo { id: "claude-sonnet-4-6".to_string(), model_type: "model".to_string(), display_name: "Claude Sonnet 4.6".to_string(), created_at: 1770314400 },
-        ModelInfo { id: "claude-sonnet-4-6-thinking".to_string(), model_type: "model".to_string(), display_name: "Claude Sonnet 4.6 (Thinking)".to_string(), created_at: 1770314400 },
-        ModelInfo { id: "claude-sonnet-4-6-agentic".to_string(), model_type: "model".to_string(), display_name: "Claude Sonnet 4.6 (Agentic)".to_string(), created_at: 1770314400 },
-        ModelInfo { id: "claude-sonnet-4-5-20250929".to_string(), model_type: "model".to_string(), display_name: "Claude Sonnet 4.5".to_string(), created_at: 1727568000 },
-        ModelInfo { id: "claude-sonnet-4-5-20250929-thinking".to_string(), model_type: "model".to_string(), display_name: "Claude Sonnet 4.5 (Thinking)".to_string(), created_at: 1727568000 },
-        ModelInfo { id: "claude-sonnet-4-5-20250929-agentic".to_string(), model_type: "model".to_string(), display_name: "Claude Sonnet 4.5 (Agentic)".to_string(), created_at: 1727568000 },
-        ModelInfo { id: "claude-opus-4-5-20251101".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.5".to_string(), created_at: 1730419200 },
-        ModelInfo { id: "claude-opus-4-5-20251101-thinking".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.5 (Thinking)".to_string(), created_at: 1730419200 },
-        ModelInfo { id: "claude-opus-4-5-20251101-agentic".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.5 (Agentic)".to_string(), created_at: 1730419200 },
-        ModelInfo { id: "claude-opus-4-6".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.6".to_string(), created_at: 1770314400 },
-        ModelInfo { id: "claude-opus-4-6-thinking".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.6 (Thinking)".to_string(), created_at: 1770314400 },
-        ModelInfo { id: "claude-opus-4-6-agentic".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.6 (Agentic)".to_string(), created_at: 1770314400 },
-        ModelInfo { id: "claude-opus-4-7".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.7".to_string(), created_at: 1772992800 },
-        ModelInfo { id: "claude-opus-4-7-thinking".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.7 (Thinking)".to_string(), created_at: 1772992800 },
-        ModelInfo { id: "claude-opus-4-7-agentic".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.7 (Agentic)".to_string(), created_at: 1772992800 },
-        ModelInfo { id: "claude-opus-4-8".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.8".to_string(), created_at: 1775671200 },
-        ModelInfo { id: "claude-opus-4-8-thinking".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.8 (Thinking)".to_string(), created_at: 1775671200 },
-        ModelInfo { id: "claude-opus-4-8-agentic".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.8 (Agentic)".to_string(), created_at: 1775671200 },
-        ModelInfo { id: "claude-haiku-4-5-20251001".to_string(), model_type: "model".to_string(), display_name: "Claude Haiku 4.5".to_string(), created_at: 1727740800 },
-        ModelInfo { id: "claude-haiku-4-5-20251001-thinking".to_string(), model_type: "model".to_string(), display_name: "Claude Haiku 4.5 (Thinking)".to_string(), created_at: 1727740800 },
-        ModelInfo { id: "claude-haiku-4-5-20251001-agentic".to_string(), model_type: "model".to_string(), display_name: "Claude Haiku 4.5 (Agentic)".to_string(), created_at: 1727740800 },
+        ModelInfo {
+            id: "claude-sonnet-4-6".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Sonnet 4.6".to_string(),
+            created_at: 1770314400,
+        },
+        ModelInfo {
+            id: "claude-sonnet-4-6-thinking".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Sonnet 4.6 (Thinking)".to_string(),
+            created_at: 1770314400,
+        },
+        ModelInfo {
+            id: "claude-sonnet-4-6-agentic".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Sonnet 4.6 (Agentic)".to_string(),
+            created_at: 1770314400,
+        },
+        ModelInfo {
+            id: "claude-sonnet-4-5-20250929".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Sonnet 4.5".to_string(),
+            created_at: 1727568000,
+        },
+        ModelInfo {
+            id: "claude-sonnet-4-5-20250929-thinking".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Sonnet 4.5 (Thinking)".to_string(),
+            created_at: 1727568000,
+        },
+        ModelInfo {
+            id: "claude-sonnet-4-5-20250929-agentic".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Sonnet 4.5 (Agentic)".to_string(),
+            created_at: 1727568000,
+        },
+        ModelInfo {
+            id: "claude-opus-4-5-20251101".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Opus 4.5".to_string(),
+            created_at: 1730419200,
+        },
+        ModelInfo {
+            id: "claude-opus-4-5-20251101-thinking".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Opus 4.5 (Thinking)".to_string(),
+            created_at: 1730419200,
+        },
+        ModelInfo {
+            id: "claude-opus-4-5-20251101-agentic".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Opus 4.5 (Agentic)".to_string(),
+            created_at: 1730419200,
+        },
+        ModelInfo {
+            id: "claude-opus-4-6".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Opus 4.6".to_string(),
+            created_at: 1770314400,
+        },
+        ModelInfo {
+            id: "claude-opus-4-6-thinking".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Opus 4.6 (Thinking)".to_string(),
+            created_at: 1770314400,
+        },
+        ModelInfo {
+            id: "claude-opus-4-6-agentic".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Opus 4.6 (Agentic)".to_string(),
+            created_at: 1770314400,
+        },
+        ModelInfo {
+            id: "claude-opus-4-7".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Opus 4.7".to_string(),
+            created_at: 1772992800,
+        },
+        ModelInfo {
+            id: "claude-opus-4-7-thinking".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Opus 4.7 (Thinking)".to_string(),
+            created_at: 1772992800,
+        },
+        ModelInfo {
+            id: "claude-opus-4-7-agentic".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Opus 4.7 (Agentic)".to_string(),
+            created_at: 1772992800,
+        },
+        ModelInfo {
+            id: "claude-opus-4-8".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Opus 4.8".to_string(),
+            created_at: 1775671200,
+        },
+        ModelInfo {
+            id: "claude-opus-4-8-thinking".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Opus 4.8 (Thinking)".to_string(),
+            created_at: 1775671200,
+        },
+        ModelInfo {
+            id: "claude-opus-4-8-agentic".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Opus 4.8 (Agentic)".to_string(),
+            created_at: 1775671200,
+        },
+        ModelInfo {
+            id: "claude-haiku-4-5-20251001".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Haiku 4.5".to_string(),
+            created_at: 1727740800,
+        },
+        ModelInfo {
+            id: "claude-haiku-4-5-20251001-thinking".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Haiku 4.5 (Thinking)".to_string(),
+            created_at: 1727740800,
+        },
+        ModelInfo {
+            id: "claude-haiku-4-5-20251001-agentic".to_string(),
+            model_type: "model".to_string(),
+            display_name: "Claude Haiku 4.5 (Agentic)".to_string(),
+            created_at: 1727740800,
+        },
     ]
 }
 
@@ -1185,10 +1303,7 @@ async fn fetch_image_url(
     let response = client.get(url).send().await?;
 
     if !response.status().is_success() {
-        anyhow::bail!(
-            "URL 图片下载失败: HTTP {}",
-            response.status().as_u16()
-        );
+        anyhow::bail!("URL 图片下载失败: HTTP {}", response.status().as_u16());
     }
 
     let bytes = response.bytes().await?;
