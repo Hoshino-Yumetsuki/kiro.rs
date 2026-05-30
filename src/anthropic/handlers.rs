@@ -1432,9 +1432,6 @@ pub async fn post_messages(
                 ConversionError::EmptyMessageContent => {
                     ("invalid_request_error", "消息内容为空".to_string())
                 }
-                ConversionError::UrlImageNotSupported => {
-                    ("invalid_request_error", "URL image sources are not supported by this proxy".to_string())
-                }
             };
             tracing::warn!("请求转换失败: {}", e);
             return (
