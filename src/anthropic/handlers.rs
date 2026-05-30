@@ -24,8 +24,8 @@ use super::converter::{ConversionError, convert_request};
 use super::middleware::AppState;
 use super::stream::{CacheUsageBreakdown, SseEvent, StreamContext, normalize_signature_for_sse};
 use super::types::{
-    CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, Model, ModelsResponse,
-    OutputConfig, Thinking,
+    CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, ModelInfo,
+    ModelsResponse, OutputConfig, Thinking,
 };
 use super::websearch;
 
@@ -1032,265 +1032,190 @@ pub async fn get_models(OriginalUri(uri): OriginalUri) -> impl IntoResponse {
         "Received request"
     );
 
-    let models = vec![
-        Model {
-            id: "claude-sonnet-4-6".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.6".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-sonnet-4-6-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.6 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-sonnet-4-6-agentic".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.6 (Agentic)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-sonnet-4-5-20250929".to_string(),
-            object: "model".to_string(),
-            created: 1727568000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(200_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-sonnet-4-5-20250929-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1727568000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.5 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(200_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-sonnet-4-5-20250929-agentic".to_string(),
-            object: "model".to_string(),
-            created: 1727568000,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Sonnet 4.5 (Agentic)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(200_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-5-20251101".to_string(),
-            object: "model".to_string(),
-            created: 1730419200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(200_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-5-20251101-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1730419200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.5 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(200_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-5-20251101-agentic".to_string(),
-            object: "model".to_string(),
-            created: 1730419200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.5 (Agentic)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(200_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-6".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.6".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(128_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-6-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.6 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(128_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-6-agentic".to_string(),
-            object: "model".to_string(),
-            created: 1770314400,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.6 (Agentic)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(128_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-7".to_string(),
-            object: "model".to_string(),
-            created: 1772992800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.7".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(128_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-7-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1772992800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.7 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(128_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-7-agentic".to_string(),
-            object: "model".to_string(),
-            created: 1772992800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.7 (Agentic)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(128_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-8".to_string(),
-            object: "model".to_string(),
-            created: 1775671200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.8".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(128_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-8-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1775671200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.8 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(128_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-opus-4-8-agentic".to_string(),
-            object: "model".to_string(),
-            created: 1775671200,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Opus 4.8 (Agentic)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(1_000_000),
-            max_completion_tokens: Some(128_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-haiku-4-5-20251001".to_string(),
-            object: "model".to_string(),
-            created: 1727740800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Haiku 4.5".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(200_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-haiku-4-5-20251001-thinking".to_string(),
-            object: "model".to_string(),
-            created: 1727740800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Haiku 4.5 (Thinking)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(200_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-        Model {
-            id: "claude-haiku-4-5-20251001-agentic".to_string(),
-            object: "model".to_string(),
-            created: 1727740800,
-            owned_by: "anthropic".to_string(),
-            display_name: "Claude Haiku 4.5 (Agentic)".to_string(),
-            model_type: "chat".to_string(),
-            max_tokens: 32000,
-            context_length: Some(200_000),
-            max_completion_tokens: Some(64_000),
-            thinking: Some(true),
-        },
-    ];
+    let models = get_all_model_infos();
+    let first_id = models.first().map(|m| m.id.clone());
+    let last_id = models.last().map(|m| m.id.clone());
 
     Json(ModelsResponse {
-        object: "list".to_string(),
         data: models,
+        has_more: false,
+        first_id,
+        last_id,
     })
+}
+
+/// GET /v1/models/{id}
+///
+/// 获取单个模型信息
+pub async fn get_model(
+    OriginalUri(uri): OriginalUri,
+    axum::extract::Path(model_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    tracing::info!(
+        path = %uri.path(),
+        model_id = %model_id,
+        "Received request"
+    );
+
+    let request_id = format!("req_{}", uuid::Uuid::new_v4().simple());
+    let models = get_all_model_infos();
+    match models.into_iter().find(|m| m.id == model_id) {
+        Some(model) => (
+            [(axum::http::header::HeaderName::from_static("x-request-id"), request_id)],
+            Json(model),
+        )
+            .into_response(),
+        None => {
+            let error = ErrorResponse::new("not_found_error", format!("model_not_found: {model_id}"), &request_id);
+            (
+                axum::http::StatusCode::NOT_FOUND,
+                [(axum::http::header::HeaderName::from_static("x-request-id"), request_id)],
+                Json(error),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// 获取所有可用模型列表（Anthropic ModelInfo 格式）
+fn get_all_model_infos() -> Vec<ModelInfo> {
+    vec![
+        ModelInfo { id: "claude-sonnet-4-6".to_string(), model_type: "model".to_string(), display_name: "Claude Sonnet 4.6".to_string(), created_at: 1770314400 },
+        ModelInfo { id: "claude-sonnet-4-6-thinking".to_string(), model_type: "model".to_string(), display_name: "Claude Sonnet 4.6 (Thinking)".to_string(), created_at: 1770314400 },
+        ModelInfo { id: "claude-sonnet-4-6-agentic".to_string(), model_type: "model".to_string(), display_name: "Claude Sonnet 4.6 (Agentic)".to_string(), created_at: 1770314400 },
+        ModelInfo { id: "claude-sonnet-4-5-20250929".to_string(), model_type: "model".to_string(), display_name: "Claude Sonnet 4.5".to_string(), created_at: 1727568000 },
+        ModelInfo { id: "claude-sonnet-4-5-20250929-thinking".to_string(), model_type: "model".to_string(), display_name: "Claude Sonnet 4.5 (Thinking)".to_string(), created_at: 1727568000 },
+        ModelInfo { id: "claude-sonnet-4-5-20250929-agentic".to_string(), model_type: "model".to_string(), display_name: "Claude Sonnet 4.5 (Agentic)".to_string(), created_at: 1727568000 },
+        ModelInfo { id: "claude-opus-4-5-20251101".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.5".to_string(), created_at: 1730419200 },
+        ModelInfo { id: "claude-opus-4-5-20251101-thinking".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.5 (Thinking)".to_string(), created_at: 1730419200 },
+        ModelInfo { id: "claude-opus-4-5-20251101-agentic".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.5 (Agentic)".to_string(), created_at: 1730419200 },
+        ModelInfo { id: "claude-opus-4-6".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.6".to_string(), created_at: 1770314400 },
+        ModelInfo { id: "claude-opus-4-6-thinking".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.6 (Thinking)".to_string(), created_at: 1770314400 },
+        ModelInfo { id: "claude-opus-4-6-agentic".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.6 (Agentic)".to_string(), created_at: 1770314400 },
+        ModelInfo { id: "claude-opus-4-7".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.7".to_string(), created_at: 1772992800 },
+        ModelInfo { id: "claude-opus-4-7-thinking".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.7 (Thinking)".to_string(), created_at: 1772992800 },
+        ModelInfo { id: "claude-opus-4-7-agentic".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.7 (Agentic)".to_string(), created_at: 1772992800 },
+        ModelInfo { id: "claude-opus-4-8".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.8".to_string(), created_at: 1775671200 },
+        ModelInfo { id: "claude-opus-4-8-thinking".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.8 (Thinking)".to_string(), created_at: 1775671200 },
+        ModelInfo { id: "claude-opus-4-8-agentic".to_string(), model_type: "model".to_string(), display_name: "Claude Opus 4.8 (Agentic)".to_string(), created_at: 1775671200 },
+        ModelInfo { id: "claude-haiku-4-5-20251001".to_string(), model_type: "model".to_string(), display_name: "Claude Haiku 4.5".to_string(), created_at: 1727740800 },
+        ModelInfo { id: "claude-haiku-4-5-20251001-thinking".to_string(), model_type: "model".to_string(), display_name: "Claude Haiku 4.5 (Thinking)".to_string(), created_at: 1727740800 },
+        ModelInfo { id: "claude-haiku-4-5-20251001-agentic".to_string(), model_type: "model".to_string(), display_name: "Claude Haiku 4.5 (Agentic)".to_string(), created_at: 1727740800 },
+    ]
+}
+
+/// 图片 URL 下载超时（秒）
+const IMAGE_URL_FETCH_TIMEOUT_SECS: u64 = 30;
+/// 图片 URL 下载最大文件大小（20MB）
+const IMAGE_URL_MAX_SIZE: usize = 20 * 1024 * 1024;
+
+/// 预处理请求中的 URL 类型图片，下载并转换为 base64 内联数据。
+///
+/// 遍历所有 messages 中的 content blocks，找到 `{"type": "image", "source": {"type": "url", ...}}`
+/// 的块，将其下载为 base64 数据，替换 source 为 base64 类型。
+async fn resolve_image_urls(payload: &mut MessagesRequest) {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(IMAGE_URL_FETCH_TIMEOUT_SECS))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("创建 HTTP Client 失败，跳过 URL 图片解析: {}", e);
+            return;
+        }
+    };
+
+    for message in &mut payload.messages {
+        let content = &mut message.content;
+        if let serde_json::Value::Array(blocks) = content {
+            for block in blocks.iter_mut() {
+                let is_image_url = block.get("type").and_then(|t| t.as_str()) == Some("image")
+                    && block
+                        .get("source")
+                        .and_then(|s| s.get("type"))
+                        .and_then(|t| t.as_str())
+                        == Some("url");
+
+                if !is_image_url {
+                    continue;
+                }
+
+                let url = match block
+                    .get("source")
+                    .and_then(|s| s.get("url"))
+                    .and_then(|u| u.as_str())
+                {
+                    Some(u) => u.to_string(),
+                    None => continue,
+                };
+
+                tracing::info!(url = %url, "下载 URL 图片");
+
+                match fetch_image_url(&client, &url).await {
+                    Ok((data_base64, media_type)) => {
+                        // 替换 source 为 base64 类型
+                        if let Some(source) = block.get_mut("source") {
+                            *source = serde_json::json!({
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": data_base64
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(url = %url, error = %e, "URL 图片下载失败，跳过");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 从 URL 下载图片并返回 (base64_data, media_type)
+async fn fetch_image_url(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<(String, String), anyhow::Error> {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+
+    let response = client.get(url).send().await?;
+
+    if !response.status().is_success() {
+        anyhow::bail!(
+            "URL 图片下载失败: HTTP {}",
+            response.status().as_u16()
+        );
+    }
+
+    // 从 Content-Type 推断 media type
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+
+    // 提取 mime 主类型（去掉 ;charset= 等参数）
+    let media_type = content_type
+        .split(';')
+        .next()
+        .unwrap_or("application/octet-stream")
+        .trim()
+        .to_string();
+
+    let bytes = response.bytes().await?;
+
+    if bytes.len() > IMAGE_URL_MAX_SIZE {
+        anyhow::bail!(
+            "URL 图片过大: {} bytes（上限 {} bytes）",
+            bytes.len(),
+            IMAGE_URL_MAX_SIZE
+        );
+    }
+
+    let data_base64 = STANDARD.encode(&bytes);
+    Ok((data_base64, media_type))
 }
 
 /// POST /v1/messages
@@ -1308,6 +1233,9 @@ pub async fn post_messages(
 
     // 检测模型名是否包含 "thinking" 后缀，若包含则覆写 thinking 配置
     override_thinking_from_model_name(&mut payload);
+
+    // 预处理 URL 类型图片：下载并转换为 base64 内联数据
+    resolve_image_urls(&mut payload).await;
 
     // 提取 user_id 用于凭据亲和性
     let user_id = payload.metadata.as_ref().and_then(|m| m.user_id.clone());

@@ -78,7 +78,7 @@ impl ErrorResponse {
 // === Models 端点类型 ===
 
 /// 模型信息（Anthropic List Models API 格式）
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ModelInfo {
     pub id: String,
     #[serde(rename = "type")]
@@ -394,6 +394,9 @@ pub struct ImageSource {
     pub media_type: String,
     #[serde(default)]
     pub data: String,
+    /// URL 来源（当 source_type == "url" 时使用）
+    #[serde(default)]
+    pub url: String,
 }
 
 // === Count Tokens 端点类型 ===
