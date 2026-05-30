@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -5,22 +6,29 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { AlertTriangle } from 'lucide-react'
 import { Progress } from '@/components/ui/progress'
 import { useCredentialBalance } from '@/hooks/use-credentials'
 import { formatKiroCredits, formatKiroCreditsAsUsd } from '@/lib/format'
 import { cn, parseError } from '@/lib/utils'
+import type { BalanceResponse } from '@/types/api'
 
 interface BalanceDialogProps {
   credentialId: number | null
   open: boolean
   onOpenChange: (open: boolean) => void
   forceRefresh?: boolean
+  onBalanceLoaded?: (credentialId: number, balance: BalanceResponse) => void
 }
 
-export function BalanceDialog({ credentialId, open, onOpenChange, forceRefresh }: BalanceDialogProps) {
+export function BalanceDialog({ credentialId, open, onOpenChange, forceRefresh, onBalanceLoaded }: BalanceDialogProps) {
   const { data: balance, isLoading, isFetching, error } = useCredentialBalance(credentialId)
   const showLoading = isLoading || (forceRefresh && isFetching)
+
+  useEffect(() => {
+    if (credentialId !== null && balance) {
+      onBalanceLoaded?.(credentialId, balance)
+    }
+  }, [balance, credentialId, onBalanceLoaded])
 
   const formatDate = (timestamp: number | null) => {
     if (!timestamp) return '未知'
@@ -68,6 +76,9 @@ export function BalanceDialog({ credentialId, open, onOpenChange, forceRefresh }
           const overspentCredits = Math.max(balance.currentUsage - balance.usageLimit, -balance.remaining, 0)
           const isOverspent = overspentCredits > 0
           const displayedRemaining = isOverspent ? -overspentCredits : balance.remaining
+          const actualUsagePercentage = balance.usageLimit > 0
+            ? (balance.currentUsage / balance.usageLimit) * 100
+            : balance.usagePercentage
 
           return (
             <div className="space-y-4">
@@ -92,19 +103,10 @@ export function BalanceDialog({ credentialId, open, onOpenChange, forceRefresh }
                   <div className="text-xs text-muted-foreground tabular-nums">≈ {formatKiroCreditsAsUsd(balance.usageLimit)}</div>
                 </div>
               </div>
-              <Progress value={balance.usagePercentage} />
+              <Progress value={actualUsagePercentage} />
               <div className={cn('text-center text-sm', isOverspent ? 'font-medium text-destructive' : 'text-muted-foreground')}>
-                {balance.usagePercentage.toFixed(1)}% 已使用
+                {actualUsagePercentage.toFixed(1)}% 已使用
               </div>
-              {isOverspent && (
-                <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
-                  <div>
-                    <div className="font-medium">已超出限额 {formatKiroCredits(overspentCredits)}</div>
-                    <div className="text-xs text-destructive/80">Kiro 支持 overspending，因此该账号仍可显示为超支状态。</div>
-                  </div>
-                </div>
-              )}
             </div>
 
             {/* 详细信息 */}

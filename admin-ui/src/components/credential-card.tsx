@@ -60,11 +60,14 @@ function formatLastUsed(lastUsedAt: string | null): string {
   return `${days} 天前`
 }
 
-export function getOverspentCredits(balance: { remaining: number; usageLimit: number; currentUsage?: number }): number {
+export function getOverspentCredits(balance: { remaining: number; usageLimit: number; usagePercentage?: number; currentUsage?: number }): number {
   const usageOverspend = balance.currentUsage !== undefined && balance.usageLimit > 0
     ? balance.currentUsage - balance.usageLimit
     : 0
-  return Math.max(usageOverspend, -balance.remaining, 0)
+  const percentageOverspend = balance.currentUsage === undefined && balance.usagePercentage !== undefined && balance.usagePercentage > 100 && balance.usageLimit > 0
+    ? balance.usageLimit * ((balance.usagePercentage - 100) / 100)
+    : 0
+  return Math.max(usageOverspend, percentageOverspend, -balance.remaining, 0)
 }
 
 const AUTH_METHOD_BADGE: Record<string, { label: string; className: string }> = {
@@ -180,15 +183,17 @@ export function CredentialCard({
   const authBadge = credential.authMethod ? AUTH_METHOD_BADGE[credential.authMethod] : null
   const totalFailures = credential.failureCount + credential.refreshFailureCount
 
-  // Cached balance API may clamp remaining to 0 when overspent.
-  // Calculate actual remaining from usagePercentage when overspent.
-  const barRemaining = balance?.remaining
-    ?? (cachedBalance && cachedBalance.usagePercentage > 100 && cachedBalance.usageLimit > 0
-        ? cachedBalance.usageLimit - (cachedBalance.usagePercentage / 100) * cachedBalance.usageLimit
-        : cachedBalance?.remaining)
-    ?? null
+  const displayedBalance = balance ?? cachedBalance ?? null
+  const overspentCredits = displayedBalance ? getOverspentCredits(displayedBalance) : 0
+  const barRemaining = displayedBalance
+    ? overspentCredits > 0
+      ? -overspentCredits
+      : displayedBalance.remaining
+    : null
   const barUsageLimit = balance?.usageLimit ?? cachedBalance?.usageLimit ?? null
-  const barUsagePercentage = balance?.usagePercentage ?? cachedBalance?.usagePercentage ?? null
+  const barUsagePercentage = displayedBalance && displayedBalance.usageLimit > 0 && displayedBalance.currentUsage !== undefined
+    ? (displayedBalance.currentUsage / displayedBalance.usageLimit) * 100
+    : (balance?.usagePercentage ?? cachedBalance?.usagePercentage ?? null)
   const barSubscription = balance?.subscriptionTitle ?? cachedBalance?.subscriptionTitle ?? credential.subscriptionTitle ?? null
 
   const formatCacheAge = (cachedAt: number) => {

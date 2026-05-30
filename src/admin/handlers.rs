@@ -134,7 +134,7 @@ pub async fn get_credential_balance(
 /// GET /api/admin/credentials/balances/cached
 /// 获取所有凭据的缓存余额
 pub async fn get_cached_balances(State(state): State<AdminState>) -> impl IntoResponse {
-    Json(state.service.get_cached_balances())
+    Json(state.service.get_cached_balances().await)
 }
 
 /// POST /api/admin/credentials
