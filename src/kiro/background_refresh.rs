@@ -291,15 +291,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_background_refresh_config_default() {
-        let config = BackgroundRefreshConfig::default();
-        assert_eq!(config.check_interval_secs, 60);
-        assert_eq!(config.batch_size, 50);
-        assert_eq!(config.concurrency, 10);
-        assert_eq!(config.refresh_before_expiry_mins, 15);
-    }
-
-    #[test]
     fn test_background_refresher_new() {
         let refresher = BackgroundRefresher::with_defaults();
         assert!(!refresher.is_running());

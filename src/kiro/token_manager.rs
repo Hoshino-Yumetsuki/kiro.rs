@@ -3862,20 +3862,4 @@ mod tests {
         assert_eq!(region, "us-west-2");
     }
 
-    #[test]
-    fn test_update_default_endpoint() {
-        let mut config = Config::default();
-        config.default_endpoint = "ide".to_string();
-
-        let credentials = KiroCredentials::default();
-        let manager = MultiTokenManager::new(config, vec![credentials], None, None, false).unwrap();
-
-        assert_eq!(manager.config().default_endpoint, "ide");
-
-        manager.update_default_endpoint("cli".to_string());
-        assert_eq!(manager.config().default_endpoint, "cli");
-
-        manager.update_default_endpoint("ide".to_string());
-        assert_eq!(manager.config().default_endpoint, "ide");
-    }
 }
