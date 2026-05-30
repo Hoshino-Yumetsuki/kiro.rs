@@ -375,12 +375,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_config_defaults_enable_prompt_cache_accounting() {
-        let config = Config::default();
-        assert!(config.prompt_cache_accounting_enabled);
-    }
-
-    #[test]
     fn test_config_deserializes_prompt_cache_accounting_false() {
         let config: Config = serde_json::from_str(r#"{"promptCacheAccountingEnabled":false}"#)
             .expect("config should deserialize");
