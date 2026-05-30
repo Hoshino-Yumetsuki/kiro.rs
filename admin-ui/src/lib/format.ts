@@ -27,11 +27,15 @@ export function formatTokensPair(inputTokens: number, outputTokens: number): str
 
 const KIRO_CREDIT_USD_RATE = 0.04
 
-export function formatKiroCredits(credits: number): string {
+export function formatKiroCreditAmount(credits: number): string {
   return `${credits.toLocaleString('zh-CN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  })} credits`
+  })}`
+}
+
+export function formatKiroCredits(credits: number): string {
+  return `${formatKiroCreditAmount(credits)} credits`
 }
 
 export function formatKiroCreditsAsUsd(credits: number): string {
@@ -48,7 +52,7 @@ export function formatKiroCreditsWithUsd(credits: number): string {
 }
 
 export function formatKiroUsageWithUsd(currentUsage: number, usageLimit: number): string {
-  return `${formatKiroCredits(currentUsage)} / ${formatKiroCredits(usageLimit)} (≈ ${formatKiroCreditsAsUsd(currentUsage)} / ${formatKiroCreditsAsUsd(usageLimit)})`
+  return `${formatKiroCreditAmount(currentUsage)} / ${formatKiroCredits(usageLimit)} (≈ ${formatKiroCreditsAsUsd(currentUsage)} / ${formatKiroCreditsAsUsd(usageLimit)})`
 }
 
 export function formatExpiry(expiresAt: string | null): string {
