@@ -25,7 +25,7 @@ use super::middleware::AppState;
 use super::stream::{CacheUsageBreakdown, SseEvent, StreamContext, normalize_signature_for_sse};
 use super::types::{
     CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, ModelInfo,
-    ModelsResponse, OutputConfig, Thinking,
+    ModelsResponse, Thinking,
 };
 use super::websearch;
 
@@ -1100,33 +1100,9 @@ fn get_all_model_infos() -> Vec<ModelInfo> {
             created_at: 1770314400,
         },
         ModelInfo {
-            id: "claude-sonnet-4-6-thinking".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Sonnet 4.6 (Thinking)".to_string(),
-            created_at: 1770314400,
-        },
-        ModelInfo {
-            id: "claude-sonnet-4-6-agentic".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Sonnet 4.6 (Agentic)".to_string(),
-            created_at: 1770314400,
-        },
-        ModelInfo {
             id: "claude-sonnet-4-5-20250929".to_string(),
             model_type: "model".to_string(),
             display_name: "Claude Sonnet 4.5".to_string(),
-            created_at: 1727568000,
-        },
-        ModelInfo {
-            id: "claude-sonnet-4-5-20250929-thinking".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Sonnet 4.5 (Thinking)".to_string(),
-            created_at: 1727568000,
-        },
-        ModelInfo {
-            id: "claude-sonnet-4-5-20250929-agentic".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Sonnet 4.5 (Agentic)".to_string(),
             created_at: 1727568000,
         },
         ModelInfo {
@@ -1136,33 +1112,9 @@ fn get_all_model_infos() -> Vec<ModelInfo> {
             created_at: 1730419200,
         },
         ModelInfo {
-            id: "claude-opus-4-5-20251101-thinking".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Opus 4.5 (Thinking)".to_string(),
-            created_at: 1730419200,
-        },
-        ModelInfo {
-            id: "claude-opus-4-5-20251101-agentic".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Opus 4.5 (Agentic)".to_string(),
-            created_at: 1730419200,
-        },
-        ModelInfo {
             id: "claude-opus-4-6".to_string(),
             model_type: "model".to_string(),
             display_name: "Claude Opus 4.6".to_string(),
-            created_at: 1770314400,
-        },
-        ModelInfo {
-            id: "claude-opus-4-6-thinking".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Opus 4.6 (Thinking)".to_string(),
-            created_at: 1770314400,
-        },
-        ModelInfo {
-            id: "claude-opus-4-6-agentic".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Opus 4.6 (Agentic)".to_string(),
             created_at: 1770314400,
         },
         ModelInfo {
@@ -1172,51 +1124,15 @@ fn get_all_model_infos() -> Vec<ModelInfo> {
             created_at: 1772992800,
         },
         ModelInfo {
-            id: "claude-opus-4-7-thinking".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Opus 4.7 (Thinking)".to_string(),
-            created_at: 1772992800,
-        },
-        ModelInfo {
-            id: "claude-opus-4-7-agentic".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Opus 4.7 (Agentic)".to_string(),
-            created_at: 1772992800,
-        },
-        ModelInfo {
             id: "claude-opus-4-8".to_string(),
             model_type: "model".to_string(),
             display_name: "Claude Opus 4.8".to_string(),
             created_at: 1775671200,
         },
         ModelInfo {
-            id: "claude-opus-4-8-thinking".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Opus 4.8 (Thinking)".to_string(),
-            created_at: 1775671200,
-        },
-        ModelInfo {
-            id: "claude-opus-4-8-agentic".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Opus 4.8 (Agentic)".to_string(),
-            created_at: 1775671200,
-        },
-        ModelInfo {
             id: "claude-haiku-4-5-20251001".to_string(),
             model_type: "model".to_string(),
             display_name: "Claude Haiku 4.5".to_string(),
-            created_at: 1727740800,
-        },
-        ModelInfo {
-            id: "claude-haiku-4-5-20251001-thinking".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Haiku 4.5 (Thinking)".to_string(),
-            created_at: 1727740800,
-        },
-        ModelInfo {
-            id: "claude-haiku-4-5-20251001-agentic".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Haiku 4.5 (Agentic)".to_string(),
             created_at: 1727740800,
         },
     ]
@@ -1342,9 +1258,6 @@ pub async fn post_messages(
     let compression_config = state.compression_config.read().clone();
     let rewriter_config = state.rewriter_config.read().clone();
     let prompt_cache = state.prompt_cache_snapshot();
-
-    // 检测模型名是否包含 "thinking" 后缀，若包含则覆写 thinking 配置
-    override_thinking_from_model_name(&mut payload);
 
     // 预处理 URL 类型图片：下载并转换为 base64 内联数据
     resolve_image_urls(&mut payload).await;
@@ -2294,55 +2207,6 @@ fn build_thinking_content_block(
     Some(thinking_block)
 }
 
-/// 检测模型名是否包含 "thinking" 后缀，若包含则覆写 thinking 配置
-///
-/// 支持的后缀格式（映射为 adaptive + effort）：
-/// - `-thinking-minimal` / `-thinking-low` → effort: low
-/// - `-thinking-medium` → effort: medium
-/// - `-thinking-high` / `-thinking` → effort: high（默认）
-/// - `-thinking-xhigh` → effort: xhigh
-/// - `-thinking-max` → effort: max
-fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
-    let model_lower = payload.model.to_lowercase();
-    if !model_lower.contains("thinking") {
-        return;
-    }
-
-    // 具体后缀必须在通用 "thinking" 之前匹配
-    let effort =
-        if model_lower.ends_with("-thinking-minimal") || model_lower.ends_with("-thinking-low") {
-            "low"
-        } else if model_lower.ends_with("-thinking-medium") {
-            "medium"
-        } else if model_lower.ends_with("-thinking-high") || model_lower.ends_with("-thinking") {
-            "high"
-        } else if model_lower.ends_with("-thinking-xhigh") {
-            "xhigh"
-        } else if model_lower.ends_with("-thinking-max") {
-            "max"
-        } else {
-            // "thinking" 出现在模型名中但不是后缀（如 "thinking-model-v2"），不覆写
-            return;
-        };
-
-    tracing::info!(
-        model = %payload.model,
-        thinking_type = "adaptive",
-        effort = effort,
-        "模型名包含 thinking 后缀，覆写 thinking 配置"
-    );
-
-    payload.thinking = Some(Thinking {
-        thinking_type: "adaptive".to_string(),
-        budget_tokens: 20000, // 保留字段兼容性，实际不再使用
-    });
-
-    payload.output_config = Some(OutputConfig {
-        effort: effort.to_string(),
-        format: None,
-    });
-}
-
 /// 构建 additionalModelRequestFields
 ///
 /// 根据请求中的 thinking 配置，构建 Kiro API 的 additionalModelRequestFields。
@@ -2576,7 +2440,7 @@ mod tests {
         let very_long_text = format!("{}{}", long_text, long_text); // 约 1200 tokens
 
         MessagesRequest {
-            model: "claude-sonnet-4-thinking".to_string(),
+            model: "claude-sonnet-4-5-20250929".to_string(),
             max_tokens: 1024,
             messages: vec![
                 Message {

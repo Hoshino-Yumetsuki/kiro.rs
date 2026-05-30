@@ -385,18 +385,21 @@ RUST_LOG=debug ./target/release/kiro-rs
 
 ### Thinking 模式
 
-支持 Claude 的 extended thinking 功能：
+Thinking 模式完全通过请求体字段控制，与模型名无关。支持 `thinking` 和 `output_config.effort` 两个字段：
 
 ```json
 {
-  "model": "claude-sonnet-4-5",
+  "model": "claude-opus-4-7",
+  "thinking": {"type": "adaptive"},
+  "output_config": {"effort": "high"},
   "max_tokens": 16000,
-  "thinking": {
-    "type": "adaptive"
-  },
   "messages": [...]
 }
 ```
+
+- `thinking.type`: `"adaptive"`（启用）、`"enabled"`（旧版兼容，等同 adaptive）、`"disabled"`（关闭）
+- `output_config.effort`: `"low"` / `"medium"` / `"high"`（默认）/ `"xhigh"` / `"max"`
+  - `xhigh` 和 `max` 仅 Opus 系列支持，其他模型自动回退到 `high`
 
 ### 工具调用
 
@@ -430,6 +433,8 @@ RUST_LOG=debug ./target/release/kiro-rs
 | `*sonnet*`（含 4-6/4.6） | `claude-sonnet-4.6` |
 | `*sonnet*`（其他） | `claude-sonnet-4.5` |
 | `*opus*`（含 4-5/4.5） | `claude-opus-4.5` |
+| `*opus*`（含 4-7/4.7） | `claude-opus-4.7` |
+| `*opus*`（含 4-8/4.8） | `claude-opus-4.8` |
 | `*opus*`（其他） | `claude-opus-4.6` |
 | `*haiku*` | `claude-haiku-4.5` |
 
