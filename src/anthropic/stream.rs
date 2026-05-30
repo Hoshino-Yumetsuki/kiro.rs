@@ -1085,8 +1085,7 @@ impl StreamContext {
                             "index": thinking_index,
                             "content_block": {
                                 "type": "thinking",
-                                "thinking": "",
-                                "signature": ""
+                                "thinking": ""
                             }
                         }),
                     );
@@ -1339,19 +1338,18 @@ impl StreamContext {
                     json!({
                         "type": "content_block_start",
                         "index": thinking_index,
-                        "content_block": {
-                            "type": "thinking",
-                            "thinking": "",
-                            "signature": ""
-                        }
-                    }),
-                );
-                events.extend(start_events);
-            }
+                    "content_block": {
+                        "type": "thinking",
+                        "thinking": ""
+                    }
+                }),
+            );
+            events.extend(start_events);
+        }
 
-            // 发送 thinking_delta
-            if let Some(thinking_index) = self.thinking_block_index {
-                events.push(self.create_thinking_delta_event(thinking_index, text));
+        // 发送 thinking_delta
+        if let Some(thinking_index) = self.thinking_block_index {
+            events.push(self.create_thinking_delta_event(thinking_index, text));
             }
 
             // 估算 tokens
@@ -1372,17 +1370,16 @@ impl StreamContext {
                     json!({
                         "type": "content_block_start",
                         "index": thinking_index,
-                        "content_block": {
-                            "type": "thinking",
-                            "thinking": "",
-                            "signature": ""
-                        }
-                    }),
-                );
-                events.extend(start_events);
-            }
+                    "content_block": {
+                        "type": "thinking",
+                        "thinking": ""
+                    }
+                }),
+            );
+            events.extend(start_events);
+        }
 
-            self.pending_signature = Some(sig.clone());
+        self.pending_signature = Some(sig.clone());
             // signature 到达意味着 thinking 块结束，关闭它
             if self.in_thinking_block {
                 if let Some(thinking_index) = self.thinking_block_index {
