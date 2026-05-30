@@ -16,7 +16,7 @@ use crate::kiro::model::requests::tool::{
     InputSchema, Tool as KiroTool, ToolResult, ToolSpecification, ToolUseEntry,
 };
 
-use super::types::{ContentBlock, MessagesRequest, Tool as AnthropicTool};
+use super::types::{ContentBlock, ImageSource, MessagesRequest, Tool as AnthropicTool};
 use crate::anthropic::compressor::CompressionStats;
 use crate::model::config::CompressionConfig;
 
@@ -610,140 +610,25 @@ fn process_message_content(
                             }
                         }
                         "image" => {
-                            if let Some(source) = block.source
-                                && let Some(format) = get_image_format(&source.media_type)
-                            {
-                                // GIF：抽帧为多张静态图，避免动图 base64 体积巨大导致上游 400
-                                if format.eq_ignore_ascii_case("gif") {
-                                    if *remaining_image_budget == 0 {
-                                        tracing::warn!("图片配额已用尽，跳过 GIF");
-                                        continue;
-                                    }
-                                    match process_gif_frames(
-                                        &source.data,
-                                        compression_config,
-                                        total_image_count,
-                                        *remaining_image_budget,
-                                    ) {
-                                        Ok(gif) => {
-                                            let total_final_bytes: usize =
-                                                gif.frames.iter().map(|f| f.final_bytes_len).sum();
-                                            tracing::info!(
-                                                duration_ms = gif.duration_ms,
-                                                source_frames = gif.source_frames,
-                                                sampled_frames = gif.frames.len(),
-                                                sampling_interval_ms = gif.sampling_interval_ms,
-                                                output_format = gif.output_format,
-                                                original_bytes_len =
-                                                    gif.frames[0].original_bytes_len,
-                                                total_final_bytes = total_final_bytes,
-                                                "GIF 已抽帧并重编码"
-                                            );
-
-                                            let frame_count = gif.frames.len();
-                                            for f in gif.frames {
-                                                images.push(KiroImage::from_base64(
-                                                    gif.output_format,
-                                                    f.data,
-                                                ));
-                                            }
-                                            *remaining_image_budget =
-                                                remaining_image_budget.saturating_sub(frame_count);
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "GIF 抽帧失败，回退为静态图（可能丢失动图信息）: {}",
-                                                e
-                                            );
-                                            if *remaining_image_budget == 0 {
-                                                tracing::warn!("图片配额已用尽，跳过 GIF 回退");
-                                                continue;
-                                            }
-                                            match process_image_to_format(
-                                                &source.data,
-                                                "jpeg",
-                                                compression_config,
-                                                total_image_count,
-                                            ) {
-                                                Ok(result) => {
-                                                    images.push(KiroImage::from_base64(
-                                                        "jpeg",
-                                                        result.data,
-                                                    ));
-                                                    *remaining_image_budget -= 1;
-                                                }
-                                                Err(e2) => {
-                                                    tracing::warn!(
-                                                        "GIF 回退重编码失败，尝试静态 GIF: {}",
-                                                        e2
-                                                    );
-                                                    match process_image(
-                                                        &source.data,
-                                                        &format,
-                                                        compression_config,
-                                                        total_image_count,
-                                                    ) {
-                                                        Ok(result) => {
-                                                            images.push(KiroImage::from_base64(
-                                                                format,
-                                                                result.data,
-                                                            ));
-                                                            *remaining_image_budget -= 1;
-                                                        }
-                                                        Err(e3) => {
-                                                            tracing::warn!(
-                                                                "图片处理失败，使用原始数据: {}",
-                                                                e3
-                                                            );
-                                                            images.push(KiroImage::from_base64(
-                                                                format,
-                                                                source.data,
-                                                            ));
-                                                            *remaining_image_budget -= 1;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    // 处理静态图片（可能缩放）
-                                    if *remaining_image_budget == 0 {
-                                        tracing::warn!("图片配额已用尽，跳过静态图片");
-                                        continue;
-                                    }
-                                    match process_image(
-                                        &source.data,
-                                        &format,
-                                        compression_config,
-                                        total_image_count,
-                                    ) {
-                                        Ok(result) => {
-                                            if result.was_resized {
-                                                tracing::info!(
-                                                    "图片已缩放: {:?} -> {:?}, tokens: {}",
-                                                    result.original_size,
-                                                    result.final_size,
-                                                    result.tokens
-                                                );
-                                            }
-                                            images
-                                                .push(KiroImage::from_base64(format, result.data));
-                                            *remaining_image_budget -= 1;
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!("图片处理失败，使用原始数据: {}", e);
-                                            images
-                                                .push(KiroImage::from_base64(format, source.data));
-                                            *remaining_image_budget -= 1;
-                                        }
-                                    }
-                                }
+                            if let Some(source) = block.source {
+                                append_image_from_source(
+                                    source,
+                                    &mut images,
+                                    compression_config,
+                                    total_image_count,
+                                    remaining_image_budget,
+                                );
                             }
                         }
                         "tool_result" => {
                             if let Some(tool_use_id) = block.tool_use_id {
-                                let result_content = extract_tool_result_content(&block.content);
+                                let result_content = extract_tool_result_content(
+                                    &block.content,
+                                    &mut images,
+                                    compression_config,
+                                    total_image_count,
+                                    remaining_image_budget,
+                                );
                                 let is_error = block.is_error.unwrap_or(false);
 
                                 let mut result = if is_error {
@@ -827,6 +712,7 @@ fn process_message_content(
 /// 从 media_type 获取图片格式
 fn get_image_format(media_type: &str) -> Option<String> {
     match media_type {
+        "image/jpg" => Some("jpeg".to_string()),
         "image/jpeg" => Some("jpeg".to_string()),
         "image/png" => Some("png".to_string()),
         "image/gif" => Some("gif".to_string()),
@@ -835,8 +721,127 @@ fn get_image_format(media_type: &str) -> Option<String> {
     }
 }
 
+fn append_image_from_source(
+    source: ImageSource,
+    images: &mut Vec<KiroImage>,
+    compression_config: &CompressionConfig,
+    total_image_count: usize,
+    remaining_image_budget: &mut usize,
+) {
+    let Some(format) = get_image_format(&source.media_type) else {
+        tracing::warn!(
+            media_type = source.media_type,
+            "不支持的图片 media_type，已跳过"
+        );
+        return;
+    };
+
+    // GIF：抽帧为多张静态图，避免动图 base64 体积巨大导致上游 400
+    if format.eq_ignore_ascii_case("gif") {
+        if *remaining_image_budget == 0 {
+            tracing::warn!("图片配额已用尽，跳过 GIF");
+            return;
+        }
+        match process_gif_frames(
+            &source.data,
+            compression_config,
+            total_image_count,
+            *remaining_image_budget,
+        ) {
+            Ok(gif) => {
+                let total_final_bytes: usize = gif.frames.iter().map(|f| f.final_bytes_len).sum();
+                tracing::info!(
+                    duration_ms = gif.duration_ms,
+                    source_frames = gif.source_frames,
+                    sampled_frames = gif.frames.len(),
+                    sampling_interval_ms = gif.sampling_interval_ms,
+                    output_format = gif.output_format,
+                    original_bytes_len = gif.frames[0].original_bytes_len,
+                    total_final_bytes = total_final_bytes,
+                    "GIF 已抽帧并重编码"
+                );
+
+                let frame_count = gif.frames.len();
+                for f in gif.frames {
+                    images.push(KiroImage::from_base64(gif.output_format, f.data));
+                }
+                *remaining_image_budget = remaining_image_budget.saturating_sub(frame_count);
+            }
+            Err(e) => {
+                tracing::warn!("GIF 抽帧失败，回退为静态图（可能丢失动图信息）: {}", e);
+                if *remaining_image_budget == 0 {
+                    tracing::warn!("图片配额已用尽，跳过 GIF 回退");
+                    return;
+                }
+                match process_image_to_format(
+                    &source.data,
+                    "jpeg",
+                    compression_config,
+                    total_image_count,
+                ) {
+                    Ok(result) => {
+                        images.push(KiroImage::from_base64("jpeg", result.data));
+                        *remaining_image_budget -= 1;
+                    }
+                    Err(e2) => {
+                        tracing::warn!("GIF 回退重编码失败，尝试静态 GIF: {}", e2);
+                        match process_image(
+                            &source.data,
+                            &format,
+                            compression_config,
+                            total_image_count,
+                        ) {
+                            Ok(result) => {
+                                images.push(KiroImage::from_base64(format, result.data));
+                                *remaining_image_budget -= 1;
+                            }
+                            Err(e3) => {
+                                tracing::warn!("图片处理失败，使用原始数据: {}", e3);
+                                images.push(KiroImage::from_base64(format, source.data));
+                                *remaining_image_budget -= 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    // 处理静态图片（可能缩放）
+    if *remaining_image_budget == 0 {
+        tracing::warn!("图片配额已用尽，跳过静态图片");
+        return;
+    }
+    match process_image(&source.data, &format, compression_config, total_image_count) {
+        Ok(result) => {
+            if result.was_resized {
+                tracing::info!(
+                    "图片已缩放: {:?} -> {:?}, tokens: {}",
+                    result.original_size,
+                    result.final_size,
+                    result.tokens
+                );
+            }
+            images.push(KiroImage::from_base64(format, result.data));
+            *remaining_image_budget -= 1;
+        }
+        Err(e) => {
+            tracing::warn!("图片处理失败，使用原始数据: {}", e);
+            images.push(KiroImage::from_base64(format, source.data));
+            *remaining_image_budget -= 1;
+        }
+    }
+}
+
 /// 提取工具结果内容
-fn extract_tool_result_content(content: &Option<serde_json::Value>) -> String {
+fn extract_tool_result_content(
+    content: &Option<serde_json::Value>,
+    images: &mut Vec<KiroImage>,
+    compression_config: &CompressionConfig,
+    total_image_count: usize,
+    remaining_image_budget: &mut usize,
+) -> String {
     match content {
         Some(serde_json::Value::String(s)) => s.clone(),
         Some(serde_json::Value::Array(arr)) => {
@@ -844,9 +849,27 @@ fn extract_tool_result_content(content: &Option<serde_json::Value>) -> String {
             for item in arr {
                 if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
                     parts.push(text.to_string());
+                    continue;
+                }
+                if item.get("type").and_then(|v| v.as_str()) == Some("image")
+                    && let Ok(block) = serde_json::from_value::<ContentBlock>(item.clone())
+                    && let Some(source) = block.source
+                {
+                    append_image_from_source(
+                        source,
+                        images,
+                        compression_config,
+                        total_image_count,
+                        remaining_image_budget,
+                    );
                 }
             }
-            parts.join("\n")
+            let text = parts.join("\n");
+            if text.trim().is_empty() && !arr.is_empty() {
+                ".".to_string()
+            } else {
+                text
+            }
         }
         Some(v) => v.to_string(),
         None => String::new(),
@@ -2629,6 +2652,76 @@ mod tests {
                 .user_input_message
                 .content,
             "."
+        );
+    }
+
+    #[test]
+    fn test_tool_result_image_content_is_preserved_as_user_image() {
+        use super::super::types::Message as AnthropicMessage;
+
+        // OpenCode lowers image-returning tools into Anthropic tool_result.content arrays
+        // that may contain structured image blocks. Kiro expects images on the user
+        // message itself, so conversion must lift the nested image while keeping the
+        // paired tool_result non-empty.
+        let req = MessagesRequest {
+            model: "claude-sonnet-4".to_string(),
+            max_tokens: 128,
+            messages: vec![
+                AnthropicMessage {
+                    role: "user".to_string(),
+                    content: serde_json::json!("take a screenshot"),
+                },
+                AnthropicMessage {
+                    role: "assistant".to_string(),
+                    content: serde_json::json!([
+                        {"type": "tool_use", "id": "tool-1", "name": "screenshot", "input": {}}
+                    ]),
+                },
+                AnthropicMessage {
+                    role: "user".to_string(),
+                    content: serde_json::json!([
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tool-1",
+                            "content": [
+                                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "not-valid-image-data"}}
+                            ]
+                        }
+                    ]),
+                },
+            ],
+            stream: false,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: None,
+        };
+
+        let result = convert_request(&req, &CompressionConfig::default()).unwrap();
+        let current = &result.conversation_state.current_message.user_input_message;
+
+        assert_eq!(
+            current.images.len(),
+            1,
+            "tool_result image should be lifted to user images"
+        );
+        assert_eq!(current.images[0].format, "png");
+        assert_eq!(current.images[0].source.bytes, "not-valid-image-data");
+
+        let tool_results = &current.user_input_message_context.tool_results;
+        assert_eq!(
+            tool_results.len(),
+            1,
+            "paired tool_result should be preserved"
+        );
+        assert_eq!(tool_results[0].tool_use_id, "tool-1");
+        assert_eq!(tool_results[0].content[0]["text"], ".");
+
+        assert!(
+            current.content.is_empty(),
+            "image/tool_result payload should remain structurally represented without synthetic user text"
         );
     }
 
