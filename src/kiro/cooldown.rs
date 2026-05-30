@@ -354,5 +354,4 @@ mod tests {
         let cooldowns = manager.get_all_cooldowns();
         assert_eq!(cooldowns.len(), 2);
     }
-
 }

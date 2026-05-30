@@ -1263,5 +1263,4 @@ mod tests {
         let persisted = read_persisted_config(&service);
         assert_eq!(persisted.default_endpoint, "cli");
     }
-
 }
