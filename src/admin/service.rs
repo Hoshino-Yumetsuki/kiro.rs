@@ -1076,7 +1076,9 @@ mod tests {
             Some(provider),
             config,
             compression_config,
-            Arc::new(RwLock::new(crate::anthropic::rewriter::RewriterConfig::default())),
+            Arc::new(RwLock::new(
+                crate::anthropic::rewriter::RewriterConfig::default(),
+            )),
             prompt_cache_runtime,
             known_endpoints,
         )
@@ -1093,18 +1095,18 @@ mod tests {
         let service = create_test_service();
 
         let req = super::super::types::UpdateGlobalConfigRequest {
-                    region: None,
-                    credential_rpm: None,
-                    prompt_cache_ttl_seconds: None,
-                    prompt_cache_accounting_enabled: None,
-                    default_endpoint: Some("cli".to_string()),
-                    enable_credential_cooldown: None,
-                    enable_sticky_routing: None,
-                    auto_disable_insufficient_balance: None,
-                    auto_disable_refresh_failure: None,
-                    compression: None,
-                    rewriter: None,
-                };
+            region: None,
+            credential_rpm: None,
+            prompt_cache_ttl_seconds: None,
+            prompt_cache_accounting_enabled: None,
+            default_endpoint: Some("cli".to_string()),
+            enable_credential_cooldown: None,
+            enable_sticky_routing: None,
+            auto_disable_insufficient_balance: None,
+            auto_disable_refresh_failure: None,
+            compression: None,
+            rewriter: None,
+        };
 
         let result = service.update_global_config(req).await;
         assert!(result.is_ok());
@@ -1122,18 +1124,18 @@ mod tests {
         let service = create_test_service();
 
         let req = super::super::types::UpdateGlobalConfigRequest {
-                    region: None,
-                    credential_rpm: None,
-                    prompt_cache_ttl_seconds: None,
-                    prompt_cache_accounting_enabled: None,
-                    default_endpoint: Some("".to_string()),
-                    enable_credential_cooldown: None,
-                    enable_sticky_routing: None,
-                    auto_disable_insufficient_balance: None,
-                    auto_disable_refresh_failure: None,
-                    compression: None,
-                    rewriter: None,
-                };
+            region: None,
+            credential_rpm: None,
+            prompt_cache_ttl_seconds: None,
+            prompt_cache_accounting_enabled: None,
+            default_endpoint: Some("".to_string()),
+            enable_credential_cooldown: None,
+            enable_sticky_routing: None,
+            auto_disable_insufficient_balance: None,
+            auto_disable_refresh_failure: None,
+            compression: None,
+            rewriter: None,
+        };
 
         let result = service.update_global_config(req).await;
         assert!(result.is_err());
@@ -1150,18 +1152,18 @@ mod tests {
         let service = create_test_service();
 
         let req = super::super::types::UpdateGlobalConfigRequest {
-                    region: None,
-                    credential_rpm: None,
-                    prompt_cache_ttl_seconds: None,
-                    prompt_cache_accounting_enabled: None,
-                    default_endpoint: Some("   ".to_string()),
-                    enable_credential_cooldown: None,
-                    enable_sticky_routing: None,
-                    auto_disable_insufficient_balance: None,
-                    auto_disable_refresh_failure: None,
-                    compression: None,
-                    rewriter: None,
-                };
+            region: None,
+            credential_rpm: None,
+            prompt_cache_ttl_seconds: None,
+            prompt_cache_accounting_enabled: None,
+            default_endpoint: Some("   ".to_string()),
+            enable_credential_cooldown: None,
+            enable_sticky_routing: None,
+            auto_disable_insufficient_balance: None,
+            auto_disable_refresh_failure: None,
+            compression: None,
+            rewriter: None,
+        };
 
         let result = service.update_global_config(req).await;
         assert!(result.is_err());
@@ -1178,18 +1180,18 @@ mod tests {
         let service = create_test_service();
 
         let req = super::super::types::UpdateGlobalConfigRequest {
-                    region: None,
-                    credential_rpm: None,
-                    prompt_cache_ttl_seconds: None,
-                    prompt_cache_accounting_enabled: None,
-                    default_endpoint: Some("unknown".to_string()),
-                    enable_credential_cooldown: None,
-                    enable_sticky_routing: None,
-                    auto_disable_insufficient_balance: None,
-                    auto_disable_refresh_failure: None,
-                    compression: None,
-                    rewriter: None,
-                };
+            region: None,
+            credential_rpm: None,
+            prompt_cache_ttl_seconds: None,
+            prompt_cache_accounting_enabled: None,
+            default_endpoint: Some("unknown".to_string()),
+            enable_credential_cooldown: None,
+            enable_sticky_routing: None,
+            auto_disable_insufficient_balance: None,
+            auto_disable_refresh_failure: None,
+            compression: None,
+            rewriter: None,
+        };
 
         let result = service.update_global_config(req).await;
         assert!(result.is_err());
@@ -1203,18 +1205,18 @@ mod tests {
         let service = create_test_service();
 
         let req = super::super::types::UpdateGlobalConfigRequest {
-                    region: None,
-                    credential_rpm: None,
-                    prompt_cache_ttl_seconds: None,
-                    prompt_cache_accounting_enabled: None,
-                    default_endpoint: Some("  cli  ".to_string()),
-                    enable_credential_cooldown: None,
-                    enable_sticky_routing: None,
-                    auto_disable_insufficient_balance: None,
-                    auto_disable_refresh_failure: None,
-                    compression: None,
-                    rewriter: None,
-                };
+            region: None,
+            credential_rpm: None,
+            prompt_cache_ttl_seconds: None,
+            prompt_cache_accounting_enabled: None,
+            default_endpoint: Some("  cli  ".to_string()),
+            enable_credential_cooldown: None,
+            enable_sticky_routing: None,
+            auto_disable_insufficient_balance: None,
+            auto_disable_refresh_failure: None,
+            compression: None,
+            rewriter: None,
+        };
 
         let result = service.update_global_config(req).await;
         assert!(result.is_ok());

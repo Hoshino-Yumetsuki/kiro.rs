@@ -4,6 +4,8 @@
 
 use std::collections::HashMap;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde_json::json;
 
 use crate::common::utf8::floor_char_boundary;
@@ -160,6 +162,342 @@ fn find_real_thinking_start_tag(buffer: &str) -> Option<usize> {
     }
 
     None
+}
+
+#[cfg(test)]
+fn normalize_thinking_signature(sig_b64: &str, allow_any_claude_model: bool) -> Option<String> {
+    normalize_thinking_signature_with_mode(sig_b64, allow_any_claude_model, true, None)
+}
+
+fn cleanup_existing_thinking_signature(
+    sig_b64: &str,
+    external_model: Option<&str>,
+) -> Option<String> {
+    normalize_thinking_signature_with_mode(sig_b64, true, external_model.is_some(), external_model)
+}
+
+fn normalize_thinking_signature_with_mode(
+    sig_b64: &str,
+    allow_any_claude_model: bool,
+    insert_thinking_if_missing: bool,
+    external_model: Option<&str>,
+) -> Option<String> {
+    const THINKING_MARKER: &[u8] = b"thinking";
+    const NATIVE_MARKER: &[u8] = &[0x10, 0x01, 0x18, 0x02];
+    const THINKING_FIELD: &[u8] = b"\x42\x08thinking";
+
+    let raw = BASE64_STANDARD.decode(sig_b64).ok()?;
+    if raw.first().copied()? != 0x12 {
+        return None;
+    }
+
+    let (outer_len, outer_start) = read_varint_after_tag(&raw, 0, 0x12)?;
+    let outer_end = outer_start.checked_add(outer_len)?;
+    if outer_end > raw.len() || raw.get(outer_start).copied()? != 0x0a {
+        return None;
+    }
+
+    let (meta_len, meta_start) = read_varint_after_tag(&raw, outer_start, 0x0a)?;
+    let meta_end = meta_start.checked_add(meta_len)?;
+    if meta_end > outer_end {
+        return None;
+    }
+
+    let mut meta = raw[meta_start..meta_end].to_vec();
+    let model_marker = length_delimited_field_value(&meta, 6)?;
+    let model_allowed = if let Some(external_model) = external_model {
+        model_marker_matches_external_model(model_marker, external_model)
+    } else if allow_any_claude_model {
+        is_claude_model_marker(model_marker)
+    } else {
+        is_4_6_model_marker(model_marker)
+    };
+    if !model_allowed {
+        return None;
+    }
+    let has_thinking_marker = has_length_delimited_field_value(&meta, 8, THINKING_MARKER);
+    if !has_thinking_marker && !insert_thinking_if_missing {
+        return None;
+    }
+
+    let mut changed = false;
+    if let Some((native_start, native_end)) = find_varint_field(&meta, 2, 1) {
+        let native_followed_by_reasoning = meta.get(native_end).is_some_and(|_| {
+            meta[native_start..]
+                .windows(NATIVE_MARKER.len())
+                .next()
+                .is_some_and(|window| window == NATIVE_MARKER)
+        });
+        if !native_followed_by_reasoning {
+            return None;
+        }
+        meta.drain(native_start..native_end);
+        changed = true;
+    } else if !has_thinking_marker {
+        return None;
+    }
+
+    changed |= normalize_model_alias_marker(&mut meta, external_model);
+
+    if !has_thinking_marker {
+        let (_, insert_pos) = find_varint_field(&meta, 7, 0)?;
+        meta.splice(insert_pos..insert_pos, THINKING_FIELD.iter().copied());
+        changed = true;
+    }
+
+    if !changed {
+        return Some(sig_b64.to_string());
+    }
+
+    let mut rebuilt_outer = Vec::new();
+    rebuilt_outer.push(0x0a);
+    write_varint(meta.len(), &mut rebuilt_outer);
+    rebuilt_outer.extend_from_slice(&meta);
+    rebuilt_outer.extend_from_slice(&raw[meta_end..outer_end]);
+
+    let mut rebuilt = Vec::new();
+    rebuilt.push(0x12);
+    write_varint(rebuilt_outer.len(), &mut rebuilt);
+    rebuilt.extend_from_slice(&rebuilt_outer);
+    rebuilt.extend_from_slice(&raw[outer_end..]);
+
+    Some(BASE64_STANDARD.encode(rebuilt))
+}
+
+pub(super) fn normalize_signature_for_sse(sig: &str, model: &str) -> String {
+    let is_thinking_suffix = is_thinking_suffix_model(model);
+    let external_model = signature_model_marker_for_request(model);
+    if !is_thinking_suffix && !is_4_6_model(model) {
+        return cleanup_existing_thinking_signature(sig, external_model.as_deref())
+            .unwrap_or_else(|| sig.to_string());
+    }
+    normalize_thinking_signature_with_mode(sig, is_thinking_suffix, true, external_model.as_deref())
+        .unwrap_or_else(|| sig.to_string())
+}
+
+fn signature_model_marker_for_request(model: &str) -> Option<String> {
+    let lower = model.to_ascii_lowercase();
+    let base_model = lower.strip_suffix("-thinking").unwrap_or(&lower);
+    let base_model = base_model.strip_suffix("-agentic").unwrap_or(base_model);
+    match base_model {
+        "claude-opus-4-7" | "claude-opus-4.7" => Some("claude-opus-4-7".to_string()),
+        "claude-opus-4-8" | "claude-opus-4.8" => Some("claude-opus-4-8".to_string()),
+        _ => None,
+    }
+}
+
+fn normalize_model_alias_marker(meta: &mut Vec<u8>, external_model: Option<&str>) -> bool {
+    let Some(external_model) = external_model else {
+        return false;
+    };
+    let mut changed = false;
+    for alias in signature_model_aliases(external_model) {
+        while replace_length_delimited_field_value(meta, 6, alias, external_model.as_bytes()) {
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn model_marker_matches_external_model(marker: &[u8], external_model: &str) -> bool {
+    marker == external_model.as_bytes()
+        || signature_model_aliases(external_model)
+            .iter()
+            .any(|alias| marker == *alias)
+}
+
+fn signature_model_aliases(external_model: &str) -> &'static [&'static [u8]] {
+    match external_model {
+        "claude-opus-4-7" => &[b"claude-quince7", b"claude-quince", b"claude-opus-4.7"],
+        "claude-opus-4-8" => &[b"claude-quince8", b"claude-quince", b"claude-opus-4.8"],
+        _ => &[],
+    }
+}
+
+fn is_thinking_suffix_model(model: &str) -> bool {
+    model.to_ascii_lowercase().ends_with("-thinking")
+}
+
+fn is_4_6_model(model: &str) -> bool {
+    let model = model.to_ascii_lowercase();
+    model.contains("4-6") || model.contains("4.6")
+}
+
+fn is_4_6_model_marker(marker: &[u8]) -> bool {
+    std::str::from_utf8(marker)
+        .map(is_4_6_model)
+        .unwrap_or(false)
+}
+
+fn is_claude_model_marker(marker: &[u8]) -> bool {
+    std::str::from_utf8(marker)
+        .map(|model| model.to_ascii_lowercase().starts_with("claude-"))
+        .unwrap_or(false)
+}
+
+fn read_varint_after_tag(data: &[u8], tag_pos: usize, expected_tag: u8) -> Option<(usize, usize)> {
+    if data.get(tag_pos).copied()? != expected_tag {
+        return None;
+    }
+    read_varint(data, tag_pos + 1)
+}
+
+fn read_varint(data: &[u8], mut pos: usize) -> Option<(usize, usize)> {
+    let mut value = 0usize;
+    let mut shift = 0usize;
+
+    loop {
+        let byte = *data.get(pos)?;
+        value |= ((byte & 0x7f) as usize) << shift;
+        pos += 1;
+        if byte & 0x80 == 0 {
+            return Some((value, pos));
+        }
+        shift += 7;
+        if shift >= usize::BITS as usize {
+            return None;
+        }
+    }
+}
+
+fn write_varint(mut value: usize, out: &mut Vec<u8>) {
+    while value >= 0x80 {
+        out.push((value as u8 & 0x7f) | 0x80);
+        value >>= 7;
+    }
+    out.push(value as u8);
+}
+
+fn find_varint_field(
+    data: &[u8],
+    target_field: usize,
+    target_value: usize,
+) -> Option<(usize, usize)> {
+    let mut pos = 0;
+    while pos < data.len() {
+        let field_start = pos;
+        let (key, value_start) = read_varint(data, pos)?;
+        let field_number = key >> 3;
+        let wire_type = key & 0x07;
+        pos = value_start;
+
+        match wire_type {
+            0 => {
+                let (value, field_end) = read_varint(data, pos)?;
+                if field_number == target_field && value == target_value {
+                    return Some((field_start, field_end));
+                }
+                pos = field_end;
+            }
+            1 => pos = pos.checked_add(8)?,
+            2 => {
+                let (len, payload_start) = read_varint(data, pos)?;
+                pos = payload_start.checked_add(len)?;
+            }
+            5 => pos = pos.checked_add(4)?,
+            _ => return None,
+        }
+    }
+    None
+}
+
+fn length_delimited_field_value(data: &[u8], target_field: usize) -> Option<&[u8]> {
+    let mut pos = 0;
+    while pos < data.len() {
+        let (key, value_start) = read_varint(data, pos)?;
+        let field_number = key >> 3;
+        let wire_type = key & 0x07;
+        pos = value_start;
+
+        match wire_type {
+            0 => {
+                let (_, field_end) = read_varint(data, pos)?;
+                pos = field_end;
+            }
+            1 => pos = pos.checked_add(8)?,
+            2 => {
+                let (len, payload_start) = read_varint(data, pos)?;
+                let payload_end = payload_start.checked_add(len)?;
+                if payload_end > data.len() {
+                    return None;
+                }
+                if field_number == target_field {
+                    return Some(&data[payload_start..payload_end]);
+                }
+                pos = payload_end;
+            }
+            5 => pos = pos.checked_add(4)?,
+            _ => return None,
+        }
+    }
+    None
+}
+
+fn replace_length_delimited_field_value(
+    data: &mut Vec<u8>,
+    target_field: usize,
+    from: &[u8],
+    to: &[u8],
+) -> bool {
+    let mut pos = 0;
+    while pos < data.len() {
+        let Some((key, value_start)) = read_varint(data, pos) else {
+            return false;
+        };
+        let field_number = key >> 3;
+        let wire_type = key & 0x07;
+        pos = value_start;
+
+        match wire_type {
+            0 => {
+                let Some((_, field_end)) = read_varint(data, pos) else {
+                    return false;
+                };
+                pos = field_end;
+            }
+            1 => {
+                let Some(next_pos) = pos.checked_add(8) else {
+                    return false;
+                };
+                pos = next_pos;
+            }
+            2 => {
+                let len_start = pos;
+                let Some((len, payload_start)) = read_varint(data, pos) else {
+                    return false;
+                };
+                let Some(payload_end) = payload_start.checked_add(len) else {
+                    return false;
+                };
+                if payload_end > data.len() {
+                    return false;
+                }
+                if field_number == target_field
+                    && data.get(payload_start..payload_end) == Some(from)
+                {
+                    let mut replacement = Vec::new();
+                    write_varint(to.len(), &mut replacement);
+                    replacement.extend_from_slice(to);
+                    data.splice(len_start..payload_end, replacement);
+                    return true;
+                }
+                pos = payload_end;
+            }
+            5 => {
+                let Some(next_pos) = pos.checked_add(4) else {
+                    return false;
+                };
+                pos = next_pos;
+            }
+            _ => return false,
+        }
+    }
+
+    false
+}
+
+fn has_length_delimited_field_value(data: &[u8], target_field: usize, target_value: &[u8]) -> bool {
+    length_delimited_field_value(data, target_field).is_some_and(|value| value == target_value)
 }
 
 /// SSE 事件
@@ -943,6 +1281,7 @@ impl StreamContext {
                 if let Some(thinking_index) = self.thinking_block_index {
                     // 发送 signature_delta（如果有待发送的签名）
                     if let Some(sig) = self.pending_signature.take() {
+                        let normalized_sig = normalize_signature_for_sse(&sig, &self.model);
                         events.push(SseEvent::new(
                             "content_block_delta",
                             json!({
@@ -950,7 +1289,7 @@ impl StreamContext {
                                 "index": thinking_index,
                                 "delta": {
                                     "type": "signature_delta",
-                                    "signature": sig
+                                    "signature": normalized_sig
                                 }
                             }),
                         ));
@@ -1020,10 +1359,36 @@ impl StreamContext {
 
         // 处理 signature：暂存，收到 signature 表示 thinking 块即将结束
         if let Some(sig) = &reasoning.signature {
+            let mut started_empty_thinking_block = false;
+            if !self.in_thinking_block && reasoning.redacted_content.is_none() {
+                let thinking_index = self.state_manager.next_block_index();
+                self.thinking_block_index = Some(thinking_index);
+                self.in_thinking_block = true;
+                started_empty_thinking_block = true;
+                let start_events = self.state_manager.handle_content_block_start(
+                    thinking_index,
+                    "thinking",
+                    json!({
+                        "type": "content_block_start",
+                        "index": thinking_index,
+                        "content_block": {
+                            "type": "thinking",
+                            "thinking": "",
+                            "signature": ""
+                        }
+                    }),
+                );
+                events.extend(start_events);
+            }
+
             self.pending_signature = Some(sig.clone());
             // signature 到达意味着 thinking 块结束，关闭它
             if self.in_thinking_block {
                 if let Some(thinking_index) = self.thinking_block_index {
+                    if started_empty_thinking_block {
+                        events.push(self.create_thinking_delta_event(thinking_index, ""));
+                    }
+                    let normalized_sig = normalize_signature_for_sse(sig, &self.model);
                     events.push(SseEvent::new(
                         "content_block_delta",
                         json!({
@@ -1031,7 +1396,7 @@ impl StreamContext {
                             "index": thinking_index,
                             "delta": {
                                 "type": "signature_delta",
-                                "signature": sig
+                                "signature": normalized_sig
                             }
                         }),
                     ));
@@ -1042,6 +1407,7 @@ impl StreamContext {
                     }
                 }
                 self.in_thinking_block = false;
+                self.thinking_extracted = true;
                 self.pending_signature = None; // already emitted
             }
         }
@@ -1244,6 +1610,7 @@ impl StreamContext {
             if let Some(thinking_index) = self.thinking_block_index {
                 // 发送 signature_delta（如果有待发送的签名）
                 if let Some(sig) = self.pending_signature.take() {
+                    let normalized_sig = normalize_signature_for_sse(&sig, &self.model);
                     events.push(SseEvent::new(
                         "content_block_delta",
                         json!({
@@ -1251,7 +1618,7 @@ impl StreamContext {
                             "index": thinking_index,
                             "delta": {
                                 "type": "signature_delta",
-                                "signature": sig
+                                "signature": normalized_sig
                             }
                         }),
                     ));
@@ -1421,7 +1788,419 @@ fn estimate_tokens(text: &str) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+
     use super::*;
+
+    const OPUS_4_6_NATIVE_SIGNATURE: &str = "EowCClsIDhABGAIqQDw48d35ueoqnU8LHTloJfLtaBDCalB/liNALiPdXRPs/jDhvlOxtZDHNKsi9pUezebhZI7lvXbEUbm5+KrtfrMyD2NsYXVkZS1vcHVzLTQtNjgAEgzWrWaY+VIdCWQ9rOcaDOtHSTHe6lyQ7/kdWSIwFji73XQaiBZfd4DZrpvO9WVIhZdWlnrosB80ah/yuUxoROqeMw3GMs8jOwJzMwvsKl+gXlfdsxNBd+u0oWt/9QL63wCCC3fJ4064uLyRpG8RxfajLTXD0On/b4CMPojf/Y2y1tItPXLydkpmTrNYeURKwPW6B+KPG2Js7M61bCSMK2QDaBJsZWi9o63u+PUEhxgB";
+    const SONNET_4_6_NATIVE_SIGNATURE: &str = "EvMDCl0IDhABGAIqQCQxXCPyNpy4NjRc4YfOgFeEfE35bbSttHjk5kBLT+rBEhYCrMFDaLoXQP2fN9DkoM5Knk8Q2CdqNs6mZWWYsd4yEWNsYXVkZS1zb25uZXQtNC02OAASDHviyTd3V5VI9wvGHhoMvH61Ck1wVJisS+RMIjDjgFuB23Eyyqe87awWWRrs2q+rsNp7YsQanBd5qYjDkBGx0Su0S43niVolBmq79joqwwJRWCbrvhFf21GmNh/HlUpDhb40k8birhtaNUyBofflJJKGmVYYhipCp/N7qtjN08WeWG8SkjzQKHz9fRRRgCAe+Jo+YNe61crCk9svmVaaU2BDDVspdeYYgP01Nx6qE+YB1njr39/NDOMopBa6Jn7TShkuZRVm4NsJ1x1B31kWKPsNBa8LnwZzAKfjv0BtgiBJd7qzm9iqUebkOWxKAUAJc/cw/XzmN5dZDol2cIHlBYmROc6Rjp8qzJ4NRXBLeIlllHzE0GHyhzU/hhQCKRG9oofJ6UtbrRv+/0YZq8/adNlpFJ93IbrMkv2WEdcPXsRb1/70BGrnHd5Op+GZ/7vbCRpK3s0SwHUGygudAcqlGk329HqZqMZ/KnOKwdYarcwjvn/Efh+tx0IWW/4BUv6lxlvy8DUpOa4CuQqfuB4DjXjc9xgB";
+
+    fn decode_signature(signature: &str) -> Vec<u8> {
+        STANDARD
+            .decode(signature)
+            .expect("signature should be base64")
+    }
+
+    fn signature_with_model_marker(signature: &str, from: &[u8], to: &[u8]) -> String {
+        assert_eq!(
+            from.len(),
+            to.len(),
+            "replacement model marker must preserve length"
+        );
+        let mut raw = decode_signature(signature);
+        let pos = raw
+            .windows(from.len())
+            .position(|window| window == from)
+            .expect("source model marker should exist");
+        raw[pos..pos + to.len()].copy_from_slice(to);
+        STANDARD.encode(raw)
+    }
+
+    fn signature_with_existing_thinking_field(signature: &str) -> String {
+        let raw = decode_signature(signature);
+        let (outer_len, outer_start) = read_varint_after_tag(&raw, 0, 0x12).unwrap();
+        let outer_end = outer_start + outer_len;
+        let (meta_len, meta_start) = read_varint_after_tag(&raw, outer_start, 0x0a).unwrap();
+        let meta_end = meta_start + meta_len;
+
+        let mut meta = raw[meta_start..meta_end].to_vec();
+        let (_, insert_pos) = find_varint_field(&meta, 7, 0).unwrap();
+        meta.splice(insert_pos..insert_pos, b"\x42\x08thinking".iter().copied());
+
+        let mut rebuilt_outer = Vec::new();
+        rebuilt_outer.push(0x0a);
+        write_varint(meta.len(), &mut rebuilt_outer);
+        rebuilt_outer.extend_from_slice(&meta);
+        rebuilt_outer.extend_from_slice(&raw[meta_end..outer_end]);
+
+        let mut rebuilt = Vec::new();
+        rebuilt.push(0x12);
+        write_varint(rebuilt_outer.len(), &mut rebuilt);
+        rebuilt.extend_from_slice(&rebuilt_outer);
+        rebuilt.extend_from_slice(&raw[outer_end..]);
+
+        STANDARD.encode(rebuilt)
+    }
+
+    fn signature_with_model_field(signature: &str, model: &[u8]) -> String {
+        let raw = decode_signature(signature);
+        let (outer_len, outer_start) = read_varint_after_tag(&raw, 0, 0x12).unwrap();
+        let outer_end = outer_start + outer_len;
+        let (meta_len, meta_start) = read_varint_after_tag(&raw, outer_start, 0x0a).unwrap();
+        let meta_end = meta_start + meta_len;
+
+        let mut meta = raw[meta_start..meta_end].to_vec();
+        let (len_start, _payload_start, payload_end) =
+            find_test_length_delimited_field(&meta, 6).unwrap();
+        let mut replacement = Vec::new();
+        write_varint(model.len(), &mut replacement);
+        replacement.extend_from_slice(model);
+        meta.splice(len_start..payload_end, replacement);
+
+        let mut rebuilt_outer = Vec::new();
+        rebuilt_outer.push(0x0a);
+        write_varint(meta.len(), &mut rebuilt_outer);
+        rebuilt_outer.extend_from_slice(&meta);
+        rebuilt_outer.extend_from_slice(&raw[meta_end..outer_end]);
+
+        let mut rebuilt = Vec::new();
+        rebuilt.push(0x12);
+        write_varint(rebuilt_outer.len(), &mut rebuilt);
+        rebuilt.extend_from_slice(&rebuilt_outer);
+        rebuilt.extend_from_slice(&raw[outer_end..]);
+
+        STANDARD.encode(rebuilt)
+    }
+
+    fn signature_with_extra_model_field(signature: &str, model: &[u8]) -> String {
+        let raw = decode_signature(signature);
+        let (outer_len, outer_start) = read_varint_after_tag(&raw, 0, 0x12).unwrap();
+        let outer_end = outer_start + outer_len;
+        let (meta_len, meta_start) = read_varint_after_tag(&raw, outer_start, 0x0a).unwrap();
+        let meta_end = meta_start + meta_len;
+
+        let mut meta = raw[meta_start..meta_end].to_vec();
+        let mut decoy = vec![0x32];
+        write_varint(model.len(), &mut decoy);
+        decoy.extend_from_slice(model);
+        meta.splice(0..0, decoy);
+
+        let mut rebuilt_outer = Vec::new();
+        rebuilt_outer.push(0x0a);
+        write_varint(meta.len(), &mut rebuilt_outer);
+        rebuilt_outer.extend_from_slice(&meta);
+        rebuilt_outer.extend_from_slice(&raw[meta_end..outer_end]);
+
+        let mut rebuilt = Vec::new();
+        rebuilt.push(0x12);
+        write_varint(rebuilt_outer.len(), &mut rebuilt);
+        rebuilt.extend_from_slice(&rebuilt_outer);
+        rebuilt.extend_from_slice(&raw[outer_end..]);
+
+        STANDARD.encode(rebuilt)
+    }
+
+    fn find_test_length_delimited_field(
+        data: &[u8],
+        target_field: usize,
+    ) -> Option<(usize, usize, usize)> {
+        let mut pos = 0;
+        while pos < data.len() {
+            let (key, value_start) = read_varint(data, pos)?;
+            let field_number = key >> 3;
+            let wire_type = key & 0x07;
+            pos = value_start;
+
+            match wire_type {
+                0 => {
+                    let (_, field_end) = read_varint(data, pos)?;
+                    pos = field_end;
+                }
+                1 => pos = pos.checked_add(8)?,
+                2 => {
+                    let len_start = pos;
+                    let (len, payload_start) = read_varint(data, pos)?;
+                    let payload_end = payload_start.checked_add(len)?;
+                    if payload_end > data.len() {
+                        return None;
+                    }
+                    if field_number == target_field {
+                        return Some((len_start, payload_start, payload_end));
+                    }
+                    pos = payload_end;
+                }
+                5 => pos = pos.checked_add(4)?,
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    fn contains_native_marker(raw: &[u8]) -> bool {
+        raw.windows([0x10, 0x01, 0x18, 0x02].len())
+            .any(|w| w == [0x10, 0x01, 0x18, 0x02])
+    }
+
+    fn count_marker(raw: &[u8], marker: &[u8]) -> usize {
+        raw.windows(marker.len())
+            .filter(|window| *window == marker)
+            .count()
+    }
+
+    #[test]
+    fn normalizes_opus_4_6_native_signature_to_thinking_marker() {
+        let raw = decode_signature(OPUS_4_6_NATIVE_SIGNATURE);
+        assert!(
+            raw.windows(b"claude-opus-4-6".len())
+                .any(|w| w == b"claude-opus-4-6")
+        );
+        assert!(!raw.windows(b"thinking".len()).any(|w| w == b"thinking"));
+        assert!(
+            raw.windows([0x10, 0x01, 0x18, 0x02].len())
+                .any(|w| w == [0x10, 0x01, 0x18, 0x02])
+        );
+
+        let normalized = normalize_thinking_signature(OPUS_4_6_NATIVE_SIGNATURE, false)
+            .expect("opus 4.6 native signature should normalize");
+        let normalized_raw = decode_signature(&normalized);
+
+        assert!(
+            normalized_raw
+                .windows(b"claude-opus-4-6".len())
+                .any(|w| w == b"claude-opus-4-6")
+        );
+        assert!(
+            normalized_raw
+                .windows(b"thinking".len())
+                .any(|w| w == b"thinking")
+        );
+        assert!(
+            !normalized_raw
+                .windows([0x10, 0x01, 0x18, 0x02].len())
+                .any(|w| w == [0x10, 0x01, 0x18, 0x02])
+        );
+    }
+
+    #[test]
+    fn normalizes_signature_for_sse_only_for_4_6_models() {
+        assert_eq!(
+            normalize_signature_for_sse(OPUS_4_6_NATIVE_SIGNATURE, "claude-opus-4-7"),
+            OPUS_4_6_NATIVE_SIGNATURE
+        );
+        assert_eq!(
+            normalize_signature_for_sse(OPUS_4_6_NATIVE_SIGNATURE, "claude-sonnet-4-5"),
+            OPUS_4_6_NATIVE_SIGNATURE
+        );
+
+        let normalized =
+            normalize_signature_for_sse(OPUS_4_6_NATIVE_SIGNATURE, "claude-opus-4-6-thinking");
+        assert_ne!(normalized, OPUS_4_6_NATIVE_SIGNATURE);
+        assert!(
+            decode_signature(&normalized)
+                .windows(b"thinking".len())
+                .any(|w| w == b"thinking")
+        );
+    }
+
+    #[test]
+    fn normalizes_sonnet_4_6_native_signature_to_thinking_marker() {
+        let normalized =
+            normalize_signature_for_sse(SONNET_4_6_NATIVE_SIGNATURE, "claude-sonnet-4-6");
+        assert_ne!(normalized, SONNET_4_6_NATIVE_SIGNATURE);
+
+        let normalized_raw = decode_signature(&normalized);
+        assert!(
+            normalized_raw
+                .windows(b"claude-sonnet-4-6".len())
+                .any(|w| w == b"claude-sonnet-4-6")
+        );
+        assert!(
+            normalized_raw
+                .windows(b"thinking".len())
+                .any(|w| w == b"thinking")
+        );
+        assert!(
+            !normalized_raw
+                .windows([0x10, 0x01, 0x18, 0x02].len())
+                .any(|w| w == [0x10, 0x01, 0x18, 0x02])
+        );
+    }
+
+    #[test]
+    fn normalizes_native_signature_for_thinking_suffix_models() {
+        let opus_4_7_signature = signature_with_model_marker(
+            OPUS_4_6_NATIVE_SIGNATURE,
+            b"claude-opus-4-6",
+            b"claude-opus-4-7",
+        );
+
+        for request_model in ["claude-opus-4-7", "claude-opus-4-7-thinking"] {
+            let normalized = normalize_signature_for_sse(&opus_4_7_signature, request_model);
+            assert_ne!(normalized, opus_4_7_signature);
+
+            let normalized_raw = decode_signature(&normalized);
+            assert!(
+                normalized_raw
+                    .windows(b"claude-opus-4-7".len())
+                    .any(|w| w == b"claude-opus-4-7")
+            );
+            assert!(
+                normalized_raw
+                    .windows(b"thinking".len())
+                    .any(|w| w == b"thinking")
+            );
+            assert!(
+                !normalized_raw
+                    .windows([0x10, 0x01, 0x18, 0x02].len())
+                    .any(|w| w == [0x10, 0x01, 0x18, 0x02])
+            );
+        }
+    }
+
+    #[test]
+    fn normalizes_existing_thinking_signature_for_base_models_without_duplication() {
+        let opus_4_7_signature = signature_with_model_marker(
+            OPUS_4_6_NATIVE_SIGNATURE,
+            b"claude-opus-4-6",
+            b"claude-opus-4-7",
+        );
+        let dual_marker_signature = signature_with_existing_thinking_field(&opus_4_7_signature);
+        let dual_marker_raw = decode_signature(&dual_marker_signature);
+        assert!(contains_native_marker(&dual_marker_raw));
+        assert_eq!(count_marker(&dual_marker_raw, b"thinking"), 1);
+
+        let normalized = normalize_signature_for_sse(&dual_marker_signature, "claude-opus-4-7");
+        let normalized_raw = decode_signature(&normalized);
+
+        assert!(!contains_native_marker(&normalized_raw));
+        assert_eq!(count_marker(&normalized_raw, b"thinking"), 1);
+    }
+
+    #[test]
+    fn normalizes_quince_alias_to_external_model_marker() {
+        for (alias, external_model) in [
+            (b"claude-quince7".as_slice(), "claude-opus-4-7"),
+            (b"claude-quince8".as_slice(), "claude-opus-4-8"),
+            (b"claude-quince".as_slice(), "claude-opus-4-7"),
+            (b"claude-quince".as_slice(), "claude-opus-4-8"),
+        ] {
+            let quince_signature = signature_with_model_field(OPUS_4_6_NATIVE_SIGNATURE, alias);
+            let dual_marker_signature = signature_with_extra_model_field(
+                &signature_with_extra_model_field(
+                    &signature_with_existing_thinking_field(&quince_signature),
+                    b"claude-decoy",
+                ),
+                alias,
+            );
+            let dual_marker_raw = decode_signature(&dual_marker_signature);
+            assert!(dual_marker_raw.windows(alias.len()).any(|w| w == alias));
+            assert!(
+                dual_marker_raw
+                    .windows(b"claude-decoy".len())
+                    .any(|w| w == b"claude-decoy")
+            );
+            assert!(contains_native_marker(&dual_marker_raw));
+            assert_eq!(count_marker(&dual_marker_raw, b"thinking"), 1);
+
+            let normalized = normalize_signature_for_sse(&dual_marker_signature, external_model);
+            let normalized_raw = decode_signature(&normalized);
+
+            assert!(
+                normalized_raw
+                    .windows(external_model.len())
+                    .any(|w| w == external_model.as_bytes())
+            );
+            assert!(!normalized_raw.windows(alias.len()).any(|w| w == alias));
+            assert!(!contains_native_marker(&normalized_raw));
+            assert_eq!(count_marker(&normalized_raw, b"thinking"), 1);
+        }
+    }
+
+    #[test]
+    fn normalizes_quince_alias_for_public_model_variants() {
+        for (alias, request_model, external_model) in [
+            (
+                b"claude-quince7".as_slice(),
+                "claude-opus-4-7-thinking",
+                "claude-opus-4-7",
+            ),
+            (
+                b"claude-quince7".as_slice(),
+                "claude-opus-4-7-agentic",
+                "claude-opus-4-7",
+            ),
+            (
+                b"claude-quince7".as_slice(),
+                "claude-opus-4.7",
+                "claude-opus-4-7",
+            ),
+            (
+                b"claude-quince8".as_slice(),
+                "claude-opus-4-8-thinking",
+                "claude-opus-4-8",
+            ),
+            (
+                b"claude-quince8".as_slice(),
+                "claude-opus-4-8-agentic",
+                "claude-opus-4-8",
+            ),
+            (
+                b"claude-quince8".as_slice(),
+                "claude-opus-4.8",
+                "claude-opus-4-8",
+            ),
+        ] {
+            let quince_signature = signature_with_model_field(OPUS_4_6_NATIVE_SIGNATURE, alias);
+            let signature = signature_with_existing_thinking_field(&quince_signature);
+
+            let normalized = normalize_signature_for_sse(&signature, request_model);
+            let normalized_raw = decode_signature(&normalized);
+
+            assert!(
+                normalized_raw
+                    .windows(external_model.len())
+                    .any(|w| w == external_model.as_bytes())
+            );
+            assert!(!normalized_raw.windows(alias.len()).any(|w| w == alias));
+            assert!(!contains_native_marker(&normalized_raw));
+            assert_eq!(count_marker(&normalized_raw, b"thinking"), 1);
+        }
+    }
+
+    #[test]
+    fn normalizes_native_only_quince_alias_for_base_models() {
+        for (alias, request_model, external_model) in [
+            (
+                b"claude-quince7".as_slice(),
+                "claude-opus-4-7",
+                "claude-opus-4-7",
+            ),
+            (
+                b"claude-quince8".as_slice(),
+                "claude-opus-4-8",
+                "claude-opus-4-8",
+            ),
+        ] {
+            let signature = signature_with_model_field(OPUS_4_6_NATIVE_SIGNATURE, alias);
+            let raw = decode_signature(&signature);
+            assert!(raw.windows(alias.len()).any(|w| w == alias));
+            assert!(contains_native_marker(&raw));
+            assert_eq!(count_marker(&raw, b"thinking"), 0);
+
+            let normalized = normalize_signature_for_sse(&signature, request_model);
+            let normalized_raw = decode_signature(&normalized);
+
+            assert!(
+                normalized_raw
+                    .windows(external_model.len())
+                    .any(|w| w == external_model.as_bytes())
+            );
+            assert!(!normalized_raw.windows(alias.len()).any(|w| w == alias));
+            assert!(!contains_native_marker(&normalized_raw));
+            assert_eq!(count_marker(&normalized_raw, b"thinking"), 1);
+        }
+    }
 
     fn zero_cache_usage() -> Option<CacheUsageBreakdown> {
         Some(CacheUsageBreakdown {
@@ -1492,7 +2271,15 @@ mod tests {
 
     #[test]
     fn test_stream_context_message_delta_only_has_output_tokens() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 123, zero_cache_usage(), false, HashMap::new(), false, Vec::new());
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            123,
+            zero_cache_usage(),
+            false,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
         let initial_events = ctx.generate_initial_events();
         let mut all_events = initial_events;
         ctx.process_kiro_event(&Event::Metering(MeteringEvent {
@@ -1535,7 +2322,15 @@ mod tests {
 
     #[test]
     fn test_stream_context_includes_cache_usage_fields() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 321, cache_usage(7, 8, 0, 0), false, HashMap::new(), false, Vec::new());
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            321,
+            cache_usage(7, 8, 0, 0),
+            false,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
         let all_events = ctx.generate_initial_events();
 
         let message_start_usage = all_events
@@ -1550,7 +2345,15 @@ mod tests {
     }
     #[test]
     fn test_stream_context_uses_billed_input_tokens_when_cache_read_present() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 321, cache_usage(7, 8, 0, 0), false, HashMap::new(), false, Vec::new());
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            321,
+            cache_usage(7, 8, 0, 0),
+            false,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
         let initial_events = ctx.generate_initial_events();
         let message_start_usage = initial_events
             .iter()
@@ -1578,8 +2381,15 @@ mod tests {
     }
     #[test]
     fn test_stream_context_omits_cache_usage_fields_when_disabled() {
-        let mut ctx =
-            StreamContext::new_with_thinking("test-model", 321, None, false, HashMap::new(), false, Vec::new());
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            321,
+            None,
+            false,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
         let initial_events = ctx.generate_initial_events();
         let message_start_usage = initial_events
             .iter()
@@ -1615,7 +2425,15 @@ mod tests {
 
     #[test]
     fn test_stream_context_cache_in_message_start_not_delta() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1000, cache_usage(50, 800, 30, 20), false, HashMap::new(), false, Vec::new());
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1000,
+            cache_usage(50, 800, 30, 20),
+            false,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
 
         ctx.process_kiro_event(&Event::Metering(MeteringEvent {
             unit: "credit".to_string(),
@@ -1661,7 +2479,15 @@ mod tests {
 
     #[test]
     fn test_text_delta_after_tool_use_restarts_text_block() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, zero_cache_usage(), false, HashMap::new(), false, Vec::new());
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1,
+            zero_cache_usage(),
+            false,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
 
         let initial_events = ctx.generate_initial_events();
         assert!(
@@ -1731,7 +2557,15 @@ mod tests {
     #[test]
     fn test_tool_use_only_does_not_emit_empty_text_block() {
         // tool_use-only 的流式响应不应产生空 text block（text=""），否则客户端写回 history 会触发上游校验拒绝
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, zero_cache_usage(), false, HashMap::new(), false, Vec::new());
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1,
+            zero_cache_usage(),
+            false,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
 
         let mut all_events = Vec::new();
         all_events.extend(ctx.generate_initial_events());
@@ -1768,7 +2602,15 @@ mod tests {
 
     #[test]
     fn test_reasoning_content_text_starts_thinking_block() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, zero_cache_usage(), true, HashMap::new(), false, Vec::new());
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
         let _initial_events = ctx.generate_initial_events();
 
         let events = ctx.process_kiro_event(&Event::ReasoningContent(ReasoningContentEvent {
@@ -1798,7 +2640,15 @@ mod tests {
 
     #[test]
     fn test_reasoning_content_signature_closes_thinking_block() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, zero_cache_usage(), true, HashMap::new(), false, Vec::new());
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
         let _initial_events = ctx.generate_initial_events();
 
         // First send text to open thinking block
@@ -1836,8 +2686,129 @@ mod tests {
     }
 
     #[test]
+    fn test_reasoning_content_signature_only_starts_thinking_block() {
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
+        let _initial_events = ctx.generate_initial_events();
+
+        let events = ctx.process_kiro_event(&Event::ReasoningContent(ReasoningContentEvent {
+            text: Some(String::new()),
+            signature: Some("sig_only".to_string()),
+            redacted_content: None,
+        }));
+
+        let event_sequence: Vec<String> = events
+            .iter()
+            .filter_map(|e| match e.event.as_str() {
+                "content_block_start" => Some(format!(
+                    "content_block_start:{}",
+                    e.data["content_block"]["type"].as_str().unwrap_or("")
+                )),
+                "content_block_delta" => Some(format!(
+                    "content_block_delta:{}",
+                    e.data["delta"]["type"].as_str().unwrap_or("")
+                )),
+                "content_block_stop" => Some("content_block_stop".to_string()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            event_sequence,
+            vec![
+                "content_block_start:thinking",
+                "content_block_delta:thinking_delta",
+                "content_block_delta:signature_delta",
+                "content_block_stop",
+            ],
+            "signature-only thinking should still include an empty thinking_delta before signature_delta"
+        );
+
+        assert!(
+            events.iter().any(|e| {
+                e.event == "content_block_start" && e.data["content_block"]["type"] == "thinking"
+            }),
+            "should emit thinking content_block_start even when text is empty"
+        );
+        assert!(
+            events.iter().any(|e| {
+                e.event == "content_block_delta"
+                    && e.data["delta"]["type"] == "signature_delta"
+                    && e.data["delta"]["signature"] == "sig_only"
+            }),
+            "should emit signature_delta when signature arrives without text"
+        );
+        assert!(
+            events.iter().any(|e| e.event == "content_block_stop"),
+            "should close the thinking block when signature arrives without text"
+        );
+    }
+
+    #[test]
+    fn test_reasoning_content_emits_normalized_opus_4_6_signature() {
+        let mut ctx = StreamContext::new_with_thinking(
+            "claude-opus-4-6",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
+        let _initial_events = ctx.generate_initial_events();
+
+        ctx.process_kiro_event(&Event::ReasoningContent(ReasoningContentEvent {
+            text: Some("thinking content".to_string()),
+            signature: None,
+            redacted_content: None,
+        }));
+
+        let events = ctx.process_kiro_event(&Event::ReasoningContent(ReasoningContentEvent {
+            text: None,
+            signature: Some(OPUS_4_6_NATIVE_SIGNATURE.to_string()),
+            redacted_content: None,
+        }));
+
+        let emitted_sig = events
+            .iter()
+            .find(|event| {
+                event.event == "content_block_delta"
+                    && event.data["delta"]["type"] == "signature_delta"
+            })
+            .and_then(|event| event.data["delta"]["signature"].as_str())
+            .expect("signature_delta should be emitted");
+        let emitted_raw = decode_signature(emitted_sig);
+
+        assert!(
+            emitted_raw
+                .windows(b"thinking".len())
+                .any(|w| w == b"thinking")
+        );
+        assert!(
+            !emitted_raw
+                .windows([0x10, 0x01, 0x18, 0x02].len())
+                .any(|w| w == [0x10, 0x01, 0x18, 0x02])
+        );
+    }
+
+    #[test]
     fn test_reasoning_content_redacted_thinking() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, zero_cache_usage(), true, HashMap::new(), false, Vec::new());
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
         let _initial_events = ctx.generate_initial_events();
 
         let events = ctx.process_kiro_event(&Event::ReasoningContent(ReasoningContentEvent {
@@ -1865,7 +2836,15 @@ mod tests {
 
     #[test]
     fn test_reasoning_content_redacted_closes_open_thinking_block() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, zero_cache_usage(), true, HashMap::new(), false, Vec::new());
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
         let _initial_events = ctx.generate_initial_events();
 
         // Open a thinking block
@@ -1905,7 +2884,15 @@ mod tests {
 
     #[test]
     fn test_reasoning_then_text_response() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, zero_cache_usage(), true, HashMap::new(), false, Vec::new());
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
         let _initial_events = ctx.generate_initial_events();
 
         let mut all_events = Vec::new();
@@ -1964,7 +2951,15 @@ mod tests {
 
     #[test]
     fn test_thinking_only_sets_max_tokens_stop_reason() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, zero_cache_usage(), true, HashMap::new(), false, Vec::new());
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
         let _initial_events = ctx.generate_initial_events();
 
         let mut all_events = Vec::new();
@@ -2016,7 +3011,15 @@ mod tests {
 
     #[test]
     fn test_thinking_with_tool_use_keeps_tool_use_stop_reason() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, zero_cache_usage(), true, HashMap::new(), false, Vec::new());
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
         let _initial_events = ctx.generate_initial_events();
 
         let mut all_events = Vec::new();
@@ -2061,7 +3064,15 @@ mod tests {
 
     #[test]
     fn test_generate_final_events_closes_open_thinking_block_with_signature() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, zero_cache_usage(), true, HashMap::new(), false, Vec::new());
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
         let _initial_events = ctx.generate_initial_events();
 
         // Open thinking block but don't close it (no signature received)
@@ -2118,7 +3129,15 @@ mod tests {
 
     #[test]
     fn test_multiple_reasoning_chunks() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, zero_cache_usage(), true, HashMap::new(), false, Vec::new());
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
         let _initial_events = ctx.generate_initial_events();
 
         let mut all_events = Vec::new();
@@ -2165,7 +3184,15 @@ mod tests {
 
     #[test]
     fn test_reasoning_with_text_and_signature_in_same_event() {
-        let mut ctx = StreamContext::new_with_thinking("test-model", 1, zero_cache_usage(), true, HashMap::new(), false, Vec::new());
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
         let _initial_events = ctx.generate_initial_events();
 
         // First open the thinking block

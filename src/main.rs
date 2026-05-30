@@ -199,7 +199,8 @@ async fn main() {
     )));
 
     // 构建 Anthropic API 路由（profile_arn 由 provider 层根据实际凭据动态注入）
-    let rewriter_config = std::sync::Arc::new(parking_lot::RwLock::new(config.read().rewriter.clone()));
+    let rewriter_config =
+        std::sync::Arc::new(parking_lot::RwLock::new(config.read().rewriter.clone()));
     let anthropic_app = anthropic::create_router_with_provider(
         &api_key,
         Some(kiro_provider.clone()),
