@@ -1,12 +1,16 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { RefreshCw, RotateCcw, Wallet, Trash2, Loader2, Pencil, Check, X } from 'lucide-react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Wallet } from 'lucide-react'
+import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
-import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from '@/components/ui/tooltip'
 import {
   Dialog,
   DialogContent,
@@ -16,8 +20,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import type { CredentialStatusItem, CachedBalanceInfo, BalanceResponse } from '@/types/api'
-import { formatKiroCreditAmount, formatKiroCredits, formatKiroCreditsAsUsd } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { BalanceBar } from '@/components/balance-bar'
+import { CardActionsMenu } from '@/components/card-actions-menu'
+import { CredentialEditPopover } from '@/components/credential-edit-popover'
 import {
   useSetDisabled,
   useSetPriority,
@@ -38,9 +44,6 @@ interface CredentialCardProps {
   loadingBalance: boolean
 }
 
-type BalanceDisplayInfo = Pick<BalanceResponse, 'remaining' | 'usageLimit' | 'usagePercentage'> &
-  Partial<Pick<BalanceResponse, 'currentUsage'>>
-
 function formatLastUsed(lastUsedAt: string | null): string {
   if (!lastUsedAt) return '从未使用'
   const date = new Date(lastUsedAt)
@@ -57,11 +60,17 @@ function formatLastUsed(lastUsedAt: string | null): string {
   return `${days} 天前`
 }
 
-function getOverspentCredits(balance: BalanceDisplayInfo): number {
+export function getOverspentCredits(balance: { remaining: number; usageLimit: number; currentUsage?: number }): number {
   const usageOverspend = balance.currentUsage !== undefined && balance.usageLimit > 0
     ? balance.currentUsage - balance.usageLimit
     : 0
   return Math.max(usageOverspend, -balance.remaining, 0)
+}
+
+const AUTH_METHOD_BADGE: Record<string, { label: string; className: string }> = {
+  social: { label: 'Social', className: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' },
+  idc: { label: 'IdC', className: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' },
+  api_key: { label: 'API Key', className: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400' },
 }
 
 export function CredentialCard({
@@ -73,14 +82,8 @@ export function CredentialCard({
   balance,
   loadingBalance,
 }: CredentialCardProps) {
-  const [editingPriority, setEditingPriority] = useState(false)
-  const [priorityValue, setPriorityValue] = useState(String(credential.priority))
-  const [editingRegion, setEditingRegion] = useState(false)
-  const [regionValue, setRegionValue] = useState(credential.region ?? '')
-  const [apiRegionValue, setApiRegionValue] = useState(credential.apiRegion ?? '')
-  const [editingEndpoint, setEditingEndpoint] = useState(false)
-  const [endpointValue, setEndpointValue] = useState(credential.endpoint ?? '')
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [editField, setEditField] = useState<'priority' | 'region' | 'endpoint' | null>(null)
 
   const setDisabled = useSetDisabled()
   const setPriority = useSetPriority()
@@ -94,92 +97,23 @@ export function CredentialCard({
     setDisabled.mutate(
       { id: credential.id, disabled: !credential.disabled },
       {
-        onSuccess: (res) => {
-          toast.success(res.message)
-        },
-        onError: (err) => {
-          toast.error('操作失败: ' + (err as Error).message)
-        },
-      }
-    )
-  }
-
-  const handlePriorityChange = () => {
-    const newPriority = parseInt(priorityValue, 10)
-    if (isNaN(newPriority) || newPriority < 0) {
-      toast.error('优先级必须是非负整数')
-      return
-    }
-    setPriority.mutate(
-      { id: credential.id, priority: newPriority },
-      {
-        onSuccess: (res) => {
-          toast.success(res.message)
-          setEditingPriority(false)
-        },
-        onError: (err) => {
-          toast.error('操作失败: ' + (err as Error).message)
-        },
-      }
-    )
-  }
-
-  const handleRegionChange = () => {
-    setRegion.mutate(
-      {
-        id: credential.id,
-        region: regionValue.trim() || null,
-        apiRegion: apiRegionValue.trim() || null,
-      },
-      {
-        onSuccess: (res) => {
-          toast.success(res.message)
-          setEditingRegion(false)
-        },
-        onError: (err) => {
-          toast.error('操作失败: ' + (err as Error).message)
-        },
-      }
-    )
-  }
-
-  const handleEndpointChange = () => {
-    setEndpoint.mutate(
-      {
-        id: credential.id,
-        endpoint: endpointValue || null,
-      },
-      {
-        onSuccess: (res) => {
-          toast.success(res.message)
-          setEditingEndpoint(false)
-        },
-        onError: (err) => {
-          toast.error('操作失败: ' + (err as Error).message)
-        },
+        onSuccess: (res) => toast.success(res.message),
+        onError: (err) => toast.error('操作失败: ' + (err as Error).message),
       }
     )
   }
 
   const handleReset = () => {
     resetFailure.mutate(credential.id, {
-      onSuccess: (res) => {
-        toast.success(res.message)
-      },
-      onError: (err) => {
-        toast.error('操作失败: ' + (err as Error).message)
-      },
+      onSuccess: (res) => toast.success(res.message),
+      onError: (err) => toast.error('操作失败: ' + (err as Error).message),
     })
   }
 
   const handleForceRefresh = () => {
     forceRefreshToken.mutate(credential.id, {
-      onSuccess: (res) => {
-        toast.success(res.message)
-      },
-      onError: (err) => {
-        toast.error('刷新失败: ' + (err as Error).message)
-      },
+      onSuccess: (res) => toast.success(res.message),
+      onError: (err) => toast.error('刷新失败: ' + (err as Error).message),
     })
   }
 
@@ -189,30 +123,50 @@ export function CredentialCard({
       setShowDeleteDialog(false)
       return
     }
-
     deleteCredential.mutate(credential.id, {
       onSuccess: (res) => {
         toast.success(res.message)
         setShowDeleteDialog(false)
       },
-      onError: (err) => {
-        toast.error('删除失败: ' + (err as Error).message)
-      },
+      onError: (err) => toast.error('删除失败: ' + (err as Error).message),
     })
   }
 
-  // 格式化缓存时间（相对时间）
-  const formatCacheAge = (cachedAt: number) => {
-    const now = Date.now()
-    const diff = now - cachedAt
-    const seconds = Math.floor(diff / 1000)
-    if (seconds < 60) return `${seconds}秒前`
-    const minutes = Math.floor(seconds / 60)
-    if (minutes < 60) return `${minutes}分钟前`
-    return `${Math.floor(minutes / 60)}小时前`
+  const handleEditSave = (field: string, value: string | number | Record<string, string | null>) => {
+    setEditField(null)
+    switch (field) {
+      case 'priority':
+        setPriority.mutate(
+          { id: credential.id, priority: value as number },
+          {
+            onSuccess: (res) => toast.success(res.message),
+            onError: (err) => toast.error('操作失败: ' + (err as Error).message),
+          }
+        )
+        break
+      case 'region': {
+        const regionVal = value as Record<string, string | null>
+        setRegion.mutate(
+          { id: credential.id, region: regionVal.region, apiRegion: regionVal.apiRegion },
+          {
+            onSuccess: (res) => toast.success(res.message),
+            onError: (err) => toast.error('操作失败: ' + (err as Error).message),
+          }
+        )
+        break
+      }
+      case 'endpoint':
+        setEndpoint.mutate(
+          { id: credential.id, endpoint: (value as string) || null },
+          {
+            onSuccess: (res) => toast.success(res.message),
+            onError: (err) => toast.error('操作失败: ' + (err as Error).message),
+          }
+        )
+        break
+    }
   }
 
-  // 检查缓存是否过期（使用后端返回的 TTL）
   const isCacheStale = () => {
     if (!cachedBalance) return true
     const ageMs = Date.now() - cachedBalance.cachedAt
@@ -220,357 +174,150 @@ export function CredentialCard({
     return ageMs > ttlMs
   }
 
-  const handleViewBalance = () => {
-    onViewBalance(credential.id, isCacheStale())
+  const handleViewBalance = () => onViewBalance(credential.id, isCacheStale())
+
+  const displayEmail = credential.email || credential.accountEmail || `凭据 #${credential.id}`
+  const authBadge = credential.authMethod ? AUTH_METHOD_BADGE[credential.authMethod] : null
+  const totalFailures = credential.failureCount + credential.refreshFailureCount
+
+  const barRemaining = balance?.remaining ?? cachedBalance?.remaining ?? null
+  const barUsageLimit = balance?.usageLimit ?? cachedBalance?.usageLimit ?? null
+  const barUsagePercentage = balance?.usagePercentage ?? cachedBalance?.usagePercentage ?? null
+  const barSubscription = balance?.subscriptionTitle ?? cachedBalance?.subscriptionTitle ?? credential.subscriptionTitle ?? null
+
+  const formatCacheAge = (cachedAt: number) => {
+    const diff = Date.now() - cachedAt
+    const seconds = Math.floor(diff / 1000)
+    if (seconds < 60) return `${seconds}秒前`
+    const minutes = Math.floor(seconds / 60)
+    if (minutes < 60) return `${minutes}分钟前`
+    return `${Math.floor(minutes / 60)}小时前`
   }
-
-  const renderBalanceInfo = (info: BalanceDisplayInfo, cacheLabel?: string, showLimit = true) => {
-    const overspentCredits = getOverspentCredits(info)
-    const isOverspent = overspentCredits > 0
-    const displayedRemaining = isOverspent ? -overspentCredits : info.remaining
-
-    return (
-      <span className="inline-flex flex-col gap-0.5 ml-1 align-top">
-        <span className={cn('font-medium tabular-nums', isOverspent ? 'text-destructive' : 'text-green-600')}>
-          {showLimit
-            ? `${formatKiroCreditAmount(displayedRemaining)} / ${formatKiroCredits(info.usageLimit)}`
-            : formatKiroCredits(displayedRemaining)}
-        </span>
-        <span className="text-xs text-muted-foreground tabular-nums">
-          {showLimit
-            ? `≈ ${formatKiroCreditsAsUsd(displayedRemaining)} / ${formatKiroCreditsAsUsd(info.usageLimit)} · ${isOverspent ? `${info.usagePercentage.toFixed(1)}% 已使用` : `${(100 - info.usagePercentage).toFixed(1)}% 剩余`}`
-            : `≈ ${formatKiroCreditsAsUsd(displayedRemaining)}`}
-          {isOverspent && ` · 已超支 ${formatKiroCredits(overspentCredits)}`}
-          {cacheLabel && ` · ${cacheLabel}`}
-        </span>
-      </span>
-    )
-  }
-
 
   return (
     <>
-      <Card>
+      <Card className={cn(credential.disabled && 'opacity-60')}>
         <CardHeader className="pb-2">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0 flex-1">
-              <Checkbox
-                checked={selected}
-                onCheckedChange={onToggleSelect}
-                aria-label={`选择凭据 ${credential.email || `#${credential.id}`}`}
-              />
-              <CardTitle className="text-lg flex items-center gap-2 min-w-0 flex-1">
-                <span className="truncate">{credential.email || `凭据 #${credential.id}`}</span>
-                <div className="flex items-center gap-1 flex-shrink-0">
-                  {credential.disabled && (
-                    <Badge variant="destructive">已禁用</Badge>
-                  )}
-                  {credential.disabled && credential.disabledReason && (
-                    <Badge variant="outline">{credential.disabledReason}</Badge>
-                  )}
-                  {credential.authMethod && (
-                    <Badge variant="secondary">
-                      {credential.authMethod === 'api_key' ? 'API Key' :
-                       credential.authMethod === 'idc' ? 'IdC' :
-                       credential.authMethod === 'social' ? 'Social' :
-                       credential.authMethod}
-                    </Badge>
-                  )}
-                </div>
-              </CardTitle>
-            </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <span className="text-sm text-muted-foreground">启用</span>
-              <Switch
-                checked={!credential.disabled}
-                onCheckedChange={handleToggleDisabled}
-                disabled={setDisabled.isPending}
-                aria-label={`${credential.email || `凭据 #${credential.id}`} 启用状态`}
-              />
-            </div>
+          <div className="flex items-center gap-2">
+            <Checkbox
+              checked={selected}
+              onCheckedChange={onToggleSelect}
+              aria-label={`选择凭据 ${displayEmail}`}
+            />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="truncate text-sm font-medium min-w-0 flex-1">
+                  {displayEmail}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>{displayEmail}</TooltipContent>
+            </Tooltip>
+            {authBadge && (
+              <Badge variant="outline" className={cn('text-xs shrink-0', authBadge.className)}>
+                {authBadge.label}
+              </Badge>
+            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span>
+                  <Badge
+                    variant={credential.disabled ? 'secondary' : 'default'}
+                    className={cn(
+                      'text-xs shrink-0',
+                      !credential.disabled && 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                    )}
+                  >
+                    {credential.disabled ? '已禁用' : '启用'}
+                  </Badge>
+                </span>
+              </TooltipTrigger>
+              {credential.disabled && credential.disabledReason && (
+                <TooltipContent>{credential.disabledReason}</TooltipContent>
+              )}
+            </Tooltip>
+            <Switch
+              checked={!credential.disabled}
+              onCheckedChange={handleToggleDisabled}
+              disabled={setDisabled.isPending}
+              className="shrink-0 ml-auto"
+              aria-label={`${displayEmail} 启用状态`}
+            />
           </div>
         </CardHeader>
-        <CardContent className="space-y-4">
-          {/* 信息网格 */}
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <span className="text-muted-foreground">优先级：</span>
-              {editingPriority ? (
-                <div className="inline-flex items-center gap-1 ml-1">
-                  <Input
-                    type="number"
-                    value={priorityValue}
-                    onChange={(e) => setPriorityValue(e.target.value)}
-                    className="w-16 h-7 text-sm"
-                    min="0"
-                    aria-label="优先级"
-                  />
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 w-7 p-0"
-                    onClick={handlePriorityChange}
-                    disabled={setPriority.isPending}
-                    aria-label="确认"
-                  >
-                    <Check className="h-4 w-4" aria-hidden="true" />
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 w-7 p-0"
-                    onClick={() => {
-                      setEditingPriority(false)
-                      setPriorityValue(String(credential.priority))
-                    }}
-                    aria-label="取消"
-                  >
-                    <X className="h-4 w-4" aria-hidden="true" />
-                  </Button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  className="group inline-flex items-center gap-1 font-medium ml-1 text-left bg-transparent border-0 p-0 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
-                  onClick={() => setEditingPriority(true)}
-                  aria-label={`编辑优先级（当前 ${credential.priority}）`}
-                >
-                  {credential.priority}
-                  <Pencil className="h-3 w-3 text-muted-foreground opacity-50 group-hover:opacity-100 transition-opacity" aria-hidden="true" />
-                </button>
-              )}
-            </div>
-            <div>
-              <span className="text-muted-foreground">失败次数：</span>
-              <span className={credential.failureCount > 0 ? 'text-red-500 font-medium' : ''}>
-                {credential.failureCount}
-              </span>
-              {credential.refreshFailureCount > 0 && (
-                <span className="ml-2 text-amber-600 font-medium">
-                  刷新 {credential.refreshFailureCount}
-                </span>
-              )}
-            </div>
-            <div>
-              <span className="text-muted-foreground">订阅等级：</span>
-              <span className="font-medium">
-                {loadingBalance ? (
-                  <Loader2 className="inline w-3 h-3 animate-spin" aria-hidden="true" />
-                ) : balance?.subscriptionTitle ?? cachedBalance?.subscriptionTitle ?? credential.subscriptionTitle ?? '未知'}
-              </span>
-            </div>
-            <div>
-              <span className="text-muted-foreground">成功次数：</span>
-              <span className="font-medium">{credential.successCount}</span>
-            </div>
-            <div className="col-span-2">
-              <span className="text-muted-foreground">最后调用：</span>
-              <span className="font-medium">{formatLastUsed(credential.lastUsedAt)}</span>
-            </div>
-            {credential.disabledReason && (
-              <div className="col-span-2">
-                <span className="text-muted-foreground">禁用原因：</span>
-                <span className="font-medium">{credential.disabledReason}</span>
-              </div>
-            )}
-            {credential.maskedApiKey && (
-              <div className="col-span-2">
-                <span className="text-muted-foreground">API Key：</span>
-                <span className="font-mono font-medium">{credential.maskedApiKey}</span>
-              </div>
-            )}
-            <div className="col-span-2">
-              <span className="text-muted-foreground">余额：</span>
-              {loadingBalance ? (
-                <span className="text-sm ml-1">
-                  <Loader2 className="inline w-3 h-3 animate-spin" aria-hidden="true" /> 加载中…
-                </span>
-              ) : balance ? (
-                renderBalanceInfo(balance)
-              ) : cachedBalance && cachedBalance.ttlSecs > 0 && cachedBalance.usageLimit > 0 ? (
-                renderBalanceInfo(cachedBalance, `${formatCacheAge(cachedBalance.cachedAt)}缓存`)
-              ) : cachedBalance && cachedBalance.ttlSecs > 0 ? (
-                renderBalanceInfo(cachedBalance, `${formatCacheAge(cachedBalance.cachedAt)}缓存`, false)
-              ) : (
-                <span className="text-sm text-muted-foreground ml-1">未知</span>
-              )}
-            </div>
-            {credential.hasProxy && (
-              <div className="col-span-2">
-                <span className="text-muted-foreground">代理：</span>
-                <span className="font-medium">{credential.proxyUrl}</span>
-              </div>
-            )}
-            <div className="col-span-2">
-              <span className="text-muted-foreground">Endpoint：</span>
-              {editingEndpoint ? (
-                <div className="inline-flex items-center gap-1 ml-1 flex-wrap">
-                  <select
-                    value={endpointValue}
-                    onChange={(e) => setEndpointValue(e.target.value)}
-                    className="flex h-7 rounded-md border border-input bg-background px-2 py-1 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                    aria-label="Endpoint"
-                  >
-                    <option value="">默认值</option>
-                    <option value="ide">ide</option>
-                    <option value="cli">cli</option>
-                  </select>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 w-7 p-0"
-                    onClick={handleEndpointChange}
-                    disabled={setEndpoint.isPending}
-                    aria-label="确认"
-                  >
-                    <Check className="h-4 w-4" aria-hidden="true" />
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 w-7 p-0"
-                    onClick={() => {
-                      setEditingEndpoint(false)
-                      setEndpointValue(credential.endpoint ?? '')
-                    }}
-                    aria-label="取消"
-                  >
-                    <X className="h-4 w-4" aria-hidden="true" />
-                  </Button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  className="group inline-flex items-center gap-1 font-medium ml-1 text-left bg-transparent border-0 p-0 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
-                  onClick={() => {
-                    setEndpointValue(credential.endpoint ?? '')
-                    setEditingEndpoint(true)
-                  }}
-                  aria-label={`编辑 Endpoint（当前 ${credential.endpoint || '默认值'}，生效 ${credential.effectiveEndpoint}）`}
-                >
-                  <span>{credential.endpoint || '默认值'}</span>
-                  <span className="text-xs text-muted-foreground font-normal">
-                    (生效: {credential.effectiveEndpoint})
-                  </span>
-                  <Pencil className="h-3 w-3 text-muted-foreground opacity-50 group-hover:opacity-100 transition-opacity" aria-hidden="true" />
-                </button>
-              )}
-            </div>
-            {/* Region 配置 */}
-            <div className="col-span-2">
-              <span className="text-muted-foreground">Region：</span>
-              {editingRegion ? (
-                <div className="inline-flex items-center gap-1 ml-1 flex-wrap">
-                  <Input
-                    placeholder="Region（留空清除）"
-                    value={regionValue}
-                    onChange={(e) => setRegionValue(e.target.value)}
-                    className="w-32 h-7 text-sm"
-                    aria-label="Region"
-                  />
-                  <Input
-                    placeholder="API Region（可选）"
-                    value={apiRegionValue}
-                    onChange={(e) => setApiRegionValue(e.target.value)}
-                    className="w-36 h-7 text-sm"
-                    aria-label="API Region"
-                  />
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 w-7 p-0"
-                    onClick={handleRegionChange}
-                    disabled={setRegion.isPending}
-                    aria-label="确认"
-                  >
-                    <Check className="h-4 w-4" aria-hidden="true" />
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 w-7 p-0"
-                    onClick={() => {
-                      setEditingRegion(false)
-                      setRegionValue(credential.region ?? '')
-                      setApiRegionValue(credential.apiRegion ?? '')
-                    }}
-                    aria-label="取消"
-                  >
-                    <X className="h-4 w-4" aria-hidden="true" />
-                  </Button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  className="group inline-flex items-center gap-1 font-medium ml-1 text-left bg-transparent border-0 p-0 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
-                  onClick={() => {
-                    setRegionValue(credential.region ?? '')
-                    setApiRegionValue(credential.apiRegion ?? '')
-                    setEditingRegion(true)
-                  }}
-                  aria-label={`编辑 Region（当前 ${credential.region || '全局默认'}${credential.apiRegion ? `, API ${credential.apiRegion}` : ''}）`}
-                >
-                  <span>{credential.region || '全局默认'}</span>
-                  {credential.apiRegion && (
-                    <span className="text-muted-foreground font-normal">
-                      / API: {credential.apiRegion}
-                    </span>
-                  )}
-                  <Pencil className="h-3 w-3 text-muted-foreground opacity-50 group-hover:opacity-100 transition-opacity" aria-hidden="true" />
-                </button>
-              )}
-            </div>
-            {credential.hasProfileArn && (
-              <div className="col-span-2">
-                <Badge variant="secondary">有 Profile ARN</Badge>
-              </div>
-            )}
-          </div>
 
-          {/* 操作按钮 */}
-          <div className="flex flex-wrap gap-2 pt-2 border-t">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleReset}
-              disabled={resetFailure.isPending || (credential.failureCount === 0 && credential.refreshFailureCount === 0)}
-            >
-              <RotateCcw className="h-4 w-4 mr-1" aria-hidden="true" />
-              重置失败
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleForceRefresh}
-              disabled={forceRefreshToken.isPending || credential.disabled || credential.authMethod === 'api_key'}
-              title={credential.authMethod === 'api_key' ? 'API Key 凭据无需刷新 Token' : credential.disabled ? '已禁用的凭据无法刷新 Token' : '强制刷新 Token'}
-            >
-              <RefreshCw className={`h-4 w-4 mr-1 ${forceRefreshToken.isPending ? 'animate-spin' : ''}`} aria-hidden="true" />
-              刷新 Token
-            </Button>
-            <Button
-              size="sm"
-              variant="default"
-              onClick={handleViewBalance}
-            >
-              <Wallet className="h-4 w-4 mr-1" aria-hidden="true" />
-              查看余额
-            </Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={() => setShowDeleteDialog(true)}
-              disabled={!credential.disabled}
-              title={!credential.disabled ? '需要先禁用凭据才能删除' : undefined}
-            >
-              <Trash2 className="h-4 w-4 mr-1" aria-hidden="true" />
-              删除
-            </Button>
+        <CardContent className="space-y-3 pb-3">
+          <button
+            type="button"
+            className="w-full text-left rounded-md p-2 -mx-2 hover:bg-muted/50 transition-colors"
+            onClick={handleViewBalance}
+            aria-label="查看余额详情"
+          >
+            <BalanceBar
+              remaining={barRemaining}
+              usageLimit={barUsageLimit}
+              usagePercentage={barUsagePercentage}
+              subscriptionTitle={barSubscription ?? undefined}
+              cachedAt={cachedBalance ? formatCacheAge(cachedBalance.cachedAt) : undefined}
+            />
+          </button>
+
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            {barSubscription && (
+              <Badge variant="outline" className="text-xs font-normal">
+                {barSubscription}
+              </Badge>
+            )}
+            {totalFailures > 0 && (
+              <Badge variant="destructive" className="text-xs">
+                {totalFailures} 次失败
+              </Badge>
+            )}
+            <span className="text-muted-foreground">
+              {formatLastUsed(credential.lastUsedAt)}
+            </span>
+            {cachedBalance && !balance && (
+              <span className="text-muted-foreground">
+                · 缓存 {formatCacheAge(cachedBalance.cachedAt)}
+              </span>
+            )}
           </div>
         </CardContent>
+
+        <CardFooter className="pt-0 pb-3 flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={handleViewBalance} disabled={loadingBalance}>
+            <Wallet className="h-3.5 w-3.5 mr-1" aria-hidden="true" />
+            查看余额
+          </Button>
+          <div className="ml-auto flex items-center gap-1">
+            {editField && (
+              <CredentialEditPopover
+                key={editField}
+                field={editField}
+                credential={credential}
+                onSave={handleEditSave}
+                isPending={setPriority.isPending || setRegion.isPending || setEndpoint.isPending}
+                defaultOpen
+                onClose={() => setEditField(null)}
+                trigger={<span className="sr-only" />}
+              />
+            )}
+            <CardActionsMenu
+              credential={credential}
+              onResetFailures={handleReset}
+              onRefreshToken={handleForceRefresh}
+              onViewBalance={handleViewBalance}
+              onDelete={() => setShowDeleteDialog(true)}
+              onEditPriority={() => setEditField('priority')}
+              onEditRegion={() => setEditField('region')}
+              onEditEndpoint={() => setEditField('endpoint')}
+              isResetting={resetFailure.isPending}
+              isRefreshing={forceRefreshToken.isPending}
+              isDeleting={deleteCredential.isPending}
+            />
+          </div>
+        </CardFooter>
       </Card>
 
-      {/* 删除确认对话框 */}
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <DialogContent>
           <DialogHeader>
