@@ -1278,7 +1278,6 @@ mod tests {
         assert!(summary.contains("This is a test snippet"));
     }
 
-
     #[test]
     fn test_message_start_contains_stop_sequence() {
         let events =
@@ -1304,5 +1303,4 @@ mod tests {
             "stop_sequence must be null"
         );
     }
-
 }

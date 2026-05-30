@@ -2246,9 +2246,10 @@ fn build_thinking_content_block(
         "type": "thinking",
         "thinking": reasoning_text
     });
-    if let Some(sig) = reasoning_signature {
-        thinking_block["signature"] = json!(normalize_signature_for_sse(sig, model));
-    }
+    let sig = reasoning_signature
+        .map(|s| normalize_signature_for_sse(s, model))
+        .unwrap_or_default();
+    thinking_block["signature"] = json!(sig);
 
     Some(thinking_block)
 }
@@ -2758,6 +2759,21 @@ mod tests {
         assert_eq!(block["type"], json!("thinking"));
         assert_eq!(block["thinking"], json!(""));
         assert_eq!(block["signature"], json!("sig_123"));
+    }
+
+    #[test]
+    fn test_build_thinking_content_block_always_emits_signature_when_some() {
+        let block =
+            build_thinking_content_block("thinking text", Some("sig"), "claude-sonnet-4-20250514")
+                .expect("thinking block should be built");
+        assert_eq!(block["signature"], json!("sig"));
+    }
+
+    #[test]
+    fn test_build_thinking_content_block_always_emits_signature_when_none() {
+        let block = build_thinking_content_block("thinking text", None, "claude-sonnet-4-20250514")
+            .expect("thinking block should be built");
+        assert_eq!(block["signature"], json!(""));
     }
 
     #[test]
