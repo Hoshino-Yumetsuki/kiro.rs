@@ -23,7 +23,7 @@ import type { CredentialStatusItem, CachedBalanceInfo, BalanceResponse } from '@
 import { cn } from '@/lib/utils'
 import { BalanceBar } from '@/components/balance-bar'
 import { CardActionsMenu } from '@/components/card-actions-menu'
-import { CredentialEditPopover } from '@/components/credential-edit-popover'
+import { CredentialEditDialog } from '@/components/credential-edit-dialog'
 import {
   useSetDisabled,
   useSetPriority,
@@ -278,6 +278,11 @@ export function CredentialCard({
                 {barSubscription}
               </Badge>
             )}
+            {credential.hasProfileArn && (
+              <Badge variant="outline" className="text-xs font-normal">
+                Profile ARN
+              </Badge>
+            )}
             {totalFailures > 0 && (
               <Badge variant="destructive" className="text-xs">
                 {totalFailures} 次失败
@@ -300,18 +305,6 @@ export function CredentialCard({
             查看余额
           </Button>
           <div className="ml-auto flex items-center gap-1">
-            {editField && (
-              <CredentialEditPopover
-                key={editField}
-                field={editField}
-                credential={credential}
-                onSave={handleEditSave}
-                isPending={setPriority.isPending || setRegion.isPending || setEndpoint.isPending}
-                defaultOpen
-                onClose={() => setEditField(null)}
-                trigger={<span className="sr-only" />}
-              />
-            )}
             <Button
               size="sm"
               variant="ghost"
@@ -341,6 +334,14 @@ export function CredentialCard({
           </div>
         </CardFooter>
       </Card>
+
+      <CredentialEditDialog
+        field={editField}
+        credential={credential}
+        onSave={handleEditSave}
+        onClose={() => setEditField(null)}
+        isPending={setPriority.isPending || setRegion.isPending || setEndpoint.isPending}
+      />
 
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <DialogContent>
