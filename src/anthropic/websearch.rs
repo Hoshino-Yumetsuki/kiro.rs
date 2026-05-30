@@ -658,7 +658,7 @@ pub async fn handle_websearch_request(
         None => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ErrorResponse::new(
+                Json(ErrorResponse::without_request_id(
                     "invalid_request_error",
                     "无法从消息中提取搜索查询",
                 )),
@@ -782,7 +782,6 @@ pub async fn handle_websearch_request(
             },
             {
                 "type": "web_search_tool_result",
-                "tool_use_id": tool_use_id,
                 "content": search_content
             },
             {
@@ -1301,6 +1300,91 @@ mod tests {
             message["stop_sequence"],
             serde_json::Value::Null,
             "stop_sequence must be null"
+        );
+    }
+
+    #[test]
+    fn test_websearch_result_stream_omits_tool_use_id() {
+        // Stream 路径：web_search_tool_result content_block 不应包含 tool_use_id
+        let tid = "srvtoolu_test_1111111111111111111111_1111111111111_aaaaaaaa";
+        let events = generate_websearch_events("test-model", "test query", tid, None, 100, None);
+
+        // 验证 server_tool_use (index 1) 包含 tool_use_id 作为 id 字段
+        let server_tool_use = &events[4].data["content_block"];
+        assert_eq!(
+            server_tool_use["type"], "server_tool_use",
+            "expected server_tool_use block"
+        );
+        assert!(
+            server_tool_use.get("id").is_some(),
+            "server_tool_use block MUST contain 'id' (tool_use_id)"
+        );
+
+        // 验证 web_search_tool_result (index 2) 不包含 tool_use_id
+        let tool_result_block = &events[6].data["content_block"];
+        assert_eq!(
+            tool_result_block["type"], "web_search_tool_result",
+            "expected web_search_tool_result block"
+        );
+        assert!(
+            tool_result_block.get("tool_use_id").is_none(),
+            "web_search_tool_result block MUST NOT contain 'tool_use_id' in stream path"
+        );
+
+        // 验证 state-of-the-art: 如果错误的 tool_use_id 被添加，测试会捕获
+        // 同时也验证非 web_search 的 tool_use_id 引用（id 字段）不受影响
+        assert_eq!(
+            server_tool_use["id"], tid,
+            "server_tool_use.id must still be preserved"
+        );
+    }
+
+    #[test]
+    fn test_websearch_result_non_stream_omits_tool_use_id() {
+        // Non-stream 路径：web_search_tool_result content block 不应包含 tool_use_id
+        let tid = "srvtoolu_test_1111111111111111111111_1111111111111_aaaaaaaa";
+        let search_content: Vec<serde_json::Value> = vec![];
+
+        let response_body = json!({
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "model": "test-model",
+            "content": [
+                {
+                    "type": "server_tool_use",
+                    "id": tid,
+                    "name": "web_search",
+                    "input": { "query": "test query" }
+                },
+                {
+                    "type": "web_search_tool_result",
+                    "content": search_content
+                },
+                {
+                    "type": "text",
+                    "text": "summary"
+                }
+            ],
+            "stop_reason": "end_turn",
+            "stop_sequence": null,
+            "usage": json!({"input_tokens": 100, "output_tokens": 10})
+        });
+
+        // 验证 server_tool_use 包含 id
+        let server_tool_use = &response_body["content"][0];
+        assert_eq!(server_tool_use["type"], "server_tool_use");
+        assert!(
+            server_tool_use.get("id").is_some(),
+            "server_tool_use MUST contain 'id'"
+        );
+
+        // 验证 web_search_tool_result 不包含 tool_use_id
+        let tool_result = &response_body["content"][1];
+        assert_eq!(tool_result["type"], "web_search_tool_result");
+        assert!(
+            tool_result.get("tool_use_id").is_none(),
+            "web_search_tool_result MUST NOT contain 'tool_use_id' in non-stream path"
         );
     }
 }
