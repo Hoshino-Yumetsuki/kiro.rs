@@ -2216,8 +2216,8 @@ fn build_thinking_content_block(
 /// 仅对支持 thinking 的模型（Claude 4+）生成该字段。
 ///
 /// 映射规则：
-/// - thinking.type == "adaptive" 且无 output_config → { thinking: { type: "adaptive" } }（不传 effort，使用后端默认）
-/// - thinking.type == "adaptive" 且有 output_config.effort → { thinking: { type: "adaptive" }, output_config: { effort: "..." } }
+/// - thinking.type == "adaptive" 且无 output_config → { thinking: { type: "adaptive", display? } }（不传 effort，使用后端默认）
+/// - thinking.type == "adaptive" 且有 output_config.effort → { thinking: { type: "adaptive", display? }, output_config: { effort: "..." } }
 /// - thinking.type == "enabled" → 映射为 adaptive（旧版兼容），不传 effort
 /// - thinking.type == "disabled" 或无 thinking → None（不传该字段）
 /// - budget_tokens → 丢弃，不使用
@@ -2248,7 +2248,7 @@ fn build_additional_model_request_fields(payload: &MessagesRequest) -> Option<se
             "旧版 thinking.type=enabled (budget_tokens), 映射为 adaptive + effort=high"
         );
         return Some(serde_json::json!({
-            "thinking": { "type": "adaptive" },
+            "thinking": additional_thinking_config(thinking),
             "output_config": { "effort": "high" }
         }));
     }
@@ -2261,7 +2261,7 @@ fn build_additional_model_request_fields(payload: &MessagesRequest) -> Option<se
             "构建 additionalModelRequestFields: thinking=adaptive (无 effort，使用后端默认)"
         );
         return Some(serde_json::json!({
-            "thinking": { "type": "adaptive" }
+            "thinking": additional_thinking_config(thinking)
         }));
     }
 
@@ -2289,9 +2289,17 @@ fn build_additional_model_request_fields(payload: &MessagesRequest) -> Option<se
     );
 
     Some(serde_json::json!({
-        "thinking": { "type": "adaptive" },
+        "thinking": additional_thinking_config(thinking),
         "output_config": { "effort": effort }
     }))
+}
+
+fn additional_thinking_config(thinking: &Thinking) -> serde_json::Value {
+    let mut config = serde_json::json!({ "type": "adaptive" });
+    if thinking.display.as_deref() == Some("summarized") {
+        config["display"] = serde_json::json!("summarized");
+    }
+    config
 }
 ///
 /// 计算消息的 token 数量。
@@ -2801,6 +2809,45 @@ mod tests {
         });
 
         assert_eq!(extract_pdf_text_answer(&payload), None);
+    }
+
+    #[test]
+    fn test_additional_model_request_fields_preserves_summarized_display() {
+        let mut payload = sample_messages_request();
+        payload.model = "claude-opus-4-8".to_string();
+        payload.thinking = Some(Thinking {
+            thinking_type: "adaptive".to_string(),
+            display: Some("summarized".to_string()),
+            budget_tokens: 20000,
+        });
+        payload.output_config = Some(crate::anthropic::types::OutputConfig {
+            effort: "xhigh".to_string(),
+            format: None,
+        });
+
+        let fields = build_additional_model_request_fields(&payload)
+            .expect("adaptive thinking should produce additional fields");
+
+        assert_eq!(fields["thinking"]["type"], "adaptive");
+        assert_eq!(fields["thinking"]["display"], "summarized");
+        assert_eq!(fields["output_config"]["effort"], "xhigh");
+    }
+
+    #[test]
+    fn test_additional_model_request_fields_omits_unknown_display() {
+        let mut payload = sample_messages_request();
+        payload.model = "claude-opus-4-8".to_string();
+        payload.thinking = Some(Thinking {
+            thinking_type: "adaptive".to_string(),
+            display: Some("verbose".to_string()),
+            budget_tokens: 20000,
+        });
+
+        let fields = build_additional_model_request_fields(&payload)
+            .expect("adaptive thinking should produce additional fields");
+
+        assert_eq!(fields["thinking"]["type"], "adaptive");
+        assert!(fields["thinking"].get("display").is_none());
     }
 
     #[tokio::test]
