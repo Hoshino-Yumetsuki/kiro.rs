@@ -484,7 +484,7 @@ fn map_kiro_provider_error_to_response(request_body: &str, err: Error) -> Respon
         );
         return (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse::new(
+            Json(ErrorResponse::without_request_id(
                 "invalid_request_error",
                 "Input is too long (CONTENT_LENGTH_EXCEEDS_THRESHOLD). Reduce conversation history/system/tools; retrying the same request will not help.",
             )),
@@ -500,7 +500,7 @@ fn map_kiro_provider_error_to_response(request_body: &str, err: Error) -> Respon
         );
         return (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse::new(
+            Json(ErrorResponse::without_request_id(
                 "invalid_request_error",
                 "Improperly formed request. This is often caused by oversized payloads, malformed message/tool sequences, or empty content blocks.",
             )),
@@ -512,7 +512,7 @@ fn map_kiro_provider_error_to_response(request_body: &str, err: Error) -> Respon
         tracing::error!(error = %err, "没有可用的凭据");
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse::new(
+            Json(ErrorResponse::without_request_id(
                 "service_unavailable",
                 "No credentials available. Please add or enable credentials via Admin API or credentials.json.",
             )),
@@ -531,7 +531,7 @@ fn map_kiro_provider_error_to_response(request_body: &str, err: Error) -> Respon
         return (
             StatusCode::TOO_MANY_REQUESTS,
             [(header::RETRY_AFTER, secs.to_string())],
-            Json(ErrorResponse::new(
+            Json(ErrorResponse::without_request_id(
                 "rate_limit_error",
                 format!(
                     "All credentials are temporarily cooling down. Retry after {}s.",
@@ -546,7 +546,7 @@ fn map_kiro_provider_error_to_response(request_body: &str, err: Error) -> Respon
         tracing::warn!(error = %err, "所有凭据配额已耗尽");
         return (
             StatusCode::TOO_MANY_REQUESTS,
-            Json(ErrorResponse::new(
+            Json(ErrorResponse::without_request_id(
                 "rate_limit_error",
                 "All credentials quota exhausted. Please wait for quota reset or add new credentials.",
             )),
@@ -560,7 +560,7 @@ fn map_kiro_provider_error_to_response(request_body: &str, err: Error) -> Respon
             tracing::warn!(error = %err, "上游网络错误，不输出请求体");
             return (
                 StatusCode::BAD_GATEWAY,
-                Json(ErrorResponse::new(
+                Json(ErrorResponse::without_request_id(
                     "api_error",
                     format!("上游网络错误: {}", err),
                 )),
@@ -570,7 +570,7 @@ fn map_kiro_provider_error_to_response(request_body: &str, err: Error) -> Respon
         tracing::warn!(error = %err, "上游瞬态错误（429/5xx），不输出请求体");
         return (
             StatusCode::TOO_MANY_REQUESTS,
-            Json(ErrorResponse::new("rate_limit_error", err.to_string())),
+            Json(ErrorResponse::without_request_id("rate_limit_error", err.to_string())),
         )
             .into_response();
     }
@@ -584,7 +584,7 @@ fn map_kiro_provider_error_to_response(request_body: &str, err: Error) -> Respon
     );
     (
         StatusCode::BAD_GATEWAY,
-        Json(ErrorResponse::new(
+        Json(ErrorResponse::without_request_id(
             "api_error",
             format!("上游 API 调用失败: {}", err),
         )),
@@ -1337,7 +1337,7 @@ pub async fn post_messages(
             tracing::error!("KiroProvider 未配置");
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse::new(
+                Json(ErrorResponse::without_request_id(
                     "service_unavailable",
                     "Kiro API provider not configured",
                 )),
@@ -1436,7 +1436,7 @@ pub async fn post_messages(
             tracing::warn!("请求转换失败: {}", e);
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ErrorResponse::new(error_type, message)),
+                Json(ErrorResponse::without_request_id(error_type, message)),
             )
                 .into_response();
         }
@@ -1475,7 +1475,7 @@ pub async fn post_messages(
             tracing::error!("序列化请求失败: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse::new(
+                Json(ErrorResponse::without_request_id(
                     "internal_error",
                     format!("序列化请求失败: {}", e),
                 )),
@@ -1517,7 +1517,7 @@ pub async fn post_messages(
                 tracing::error!("自适应二次压缩序列化失败: {}", e);
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse::new(
+                    Json(ErrorResponse::without_request_id(
                         "internal_error",
                         format!("序列化请求失败: {}", e),
                     )),
@@ -1546,7 +1546,7 @@ pub async fn post_messages(
         );
         return (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse::new(
+            Json(ErrorResponse::without_request_id(
                 "invalid_request_error",
                 format!(
                     "Request too large ({} bytes total; images {} bytes; non-image {} bytes; limit {}). Reduce conversation history/tool output or number/size of images.",
@@ -1934,7 +1934,7 @@ async fn handle_non_stream_request(
             tracing::error!("读取响应体失败: {}", e);
             return (
                 StatusCode::BAD_GATEWAY,
-                Json(ErrorResponse::new(
+                Json(ErrorResponse::without_request_id(
                     "api_error",
                     format!("读取响应失败: {}", e),
                 )),
