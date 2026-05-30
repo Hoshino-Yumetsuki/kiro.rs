@@ -3251,4 +3251,22 @@ mod tests {
         mgr.set_stop_reason("max_tokens");
         assert_eq!(mgr.get_stop_reason(), "max_tokens");
     }
+
+    #[test]
+    fn test_message_start_includes_stop_sequence_null() {
+        let ctx = StreamContext::new_with_thinking(
+            "test-model",
+            123,
+            None,
+            false,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
+        let msg_start = ctx.create_message_start_event();
+        assert_eq!(
+            msg_start["message"]["stop_sequence"],
+            serde_json::Value::Null
+        );
+    }
 }
