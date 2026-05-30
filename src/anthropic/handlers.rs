@@ -24,8 +24,8 @@ use super::converter::{ConversionError, convert_request};
 use super::middleware::AppState;
 use super::stream::{CacheUsageBreakdown, SseEvent, StreamContext, normalize_signature_for_sse};
 use super::types::{
-    CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, ModelInfo, ModelsResponse,
-    OutputConfig, Thinking,
+    CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, ModelInfo,
+    ModelsResponse, OutputConfig, Thinking,
 };
 use super::websearch;
 
@@ -1118,15 +1118,14 @@ fn build_local_text_response(
         .map(|event| event.to_sse_string())
         .collect::<String>();
 
-    let response = Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
         .header("x-request-id", request_id)
         .body(Body::from(body))
-        .unwrap();
-    response
+        .unwrap()
 }
 
 /// GET /v1/models
@@ -1140,145 +1139,20 @@ pub async fn get_models(OriginalUri(uri): OriginalUri) -> Response {
         "Received request"
     );
 
-    let models = vec![
-        ModelInfo {
-            id: "claude-sonnet-4-6".to_string(),
-            created_at: 1770314400,
-            display_name: "Claude Sonnet 4.6".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-sonnet-4-6-thinking".to_string(),
-            created_at: 1770314400,
-            display_name: "Claude Sonnet 4.6 (Thinking)".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-sonnet-4-6-agentic".to_string(),
-            created_at: 1770314400,
-            display_name: "Claude Sonnet 4.6 (Agentic)".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-sonnet-4-5-20250929".to_string(),
-            created_at: 1727568000,
-            display_name: "Claude Sonnet 4.5".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-sonnet-4-5-20250929-thinking".to_string(),
-            created_at: 1727568000,
-            display_name: "Claude Sonnet 4.5 (Thinking)".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-sonnet-4-5-20250929-agentic".to_string(),
-            created_at: 1727568000,
-            display_name: "Claude Sonnet 4.5 (Agentic)".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-opus-4-5-20251101".to_string(),
-            created_at: 1730419200,
-            display_name: "Claude Opus 4.5".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-opus-4-5-20251101-thinking".to_string(),
-            created_at: 1730419200,
-            display_name: "Claude Opus 4.5 (Thinking)".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-opus-4-5-20251101-agentic".to_string(),
-            created_at: 1730419200,
-            display_name: "Claude Opus 4.5 (Agentic)".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-opus-4-6".to_string(),
-            created_at: 1770314400,
-            display_name: "Claude Opus 4.6".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-opus-4-6-thinking".to_string(),
-            created_at: 1770314400,
-            display_name: "Claude Opus 4.6 (Thinking)".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-opus-4-6-agentic".to_string(),
-            created_at: 1770314400,
-            display_name: "Claude Opus 4.6 (Agentic)".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-opus-4-7".to_string(),
-            created_at: 1772992800,
-            display_name: "Claude Opus 4.7".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-opus-4-7-thinking".to_string(),
-            created_at: 1772992800,
-            display_name: "Claude Opus 4.7 (Thinking)".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-opus-4-7-agentic".to_string(),
-            created_at: 1772992800,
-            display_name: "Claude Opus 4.7 (Agentic)".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-opus-4-8".to_string(),
-            created_at: 1775671200,
-            display_name: "Claude Opus 4.8".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-opus-4-8-thinking".to_string(),
-            created_at: 1775671200,
-            display_name: "Claude Opus 4.8 (Thinking)".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-opus-4-8-agentic".to_string(),
-            created_at: 1775671200,
-            display_name: "Claude Opus 4.8 (Agentic)".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-haiku-4-5-20251001".to_string(),
-            created_at: 1727740800,
-            display_name: "Claude Haiku 4.5".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-haiku-4-5-20251001-thinking".to_string(),
-            created_at: 1727740800,
-            display_name: "Claude Haiku 4.5 (Thinking)".to_string(),
-            model_type: "model".to_string(),
-        },
-        ModelInfo {
-            id: "claude-haiku-4-5-20251001-agentic".to_string(),
-            created_at: 1727740800,
-            display_name: "Claude Haiku 4.5 (Agentic)".to_string(),
-            model_type: "model".to_string(),
-        },
-    ];
-
+    let models = models_list();
     let first_id = models.first().map(|m| m.id.clone());
     let last_id = models.last().map(|m| m.id.clone());
 
     attach_request_id_header(
-        (StatusCode::OK, Json(ModelsResponse {
-            data: models,
-            has_more: false,
-            first_id,
-            last_id,
-        }))
+        (
+            StatusCode::OK,
+            Json(ModelsResponse {
+                data: models,
+                has_more: false,
+                first_id,
+                last_id,
+            }),
+        )
             .into_response(),
         &request_id,
     )
@@ -1429,10 +1303,9 @@ pub async fn get_model(Path(id): Path<String>) -> Response {
 
     let models = models_list();
     match models.into_iter().find(|m| m.id == id) {
-        Some(model) => attach_request_id_header(
-            (StatusCode::OK, Json(model)).into_response(),
-            &request_id,
-        ),
+        Some(model) => {
+            attach_request_id_header((StatusCode::OK, Json(model)).into_response(), &request_id)
+        }
         None => attach_request_id_header(
             (
                 StatusCode::NOT_FOUND,
@@ -1575,12 +1448,7 @@ async fn post_messages_inner(
 
     if let Some(answer) = extract_pdf_text_answer(&payload) {
         tracing::info!("检测到 PDF 纯文本抽取请求，使用本地抽取结果直接返回");
-        return build_local_text_response(
-            &payload,
-            &answer,
-            estimated_input_tokens,
-            &request_id,
-        );
+        return build_local_text_response(&payload, &answer, estimated_input_tokens, &request_id);
     }
 
     let cache_profile = prompt_cache.accounting_enabled.then(|| {
@@ -1618,9 +1486,10 @@ async fn post_messages_inner(
                 ConversionError::EmptyMessageContent => {
                     ("invalid_request_error", "消息内容为空".to_string())
                 }
-                ConversionError::UrlImageNotSupported => {
-                    ("invalid_request_error", "URL image sources are not supported by this proxy".to_string())
-                }
+                ConversionError::UrlImageNotSupported => (
+                    "invalid_request_error",
+                    "URL image sources are not supported by this proxy".to_string(),
+                ),
             };
             tracing::warn!("请求转换失败: {}", e);
             return attach_request_id_header(
@@ -2312,10 +2181,10 @@ async fn handle_non_stream_request(
                                 redacted_thinking_blocks.push(redacted.clone());
                             }
                         }
-                        Event::Exception { exception_type, .. } => {
-                            if exception_type == "ContentLengthExceededException" {
-                                stop_reason = "max_tokens".to_string();
-                            }
+                        Event::Exception { exception_type, .. }
+                            if exception_type == "ContentLengthExceededException" =>
+                        {
+                            stop_reason = "max_tokens".to_string();
                         }
                         _ => {}
                     }
@@ -2636,7 +2505,7 @@ pub async fn count_tokens(
 
     attach_request_id_header(
         Json(CountTokensResponse {
-            input_tokens: total_tokens.max(1) as i32,
+            input_tokens: total_tokens.max(1),
         })
         .into_response(),
         &request_id,
@@ -3330,8 +3199,10 @@ mod tests {
             additional_model_request_fields: None,
         };
         let mut request_body = serde_json::to_string(&kiro_request).unwrap();
-        let mut config = CompressionConfig::default();
-        config.adaptive_compression = false;
+        let config = CompressionConfig {
+            adaptive_compression: false,
+            ..Default::default()
+        };
 
         let outcome = adaptive_shrink_request_body(
             &mut kiro_request,

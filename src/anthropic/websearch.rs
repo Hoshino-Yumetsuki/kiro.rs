@@ -910,24 +910,23 @@ mod tests {
             9
         );
         assert_eq!(
-            message_start.data["message"]["usage"]["server_tool_use"]
-                ["web_search_requests"],
+            message_start.data["message"]["usage"]["server_tool_use"]["web_search_requests"],
             1
         );
 
         assert!(message_delta.data["usage"].get("input_tokens").is_none());
-        assert!(message_delta.data["usage"]
-            .get("cache_creation_input_tokens")
-            .is_none());
-        assert!(message_delta.data["usage"]
-            .get("cache_read_input_tokens")
-            .is_none());
-        assert!(message_delta.data["usage"]
-            .get("server_tool_use")
-            .is_none());
         assert!(
-            message_delta.data["usage"].get("output_tokens").is_some()
+            message_delta.data["usage"]
+                .get("cache_creation_input_tokens")
+                .is_none()
         );
+        assert!(
+            message_delta.data["usage"]
+                .get("cache_read_input_tokens")
+                .is_none()
+        );
+        assert!(message_delta.data["usage"].get("server_tool_use").is_none());
+        assert!(message_delta.data["usage"].get("output_tokens").is_some());
     }
 
     #[test]
@@ -951,8 +950,7 @@ mod tests {
                 .is_none()
         );
         assert_eq!(
-            message_start.data["message"]["usage"]["server_tool_use"]
-                ["web_search_requests"],
+            message_start.data["message"]["usage"]["server_tool_use"]["web_search_requests"],
             1
         );
         assert!(
@@ -963,9 +961,7 @@ mod tests {
         assert!(message_delta.data["usage"].get("cache_creation").is_none());
         assert!(message_delta.data["usage"].get("input_tokens").is_none());
         assert!(message_delta.data["usage"].get("server_tool_use").is_none());
-        assert!(
-            message_delta.data["usage"].get("output_tokens").is_some()
-        );
+        assert!(message_delta.data["usage"].get("output_tokens").is_some());
     }
 
     #[test]
@@ -1006,33 +1002,28 @@ mod tests {
             0
         );
         assert_eq!(
-            message_start.data["message"]["usage"]["server_tool_use"]
-                ["web_search_requests"],
+            message_start.data["message"]["usage"]["server_tool_use"]["web_search_requests"],
             1
         );
         assert!(message_delta.data["usage"].get("input_tokens").is_none());
-        assert!(message_delta.data["usage"]
-            .get("cache_creation_input_tokens")
-            .is_none());
-        assert!(message_delta.data["usage"]
-            .get("cache_read_input_tokens")
-            .is_none());
-        assert!(message_delta.data["usage"]
-            .get("server_tool_use")
-            .is_none());
+        assert!(
+            message_delta.data["usage"]
+                .get("cache_creation_input_tokens")
+                .is_none()
+        );
+        assert!(
+            message_delta.data["usage"]
+                .get("cache_read_input_tokens")
+                .is_none()
+        );
+        assert!(message_delta.data["usage"].get("server_tool_use").is_none());
         assert_eq!(message_delta.data["usage"]["output_tokens"], output_tokens);
     }
 
     #[test]
     fn test_websearch_message_delta_usage_only_has_output_tokens_key() {
-        let events = generate_websearch_events(
-            "claude-sonnet-4",
-            "rust",
-            "srvtoolu_test",
-            None,
-            123,
-            None,
-        );
+        let events =
+            generate_websearch_events("claude-sonnet-4", "rust", "srvtoolu_test", None, 123, None);
 
         let message_delta = events
             .iter()

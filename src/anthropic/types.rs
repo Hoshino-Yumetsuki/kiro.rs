@@ -45,7 +45,11 @@ pub struct ErrorDetail {
 
 impl ErrorResponse {
     /// 创建新的错误响应（指定 request_id）
-    pub fn new(error_type: &str, message: impl Into<String>, request_id: impl Into<String>) -> Self {
+    pub fn new(
+        error_type: &str,
+        message: impl Into<String>,
+        request_id: impl Into<String>,
+    ) -> Self {
         Self {
             response_type: "error".to_string(),
             error: ErrorDetail {
@@ -483,7 +487,12 @@ mod tests {
         let body = serde_json::to_value(&err).expect("should serialize");
 
         assert_eq!(body["type"], "error");
-        assert!(body["request_id"].as_str().unwrap_or("").starts_with("req_"));
+        assert!(
+            body["request_id"]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("req_")
+        );
         assert!(!body["request_id"].as_str().unwrap().is_empty());
         assert_eq!(body["error"]["type"], "invalid_request_error");
         assert_eq!(body["error"]["message"], "test message");

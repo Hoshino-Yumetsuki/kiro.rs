@@ -48,10 +48,7 @@ async fn get_models_returns_anthropic_shape() {
     assert_eq!(json["has_more"], false, "has_more should be false");
     assert!(json["first_id"].is_string(), "first_id should be present");
     assert!(json["last_id"].is_string(), "last_id should be present");
-    assert!(
-        json.get("object").is_none(),
-        "should not have object field"
-    );
+    assert!(json.get("object").is_none(), "should not have object field");
 
     // Each model info entry must match Anthropic ModelInfo shape
     let data = json["data"].as_array().unwrap();
@@ -59,11 +56,7 @@ async fn get_models_returns_anthropic_shape() {
 
     for (i, model) in data.iter().enumerate() {
         let fields = model.as_object().expect("each model should be an object");
-        assert!(
-            fields.contains_key("id"),
-            "model[{}] missing id",
-            i
-        );
+        assert!(fields.contains_key("id"), "model[{}] missing id", i);
         assert_eq!(
             model["type"], "model",
             "model[{}] type should be 'model'",

@@ -41,7 +41,7 @@ impl PromptCacheRuntime {
         }
     }
 
-    pub fn snapshot(&self) -> PromptCacheSnapshot {
+    pub(crate) fn snapshot(&self) -> PromptCacheSnapshot {
         PromptCacheSnapshot {
             accounting_enabled: self.accounting_enabled,
             ttl_seconds: self.ttl_seconds,
@@ -115,7 +115,7 @@ impl AppState {
         self
     }
 
-    pub fn prompt_cache_snapshot(&self) -> PromptCacheSnapshot {
+    pub(crate) fn prompt_cache_snapshot(&self) -> PromptCacheSnapshot {
         self.prompt_cache_runtime.read().snapshot()
     }
 }
