@@ -73,30 +73,25 @@ impl ErrorResponse {
 
 // === Models 端点类型 ===
 
-/// 模型信息
+/// 模型信息（Anthropic List Models API 格式）
 #[derive(Debug, Serialize)]
-pub struct Model {
+pub struct ModelInfo {
     pub id: String,
-    pub object: String,
-    pub created: i64,
-    pub owned_by: String,
-    pub display_name: String,
     #[serde(rename = "type")]
     pub model_type: String,
-    pub max_tokens: i32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_length: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_completion_tokens: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thinking: Option<bool>,
+    pub display_name: String,
+    pub created_at: i64,
 }
 
-/// 模型列表响应
+/// 模型列表响应（Anthropic List Models API 格式）
 #[derive(Debug, Serialize)]
 pub struct ModelsResponse {
-    pub object: String,
-    pub data: Vec<Model>,
+    pub data: Vec<ModelInfo>,
+    pub has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_id: Option<String>,
 }
 
 // === Messages 端点类型 ===
