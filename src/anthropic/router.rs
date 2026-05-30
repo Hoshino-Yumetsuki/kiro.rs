@@ -14,7 +14,7 @@ use crate::kiro::provider::KiroProvider;
 use crate::model::config::CompressionConfig;
 
 use super::{
-    handlers::{count_tokens, get_models, post_messages},
+    handlers::{count_tokens, get_model, get_models, post_messages},
     middleware::{AppState, PromptCacheRuntime, auth_middleware, cors_layer},
 };
 
@@ -59,6 +59,7 @@ pub fn create_router_with_provider(
     // 需要认证的 /v1 路由
     let v1_routes = Router::new()
         .route("/models", get(get_models))
+        .route("/models/{id}", get(get_model))
         .route("/messages", post(post_messages))
         .route("/messages/count_tokens", post(count_tokens))
         .layer(middleware::from_fn_with_state(

@@ -10,7 +10,7 @@ use anyhow::Error;
 use axum::{
     Json as JsonExtractor,
     body::Body,
-    extract::{OriginalUri, State},
+    extract::{OriginalUri, Path, State},
     http::{StatusCode, header},
     response::{IntoResponse, Json, Response},
 };
@@ -1282,6 +1282,170 @@ pub async fn get_models(OriginalUri(uri): OriginalUri) -> Response {
             .into_response(),
         &request_id,
     )
+}
+
+/// 返回可用的模型列表（与 `get_models` 共享的数据）。
+fn models_list() -> Vec<ModelInfo> {
+    vec![
+        ModelInfo {
+            id: "claude-sonnet-4-6".to_string(),
+            created_at: 1770314400,
+            display_name: "Claude Sonnet 4.6".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-sonnet-4-6-thinking".to_string(),
+            created_at: 1770314400,
+            display_name: "Claude Sonnet 4.6 (Thinking)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-sonnet-4-6-agentic".to_string(),
+            created_at: 1770314400,
+            display_name: "Claude Sonnet 4.6 (Agentic)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-sonnet-4-5-20250929".to_string(),
+            created_at: 1727568000,
+            display_name: "Claude Sonnet 4.5".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-sonnet-4-5-20250929-thinking".to_string(),
+            created_at: 1727568000,
+            display_name: "Claude Sonnet 4.5 (Thinking)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-sonnet-4-5-20250929-agentic".to_string(),
+            created_at: 1727568000,
+            display_name: "Claude Sonnet 4.5 (Agentic)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-5-20251101".to_string(),
+            created_at: 1730419200,
+            display_name: "Claude Opus 4.5".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-5-20251101-thinking".to_string(),
+            created_at: 1730419200,
+            display_name: "Claude Opus 4.5 (Thinking)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-5-20251101-agentic".to_string(),
+            created_at: 1730419200,
+            display_name: "Claude Opus 4.5 (Agentic)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-6".to_string(),
+            created_at: 1770314400,
+            display_name: "Claude Opus 4.6".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-6-thinking".to_string(),
+            created_at: 1770314400,
+            display_name: "Claude Opus 4.6 (Thinking)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-6-agentic".to_string(),
+            created_at: 1770314400,
+            display_name: "Claude Opus 4.6 (Agentic)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-7".to_string(),
+            created_at: 1772992800,
+            display_name: "Claude Opus 4.7".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-7-thinking".to_string(),
+            created_at: 1772992800,
+            display_name: "Claude Opus 4.7 (Thinking)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-7-agentic".to_string(),
+            created_at: 1772992800,
+            display_name: "Claude Opus 4.7 (Agentic)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-8".to_string(),
+            created_at: 1775671200,
+            display_name: "Claude Opus 4.8".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-8-thinking".to_string(),
+            created_at: 1775671200,
+            display_name: "Claude Opus 4.8 (Thinking)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-opus-4-8-agentic".to_string(),
+            created_at: 1775671200,
+            display_name: "Claude Opus 4.8 (Agentic)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-haiku-4-5-20251001".to_string(),
+            created_at: 1727740800,
+            display_name: "Claude Haiku 4.5".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-haiku-4-5-20251001-thinking".to_string(),
+            created_at: 1727740800,
+            display_name: "Claude Haiku 4.5 (Thinking)".to_string(),
+            model_type: "model".to_string(),
+        },
+        ModelInfo {
+            id: "claude-haiku-4-5-20251001-agentic".to_string(),
+            created_at: 1727740800,
+            display_name: "Claude Haiku 4.5 (Agentic)".to_string(),
+            model_type: "model".to_string(),
+        },
+    ]
+}
+
+/// GET /v1/models/{id}
+///
+/// 返回指定 ID 的模型信息。如果模型不存在则返回 404。
+pub async fn get_model(Path(id): Path<String>) -> Response {
+    let request_id = generate_request_id();
+    tracing::info!(
+        model_id = %id,
+        request_id = %request_id,
+        "Received request"
+    );
+
+    let models = models_list();
+    match models.into_iter().find(|m| m.id == id) {
+        Some(model) => attach_request_id_header(
+            (StatusCode::OK, Json(model)).into_response(),
+            &request_id,
+        ),
+        None => attach_request_id_header(
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse::new(
+                    "not_found_error",
+                    format!("Model '{}' not found", id),
+                    &request_id,
+                )),
+            )
+                .into_response(),
+            &request_id,
+        ),
+    }
 }
 
 /// POST /v1/messages
