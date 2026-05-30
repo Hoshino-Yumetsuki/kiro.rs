@@ -411,3 +411,48 @@ pub fn get_context_window_size(model: &str) -> i32 {
         200_000
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_unsupported_fields_silently() {
+        let json = r#"{
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 1024,
+            "stream": false,
+            "messages": [{"role": "user", "content": "hello"}],
+            "temperature": 0.5,
+            "top_p": 0.9,
+            "top_k": 50,
+            "stop_sequences": ["X"],
+            "cache_control": {"type": "ephemeral"},
+            "container": "abc",
+            "service_tier": "auto",
+            "inference_geo": "us",
+            "mcp_servers": [],
+            "thinking": {"type": "enabled", "budget_tokens": 10000, "display": "summarized"},
+            "output_config": {"effort": "high", "task_budget": {"some": 123}}
+        }"#;
+
+        let req: MessagesRequest =
+            serde_json::from_str(json).expect("should silently drop unsupported fields");
+
+        assert_eq!(req.model, "claude-sonnet-4-20250514");
+        assert_eq!(req.max_tokens, 1024);
+        assert!(!req.stream);
+        assert_eq!(req.messages.len(), 1);
+        assert!(req.tools.is_none());
+        assert!(req.tool_choice.is_none());
+        assert!(req.metadata.is_none());
+
+        let thinking = req.thinking.expect("thinking should be present");
+        assert_eq!(thinking.thinking_type, "enabled");
+        assert_eq!(thinking.budget_tokens, 10000);
+
+        let output_config = req.output_config.expect("output_config should be present");
+        assert_eq!(output_config.effort, "high");
+        assert!(output_config.format.is_none());
+    }
+}
