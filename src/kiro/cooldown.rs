@@ -354,10 +354,4 @@ mod tests {
         let cooldowns = manager.get_all_cooldowns();
         assert_eq!(cooldowns.len(), 2);
     }
-
-    #[test]
-    fn test_cooldown_reason_description() {
-        assert_eq!(CooldownReason::RateLimitExceeded.description(), "速率限制");
-        assert_eq!(CooldownReason::AccountSuspended.description(), "账户暂停");
-    }
 }

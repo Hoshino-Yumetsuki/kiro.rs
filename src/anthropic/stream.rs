@@ -265,21 +265,23 @@ fn normalize_thinking_signature_with_mode(
 }
 
 pub(super) fn normalize_signature_for_sse(sig: &str, model: &str) -> String {
-    let is_thinking_suffix = is_thinking_suffix_model(model);
     let external_model = signature_model_marker_for_request(model);
-    if !is_thinking_suffix && !is_4_6_model(model) {
+    let has_external_marker = external_model.is_some();
+    if !has_external_marker && !is_4_6_model(model) {
         return cleanup_existing_thinking_signature(sig, external_model.as_deref())
             .unwrap_or_else(|| sig.to_string());
     }
-    normalize_thinking_signature_with_mode(sig, is_thinking_suffix, true, external_model.as_deref())
-        .unwrap_or_else(|| sig.to_string())
+    normalize_thinking_signature_with_mode(
+        sig,
+        has_external_marker,
+        true,
+        external_model.as_deref(),
+    )
+    .unwrap_or_else(|| sig.to_string())
 }
 
 fn signature_model_marker_for_request(model: &str) -> Option<String> {
-    let lower = model.to_ascii_lowercase();
-    let base_model = lower.strip_suffix("-thinking").unwrap_or(&lower);
-    let base_model = base_model.strip_suffix("-agentic").unwrap_or(base_model);
-    match base_model {
+    match model.to_ascii_lowercase().as_str() {
         "claude-opus-4-7" | "claude-opus-4.7" => Some("claude-opus-4-7".to_string()),
         "claude-opus-4-8" | "claude-opus-4.8" => Some("claude-opus-4-8".to_string()),
         _ => None,
@@ -300,10 +302,7 @@ fn normalize_model_alias_marker(meta: &mut Vec<u8>, external_model: Option<&str>
 }
 
 fn model_marker_matches_external_model(marker: &[u8], external_model: &str) -> bool {
-    marker == external_model.as_bytes()
-        || signature_model_aliases(external_model)
-            .iter()
-            .any(|alias| marker == *alias)
+    marker == external_model.as_bytes() || signature_model_aliases(external_model).contains(&marker)
 }
 
 fn signature_model_aliases(external_model: &str) -> &'static [&'static [u8]] {
@@ -312,10 +311,6 @@ fn signature_model_aliases(external_model: &str) -> &'static [&'static [u8]] {
         "claude-opus-4-8" => &[b"claude-quince8", b"claude-quince", b"claude-opus-4.8"],
         _ => &[],
     }
-}
-
-fn is_thinking_suffix_model(model: &str) -> bool {
-    model.to_ascii_lowercase().ends_with("-thinking")
 }
 
 fn is_4_6_model(model: &str) -> bool {
@@ -621,7 +616,13 @@ impl SseStateManager {
     }
 
     /// stop_reason 优先级（索引越小优先级越高）
-    const STOP_REASON_PRIORITY: &'static [&'static str] = &["max_tokens", "tool_use", "end_turn"];
+    const STOP_REASON_PRIORITY: &'static [&'static str] = &[
+        "max_tokens",
+        "refusal",
+        "pause_turn",
+        "tool_use",
+        "end_turn",
+    ];
 
     /// 获取 stop_reason 的优先级（越小越高，未知原因返回 usize::MAX）
     fn stop_reason_priority(reason: &str) -> usize {
@@ -633,7 +634,7 @@ impl SseStateManager {
 
     /// 设置 stop_reason（高优先级原因可覆盖低优先级原因）
     ///
-    /// 优先级从高到低：max_tokens > tool_use > end_turn
+    /// 优先级从高到低：max_tokens > refusal > pause_turn > tool_use > end_turn
     pub fn set_stop_reason(&mut self, reason: impl Into<String>) {
         let reason = reason.into();
         let new_priority = Self::stop_reason_priority(&reason);
@@ -1056,7 +1057,7 @@ impl StreamContext {
         self.thinking_buffer.push_str(content);
 
         loop {
-            if !self.in_thinking_block && !self.thinking_extracted {
+            if !self.in_thinking_block {
                 // 查找 <thinking> 开始标签（跳过被反引号包裹的）
                 if let Some(start_pos) = find_real_thinking_start_tag(&self.thinking_buffer) {
                     // 发送 <thinking> 之前的内容作为 text_delta
@@ -1084,8 +1085,7 @@ impl StreamContext {
                             "index": thinking_index,
                             "content_block": {
                                 "type": "thinking",
-                                "thinking": "",
-                                "signature": ""
+                                "thinking": ""
                             }
                         }),
                     );
@@ -1112,7 +1112,8 @@ impl StreamContext {
                     }
                     break;
                 }
-            } else if self.in_thinking_block {
+            } else {
+                // in_thinking_block == true
                 // 剥离 <thinking> 标签后紧跟的换行符（可能跨 chunk）
                 if self.strip_thinking_leading_newline {
                     if self.thinking_buffer.starts_with('\n') {
@@ -1181,14 +1182,6 @@ impl StreamContext {
                     }
                     break;
                 }
-            } else {
-                // thinking 已提取完成，剩余内容作为 text_delta
-                if !self.thinking_buffer.is_empty() {
-                    let remaining = self.thinking_buffer.clone();
-                    self.thinking_buffer.clear();
-                    events.extend(self.create_text_delta_events(&remaining));
-                }
-                break;
             }
         }
 
@@ -1336,12 +1329,11 @@ impl StreamContext {
                     thinking_index,
                     "thinking",
                     json!({
-                        "type": "content_block_start",
-                        "index": thinking_index,
+                            "type": "content_block_start",
+                            "index": thinking_index,
                         "content_block": {
                             "type": "thinking",
-                            "thinking": "",
-                            "signature": ""
+                            "thinking": ""
                         }
                     }),
                 );
@@ -1369,12 +1361,11 @@ impl StreamContext {
                     thinking_index,
                     "thinking",
                     json!({
-                        "type": "content_block_start",
-                        "index": thinking_index,
+                            "type": "content_block_start",
+                            "index": thinking_index,
                         "content_block": {
                             "type": "thinking",
-                            "thinking": "",
-                            "signature": ""
+                            "thinking": ""
                         }
                     }),
                 );
@@ -1465,12 +1456,8 @@ impl StreamContext {
 
         // thinking 模式下，process_content_with_thinking 可能会为了探测 `<thinking>` 而暂存一小段尾部文本。
         // 如果此时直接开始 tool_use，状态机会自动关闭 text block，导致这段"待输出文本"看起来被 tool_use 吞掉。
-        // 约束：只在尚未进入 thinking block、且 thinking 尚未被提取时，将缓冲区当作普通文本 flush。
-        if self.thinking_enabled
-            && !self.in_thinking_block
-            && !self.thinking_extracted
-            && !self.thinking_buffer.is_empty()
-        {
+        // tool_use 到达意味着不会再有新的 <thinking> 标签，将缓冲区当作普通文本 flush。
+        if self.thinking_enabled && !self.in_thinking_block && !self.thinking_buffer.is_empty() {
             let buffered = std::mem::take(&mut self.thinking_buffer);
             events.extend(self.create_text_delta_events(&buffered));
         }
@@ -1993,8 +1980,7 @@ mod tests {
             OPUS_4_6_NATIVE_SIGNATURE
         );
 
-        let normalized =
-            normalize_signature_for_sse(OPUS_4_6_NATIVE_SIGNATURE, "claude-opus-4-6-thinking");
+        let normalized = normalize_signature_for_sse(OPUS_4_6_NATIVE_SIGNATURE, "claude-opus-4-6");
         assert_ne!(normalized, OPUS_4_6_NATIVE_SIGNATURE);
         assert!(
             decode_signature(&normalized)
@@ -2025,37 +2011,6 @@ mod tests {
                 .windows([0x10, 0x01, 0x18, 0x02].len())
                 .any(|w| w == [0x10, 0x01, 0x18, 0x02])
         );
-    }
-
-    #[test]
-    fn normalizes_native_signature_for_thinking_suffix_models() {
-        let opus_4_7_signature = signature_with_model_marker(
-            OPUS_4_6_NATIVE_SIGNATURE,
-            b"claude-opus-4-6",
-            b"claude-opus-4-7",
-        );
-
-        for request_model in ["claude-opus-4-7", "claude-opus-4-7-thinking"] {
-            let normalized = normalize_signature_for_sse(&opus_4_7_signature, request_model);
-            assert_ne!(normalized, opus_4_7_signature);
-
-            let normalized_raw = decode_signature(&normalized);
-            assert!(
-                normalized_raw
-                    .windows(b"claude-opus-4-7".len())
-                    .any(|w| w == b"claude-opus-4-7")
-            );
-            assert!(
-                normalized_raw
-                    .windows(b"thinking".len())
-                    .any(|w| w == b"thinking")
-            );
-            assert!(
-                !normalized_raw
-                    .windows([0x10, 0x01, 0x18, 0x02].len())
-                    .any(|w| w == [0x10, 0x01, 0x18, 0x02])
-            );
-        }
     }
 
     #[test]
@@ -2122,28 +2077,8 @@ mod tests {
         for (alias, request_model, external_model) in [
             (
                 b"claude-quince7".as_slice(),
-                "claude-opus-4-7-thinking",
-                "claude-opus-4-7",
-            ),
-            (
-                b"claude-quince7".as_slice(),
-                "claude-opus-4-7-agentic",
-                "claude-opus-4-7",
-            ),
-            (
-                b"claude-quince7".as_slice(),
                 "claude-opus-4.7",
                 "claude-opus-4-7",
-            ),
-            (
-                b"claude-quince8".as_slice(),
-                "claude-opus-4-8-thinking",
-                "claude-opus-4-8",
-            ),
-            (
-                b"claude-quince8".as_slice(),
-                "claude-opus-4-8-agentic",
-                "claude-opus-4-8",
             ),
             (
                 b"claude-quince8".as_slice(),
@@ -3221,5 +3156,171 @@ mod tests {
             "should emit content_block_stop"
         );
         assert!(!ctx.in_thinking_block);
+    }
+
+    #[test]
+    fn test_stop_reason_refusal_over_end_turn() {
+        let mut mgr = SseStateManager::new();
+        mgr.set_stop_reason("end_turn");
+        assert_eq!(mgr.get_stop_reason(), "end_turn");
+        mgr.set_stop_reason("refusal");
+        assert_eq!(mgr.get_stop_reason(), "refusal");
+    }
+
+    #[test]
+    fn test_stop_reason_pause_turn_over_end_turn() {
+        let mut mgr = SseStateManager::new();
+        mgr.set_stop_reason("end_turn");
+        assert_eq!(mgr.get_stop_reason(), "end_turn");
+        mgr.set_stop_reason("pause_turn");
+        assert_eq!(mgr.get_stop_reason(), "pause_turn");
+    }
+
+    #[test]
+    fn test_stop_reason_max_tokens_wins_over_all() {
+        let mut mgr = SseStateManager::new();
+        mgr.set_stop_reason("end_turn");
+        mgr.set_stop_reason("pause_turn");
+        mgr.set_stop_reason("refusal");
+        mgr.set_stop_reason("max_tokens");
+        assert_eq!(mgr.get_stop_reason(), "max_tokens");
+    }
+
+    #[test]
+    fn test_message_start_includes_stop_sequence_null() {
+        let ctx = StreamContext::new_with_thinking(
+            "test-model",
+            123,
+            None,
+            false,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
+        let msg_start = ctx.create_message_start_event();
+        assert_eq!(
+            msg_start["message"]["stop_sequence"],
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn test_multiple_thinking_blocks_via_tags() {
+        // 模拟模型输出两个 <thinking> 块，确保第二个块也能被正确解析
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
+        let _initial_events = ctx.generate_initial_events();
+
+        // 第一个 thinking 块
+        let events1 = ctx.process_assistant_response("<thinking>\nFirst thought\n</thinking>\n\n");
+        assert!(
+            events1.iter().any(|e| {
+                e.event == "content_block_start" && e.data["content_block"]["type"] == "thinking"
+            }),
+            "should start first thinking block"
+        );
+        assert!(
+            events1.iter().any(|e| { e.event == "content_block_stop" }),
+            "should stop first thinking block"
+        );
+
+        // 中间有一些文本
+        let text_events = ctx.process_assistant_response("Some text between blocks\n\n");
+        assert!(
+            text_events.iter().any(|e| {
+                e.event == "content_block_delta"
+                    && e.data["delta"]["type"] == "text_delta"
+                    && e.data["delta"]["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains("Some text")
+            }),
+            "should emit text between thinking blocks"
+        );
+
+        // 第二个 thinking 块
+        let events2 = ctx.process_assistant_response("<thinking>\nSecond thought\n</thinking>\n\n");
+        assert!(
+            events2.iter().any(|e| {
+                e.event == "content_block_start" && e.data["content_block"]["type"] == "thinking"
+            }),
+            "should start second thinking block"
+        );
+        assert!(
+            events2.iter().any(|e| {
+                e.event == "content_block_delta"
+                    && e.data["delta"]["type"] == "thinking_delta"
+                    && e.data["delta"]["thinking"]
+                        .as_str()
+                        .unwrap()
+                        .contains("Second thought")
+            }),
+            "should emit thinking_delta for second block"
+        );
+        assert!(
+            events2.iter().any(|e| { e.event == "content_block_stop" }),
+            "should stop second thinking block"
+        );
+    }
+
+    #[test]
+    fn test_consecutive_thinking_blocks_via_tags() {
+        // 两个 thinking 块之间没有文本
+        let mut ctx = StreamContext::new_with_thinking(
+            "test-model",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
+        let _initial_events = ctx.generate_initial_events();
+
+        // 一次性输入两个连续的 thinking 块
+        let events = ctx.process_assistant_response(
+            "<thinking>\nFirst\n</thinking>\n\n<thinking>\nSecond\n</thinking>\n\n",
+        );
+
+        // 应该有两个 content_block_start (thinking)
+        let thinking_starts: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                e.event == "content_block_start" && e.data["content_block"]["type"] == "thinking"
+            })
+            .collect();
+        assert_eq!(
+            thinking_starts.len(),
+            2,
+            "should start two thinking blocks, got {}",
+            thinking_starts.len()
+        );
+
+        // 应该有两个 content_block_stop
+        let stops: Vec<_> = events
+            .iter()
+            .filter(|e| e.event == "content_block_stop")
+            .collect();
+        assert_eq!(
+            stops.len(),
+            2,
+            "should stop two thinking blocks, got {}",
+            stops.len()
+        );
+
+        // 第一个和第二个块的 index 应该不同
+        let first_index = thinking_starts[0].data["index"].as_i64().unwrap();
+        let second_index = thinking_starts[1].data["index"].as_i64().unwrap();
+        assert_ne!(
+            first_index, second_index,
+            "thinking blocks should have different indices"
+        );
     }
 }

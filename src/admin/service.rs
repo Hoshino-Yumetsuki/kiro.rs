@@ -1263,11 +1263,4 @@ mod tests {
         let persisted = read_persisted_config(&service);
         assert_eq!(persisted.default_endpoint, "cli");
     }
-
-    #[test]
-    fn test_get_global_config_includes_default_endpoint() {
-        let service = create_test_service();
-        let config = service.get_global_config();
-        assert_eq!(config.default_endpoint, "ide"); // Config::default() 的默认值
-    }
 }

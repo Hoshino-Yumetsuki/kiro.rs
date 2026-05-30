@@ -409,6 +409,9 @@ fn generate_websearch_events(
     let mut message_start_usage = json!({
         "input_tokens": billed_input_tokens,
         "output_tokens": 0,
+        "server_tool_use": {
+            "web_search_requests": 1
+        }
     });
     if let Some(cache_context) = cache_context {
         message_start_usage["cache_creation_input_tokens"] =
@@ -427,6 +430,7 @@ fn generate_websearch_events(
                 "model": model,
                 "content": [],
                 "stop_reason": null,
+                "stop_sequence": null,
                 "usage": message_start_usage
             }
         }),
@@ -582,19 +586,9 @@ fn generate_websearch_events(
     // 10. message_delta
     // 官方 API 的 message_delta.delta 中没有 stop_sequence 字段
     let output_tokens = (summary.len() as i32 + 3) / 4; // 简单估算
-    let mut message_delta_usage = json!({
-        "input_tokens": billed_input_tokens,
+    let message_delta_usage = json!({
         "output_tokens": output_tokens,
-        "server_tool_use": {
-            "web_search_requests": 1
-        }
     });
-    if let Some(cache_context) = cache_context {
-        message_delta_usage["cache_creation_input_tokens"] =
-            json!(cache_context.cache_creation_input_tokens);
-        message_delta_usage["cache_read_input_tokens"] =
-            json!(cache_context.cache_read_input_tokens);
-    }
     events.push(SseEvent::new(
         "message_delta",
         json!({
@@ -657,7 +651,7 @@ pub async fn handle_websearch_request(
         None => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ErrorResponse::new(
+                Json(ErrorResponse::without_request_id(
                     "invalid_request_error",
                     "无法从消息中提取搜索查询",
                 )),
@@ -781,7 +775,6 @@ pub async fn handle_websearch_request(
             },
             {
                 "type": "web_search_tool_result",
-                "tool_use_id": tool_use_id,
                 "content": search_content
             },
             {
@@ -916,13 +909,24 @@ mod tests {
             message_start.data["message"]["usage"]["cache_read_input_tokens"],
             9
         );
-
-        assert_eq!(message_delta.data["usage"]["input_tokens"], 107);
         assert_eq!(
-            message_delta.data["usage"]["cache_creation_input_tokens"],
-            7
+            message_start.data["message"]["usage"]["server_tool_use"]["web_search_requests"],
+            1
         );
-        assert_eq!(message_delta.data["usage"]["cache_read_input_tokens"], 9);
+
+        assert!(message_delta.data["usage"].get("input_tokens").is_none());
+        assert!(
+            message_delta.data["usage"]
+                .get("cache_creation_input_tokens")
+                .is_none()
+        );
+        assert!(
+            message_delta.data["usage"]
+                .get("cache_read_input_tokens")
+                .is_none()
+        );
+        assert!(message_delta.data["usage"].get("server_tool_use").is_none());
+        assert!(message_delta.data["usage"].get("output_tokens").is_some());
     }
 
     #[test]
@@ -945,12 +949,19 @@ mod tests {
                 .get("cache_creation_input_tokens")
                 .is_none()
         );
+        assert_eq!(
+            message_start.data["message"]["usage"]["server_tool_use"]["web_search_requests"],
+            1
+        );
         assert!(
             message_delta.data["usage"]
                 .get("cache_read_input_tokens")
                 .is_none()
         );
         assert!(message_delta.data["usage"].get("cache_creation").is_none());
+        assert!(message_delta.data["usage"].get("input_tokens").is_none());
+        assert!(message_delta.data["usage"].get("server_tool_use").is_none());
+        assert!(message_delta.data["usage"].get("output_tokens").is_some());
     }
 
     #[test]
@@ -990,13 +1001,45 @@ mod tests {
             message_start.data["message"]["usage"]["cache_read_input_tokens"],
             0
         );
-        assert_eq!(message_delta.data["usage"]["input_tokens"], billed);
         assert_eq!(
-            message_delta.data["usage"]["cache_creation_input_tokens"],
-            0
+            message_start.data["message"]["usage"]["server_tool_use"]["web_search_requests"],
+            1
         );
-        assert_eq!(message_delta.data["usage"]["cache_read_input_tokens"], 0);
+        assert!(message_delta.data["usage"].get("input_tokens").is_none());
+        assert!(
+            message_delta.data["usage"]
+                .get("cache_creation_input_tokens")
+                .is_none()
+        );
+        assert!(
+            message_delta.data["usage"]
+                .get("cache_read_input_tokens")
+                .is_none()
+        );
+        assert!(message_delta.data["usage"].get("server_tool_use").is_none());
         assert_eq!(message_delta.data["usage"]["output_tokens"], output_tokens);
+    }
+
+    #[test]
+    fn test_websearch_message_delta_usage_only_has_output_tokens_key() {
+        let events =
+            generate_websearch_events("claude-sonnet-4", "rust", "srvtoolu_test", None, 123, None);
+
+        let message_delta = events
+            .iter()
+            .find(|e| e.event == "message_delta")
+            .expect("should have message_delta");
+
+        use std::collections::HashSet;
+        let keys: HashSet<&str> = message_delta.data["usage"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+        let mut expected = HashSet::new();
+        expected.insert("output_tokens");
+        assert_eq!(keys, expected);
     }
 
     #[test]
@@ -1275,5 +1318,116 @@ mod tests {
         assert!(summary.contains("Test Result"));
         assert!(summary.contains("https://example.com"));
         assert!(summary.contains("This is a test snippet"));
+    }
+
+    #[test]
+    fn test_message_start_contains_stop_sequence() {
+        let events =
+            generate_websearch_events("test-model", "test query", "toolu_test_id", None, 100, None);
+
+        assert!(!events.is_empty());
+        assert_eq!(events[0].event, "message_start");
+
+        let message = &events[0].data["message"];
+
+        assert!(
+            message
+                .as_object()
+                .unwrap()
+                .keys()
+                .any(|k| k == "stop_sequence"),
+            "message object must contain 'stop_sequence' key"
+        );
+
+        assert_eq!(
+            message["stop_sequence"],
+            serde_json::Value::Null,
+            "stop_sequence must be null"
+        );
+    }
+
+    #[test]
+    fn test_websearch_result_stream_omits_tool_use_id() {
+        // Stream 路径：web_search_tool_result content_block 不应包含 tool_use_id
+        let tid = "srvtoolu_test_1111111111111111111111_1111111111111_aaaaaaaa";
+        let events = generate_websearch_events("test-model", "test query", tid, None, 100, None);
+
+        // 验证 server_tool_use (index 1) 包含 tool_use_id 作为 id 字段
+        let server_tool_use = &events[4].data["content_block"];
+        assert_eq!(
+            server_tool_use["type"], "server_tool_use",
+            "expected server_tool_use block"
+        );
+        assert!(
+            server_tool_use.get("id").is_some(),
+            "server_tool_use block MUST contain 'id' (tool_use_id)"
+        );
+
+        // 验证 web_search_tool_result (index 2) 不包含 tool_use_id
+        let tool_result_block = &events[6].data["content_block"];
+        assert_eq!(
+            tool_result_block["type"], "web_search_tool_result",
+            "expected web_search_tool_result block"
+        );
+        assert!(
+            tool_result_block.get("tool_use_id").is_none(),
+            "web_search_tool_result block MUST NOT contain 'tool_use_id' in stream path"
+        );
+
+        // 验证 state-of-the-art: 如果错误的 tool_use_id 被添加，测试会捕获
+        // 同时也验证非 web_search 的 tool_use_id 引用（id 字段）不受影响
+        assert_eq!(
+            server_tool_use["id"], tid,
+            "server_tool_use.id must still be preserved"
+        );
+    }
+
+    #[test]
+    fn test_websearch_result_non_stream_omits_tool_use_id() {
+        // Non-stream 路径：web_search_tool_result content block 不应包含 tool_use_id
+        let tid = "srvtoolu_test_1111111111111111111111_1111111111111_aaaaaaaa";
+        let search_content: Vec<serde_json::Value> = vec![];
+
+        let response_body = json!({
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "model": "test-model",
+            "content": [
+                {
+                    "type": "server_tool_use",
+                    "id": tid,
+                    "name": "web_search",
+                    "input": { "query": "test query" }
+                },
+                {
+                    "type": "web_search_tool_result",
+                    "content": search_content
+                },
+                {
+                    "type": "text",
+                    "text": "summary"
+                }
+            ],
+            "stop_reason": "end_turn",
+            "stop_sequence": null,
+            "usage": json!({"input_tokens": 100, "output_tokens": 10})
+        });
+
+        // 验证 server_tool_use 包含 id
+        let server_tool_use = &response_body["content"][0];
+        assert_eq!(server_tool_use["type"], "server_tool_use");
+        assert!(
+            server_tool_use.get("id").is_some(),
+            "server_tool_use MUST contain 'id'"
+        );
+
+        // 验证 web_search_tool_result 不包含 tool_use_id
+        let tool_result = &response_body["content"][1];
+        assert_eq!(tool_result["type"], "web_search_tool_result");
+        assert!(
+            tool_result.get("tool_use_id").is_none(),
+            "web_search_tool_result MUST NOT contain 'tool_use_id' in non-stream path"
+        );
     }
 }

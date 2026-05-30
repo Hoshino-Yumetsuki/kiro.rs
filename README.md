@@ -18,7 +18,7 @@
 
 ## 功能特性
 
-- **Anthropic API 兼容**: 完整支持 Anthropic Claude API 格式
+- **Anthropic API 兼容**: 兼容 Messages API、count_tokens、Models 端点（部分行为有差异，详见 [Anthropic 兼容性说明](#anthropic-兼容性说明)）
 - **流式响应**: 支持 SSE (Server-Sent Events) 流式输出
 - **Token 自动刷新**: 自动管理和刷新 OAuth Token
 - **多凭据支持**: 支持配置多个凭据，按优先级自动故障转移
@@ -54,6 +54,7 @@
 - [模型映射](#模型映射)
 - [Admin（可选）](#admin可选)
 - [注意事项](#注意事项)
+- [Anthropic 兼容性说明](#anthropic-兼容性说明)
 - [项目结构](#项目结构)
 - [技术栈](#技术栈)
 - [License](#license)
@@ -143,7 +144,7 @@ curl http://127.0.0.1:8990/v1/messages \
   -H "Content-Type: application/json" \
   -H "x-api-key: sk-kiro-rs-qazWSXedcRFV123456" \
   -d '{
-    "model": "claude-sonnet-4-20250514",
+    "model": "claude-sonnet-4-5",
     "max_tokens": 1024,
     "stream": true,
     "messages": [
@@ -384,19 +385,21 @@ RUST_LOG=debug ./target/release/kiro-rs
 
 ### Thinking 模式
 
-支持 Claude 的 extended thinking 功能：
+Thinking 模式完全通过请求体字段控制，与模型名无关。支持 `thinking` 和 `output_config.effort` 两个字段：
 
 ```json
 {
-  "model": "claude-sonnet-4-20250514",
+  "model": "claude-opus-4-7",
+  "thinking": {"type": "adaptive"},
+  "output_config": {"effort": "high"},
   "max_tokens": 16000,
-  "thinking": {
-    "type": "enabled",
-    "budget_tokens": 10000
-  },
   "messages": [...]
 }
 ```
+
+- `thinking.type`: `"adaptive"`（启用）、`"enabled"`（旧版兼容，等同 adaptive）、`"disabled"`（关闭）
+- `output_config.effort`: `"low"` / `"medium"` / `"high"`（默认）/ `"xhigh"` / `"max"`
+  - `xhigh` 和 `max` 仅 Opus 系列支持，其他模型自动回退到 `high`
 
 ### 工具调用
 
@@ -430,6 +433,8 @@ RUST_LOG=debug ./target/release/kiro-rs
 | `*sonnet*`（含 4-6/4.6） | `claude-sonnet-4.6` |
 | `*sonnet*`（其他） | `claude-sonnet-4.5` |
 | `*opus*`（含 4-5/4.5） | `claude-opus-4.5` |
+| `*opus*`（含 4-7/4.7） | `claude-opus-4.7` |
+| `*opus*`（含 4-8/4.8） | `claude-opus-4.8` |
 | `*opus*`（其他） | `claude-opus-4.6` |
 | `*haiku*` | `claude-haiku-4.5` |
 
@@ -455,6 +460,22 @@ RUST_LOG=debug ./target/release/kiro-rs
 1. **凭证安全**: 请妥善保管 `credentials.json` 文件，不要提交到版本控制
 2. **Token 刷新**: 服务会自动刷新过期的 Token，无需手动干预
 3. **WebSearch 工具**: 只要 `tools` 中包含 `web_search`（按 name 或 type 判断），就走内置 WebSearch 处理逻辑
+
+## Anthropic 兼容性说明
+
+本代理兼容 Anthropic Messages API、count_tokens 和 Models 端点，但存在以下已知差异：
+
+- **不支持的 API**: Batches、Files、Managed Agents 等高级功能不可用
+- **System prompt 转换**: 系统提示词会被转换为 user/assistant 消息对传递给上游
+- **Assistant prefill**: 不支持在 messages 末尾追加 assistant 消息进行预填充
+- **tool_choice**: 客户端传入的 `tool_choice` 字段会被忽略，响应头中会返回 `x-anthropic-compat-warning` 提示
+- **Prompt cache**: 本地模拟实现，非 Anthropic 原生 prompt caching
+- **图片 URL**: 不支持 `image.source.type: "url"` 形式，会返回 400 错误
+- **Token 计数**: 返回的 token 数量为近似值，与 Anthropic 官方计数可能存在差异
+
+### Request ID
+
+每个请求都会生成唯一的 request ID，同时出现在响应体的 `request_id` 字段和 `x-request-id` HTTP 响应头中，可用于日志追踪和问题排查。
 
 ## 项目结构
 
