@@ -2232,7 +2232,10 @@ async fn handle_non_stream_request(
         })
     };
 
-    (StatusCode::OK, Json(response_body)).into_response()
+    attach_request_id_header(
+        (StatusCode::OK, Json(response_body)).into_response(),
+        context.request_id,
+    )
 }
 
 fn build_thinking_content_block(
@@ -2393,9 +2396,11 @@ fn build_additional_model_request_fields(payload: &MessagesRequest) -> Option<se
 pub async fn count_tokens(
     OriginalUri(uri): OriginalUri,
     JsonExtractor(payload): JsonExtractor<CountTokensRequest>,
-) -> impl IntoResponse {
+) -> Response {
+    let request_id = generate_request_id();
     tracing::info!(
         path = %uri.path(),
+        request_id = %request_id,
         model = %payload.model,
         message_count = %payload.messages.len(),
         "Received request"
@@ -2408,9 +2413,13 @@ pub async fn count_tokens(
         payload.tools.clone(),
     ) as i32;
 
-    Json(CountTokensResponse {
-        input_tokens: total_tokens.max(1) as i32,
-    })
+    attach_request_id_header(
+        Json(CountTokensResponse {
+            input_tokens: total_tokens.max(1) as i32,
+        })
+        .into_response(),
+        &request_id,
+    )
 }
 
 /// 截断字符串中间部分，保留头尾各 `keep` 个字符
@@ -2881,7 +2890,7 @@ mod tests {
     #[tokio::test]
     async fn test_build_local_text_response_uses_anthropic_message_id_non_stream() {
         let payload = pdf_text_payload("Extract the text from this PDF and return only the text.");
-        let response = build_local_text_response(&payload, "hvoyowse", 10);
+        let response = build_local_text_response(&payload, "hvoyowse", 10, "req_test_nonstream");
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
@@ -2896,7 +2905,7 @@ mod tests {
             pdf_text_payload("Extract the text from this PDF and return only the text.");
         payload.stream = true;
 
-        let response = build_local_text_response(&payload, "hvoyowse", 10);
+        let response = build_local_text_response(&payload, "hvoyowse", 10, "req_test_stream");
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
@@ -3119,7 +3128,195 @@ mod tests {
         let response = map_kiro_provider_error_to_response(
             "{}",
             anyhow::anyhow!("400 Improperly formed request"),
+            "req_test_improperly_formed",
         );
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn test_generate_request_id_uses_req_prefix_and_simple_uuid() {
+        let id = generate_request_id();
+
+        assert!(
+            id.starts_with("req_"),
+            "request_id should start with req_, got {id}"
+        );
+        let suffix = &id["req_".len()..];
+        assert_eq!(
+            suffix.len(),
+            32,
+            "uuid simple form should be 32 chars, got {suffix}"
+        );
+        assert!(
+            suffix.bytes().all(|b| b.is_ascii_hexdigit()),
+            "uuid simple form should be hex, got {suffix}"
+        );
+    }
+
+    #[test]
+    fn test_generate_request_id_returns_unique_values() {
+        let a = generate_request_id();
+        let b = generate_request_id();
+        assert_ne!(a, b);
+    }
+
+    #[tokio::test]
+    async fn test_build_local_text_response_non_stream_sets_x_request_id_header() {
+        let payload = pdf_text_payload("Extract the text from this PDF and return only the text.");
+        let request_id = "req_consistency_check_nonstream";
+        let response = build_local_text_response(&payload, "hvoyowse", 10, request_id);
+
+        let header_value = response
+            .headers()
+            .get("x-request-id")
+            .expect("x-request-id header should be set");
+        assert_eq!(header_value.to_str().unwrap(), request_id);
+    }
+
+    #[tokio::test]
+    async fn test_build_local_text_response_stream_sets_x_request_id_header() {
+        let mut payload =
+            pdf_text_payload("Extract the text from this PDF and return only the text.");
+        payload.stream = true;
+        let request_id = "req_consistency_check_stream";
+
+        let response = build_local_text_response(&payload, "hvoyowse", 10, request_id);
+
+        let header_value = response
+            .headers()
+            .get("x-request-id")
+            .expect("x-request-id header should be set on SSE response");
+        assert_eq!(header_value.to_str().unwrap(), request_id);
+    }
+
+    #[tokio::test]
+    async fn test_map_kiro_provider_error_response_request_id_header_matches_body() {
+        let request_id = "req_error_consistency_check";
+        let response = map_kiro_provider_error_to_response(
+            "{}",
+            anyhow::anyhow!("CONTENT_LENGTH_EXCEEDS_THRESHOLD: input too long"),
+            request_id,
+        );
+
+        let header_value = response
+            .headers()
+            .get("x-request-id")
+            .expect("error response should set x-request-id header")
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(header_value, request_id);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["request_id"].as_str(), Some(request_id));
+    }
+
+    #[tokio::test]
+    async fn test_map_kiro_provider_error_response_includes_request_id_for_no_credentials() {
+        let request_id = "req_no_credentials_check";
+        let response = map_kiro_provider_error_to_response(
+            "{}",
+            anyhow::anyhow!("没有可用的凭据"),
+            request_id,
+        );
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-request-id")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            request_id
+        );
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["request_id"].as_str(), Some(request_id));
+    }
+
+    #[tokio::test]
+    async fn test_map_kiro_provider_error_response_includes_request_id_for_cooling() {
+        let request_id = "req_cooling_check";
+        let response = map_kiro_provider_error_to_response(
+            "{}",
+            anyhow::anyhow!("所有凭据均处于冷却/速率限制（retry_after_secs=42）"),
+            request_id,
+        );
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-request-id")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            request_id
+        );
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["request_id"].as_str(), Some(request_id));
+    }
+
+    #[tokio::test]
+    async fn test_attach_request_id_header_sets_header_on_existing_response() {
+        let response = (StatusCode::OK, Json(json!({"ok": true}))).into_response();
+        let response = attach_request_id_header(response, "req_attach_test");
+
+        let header_value = response.headers().get("x-request-id").unwrap();
+        assert_eq!(header_value.to_str().unwrap(), "req_attach_test");
+    }
+
+    #[tokio::test]
+    async fn test_get_models_response_includes_x_request_id_header() {
+        let uri: axum::http::Uri = "/v1/models".parse().unwrap();
+        let response = get_models(OriginalUri(uri)).await;
+        let response = response.into_response();
+
+        let header = response
+            .headers()
+            .get("x-request-id")
+            .expect("get_models should set x-request-id header");
+        let value = header.to_str().unwrap();
+        assert!(
+            value.starts_with("req_"),
+            "header value should start with req_, got {value}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_count_tokens_response_includes_x_request_id_header() {
+        let uri: axum::http::Uri = "/v1/messages/count_tokens".parse().unwrap();
+        let payload = CountTokensRequest {
+            model: "claude-sonnet-4-5-20250929".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: serde_json::json!("hi"),
+            }],
+            system: None,
+            tools: None,
+        };
+        let response = count_tokens(OriginalUri(uri), JsonExtractor(payload)).await;
+        let response = response.into_response();
+
+        let header = response
+            .headers()
+            .get("x-request-id")
+            .expect("count_tokens should set x-request-id header");
+        let value = header.to_str().unwrap();
+        assert!(
+            value.starts_with("req_"),
+            "header value should start with req_, got {value}"
+        );
     }
 }
