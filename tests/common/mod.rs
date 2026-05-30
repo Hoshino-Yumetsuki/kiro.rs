@@ -34,7 +34,6 @@ use parking_lot::RwLock;
 
 use kiro_rs::anthropic;
 use kiro_rs::kiro;
-use kiro_rs::model;
 use kiro_rs::model::config::CompressionConfig;
 
 /// Fixed API key used in tests.
@@ -67,6 +66,7 @@ pub async fn request(app: Router, req: Request<Body>) -> Response<Body> {
 }
 
 /// Extract the response body as [`Bytes`].
+#[allow(dead_code)]
 pub async fn body_bytes(resp: Response<Body>) -> Bytes {
     use futures::StreamExt;
 
@@ -80,6 +80,7 @@ pub async fn body_bytes(resp: Response<Body>) -> Bytes {
 }
 
 /// Extract the response body as [`serde_json::Value`].
+#[allow(dead_code)]
 pub async fn body_json(resp: Response<Body>) -> serde_json::Value {
     let bytes = body_bytes(resp).await;
     serde_json::from_slice(&bytes).unwrap()

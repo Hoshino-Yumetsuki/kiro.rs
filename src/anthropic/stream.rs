@@ -300,10 +300,7 @@ fn normalize_model_alias_marker(meta: &mut Vec<u8>, external_model: Option<&str>
 }
 
 fn model_marker_matches_external_model(marker: &[u8], external_model: &str) -> bool {
-    marker == external_model.as_bytes()
-        || signature_model_aliases(external_model)
-            .iter()
-            .any(|alias| marker == *alias)
+    marker == external_model.as_bytes() || signature_model_aliases(external_model).contains(&marker)
 }
 
 fn signature_model_aliases(external_model: &str) -> &'static [&'static [u8]] {
@@ -621,8 +618,13 @@ impl SseStateManager {
     }
 
     /// stop_reason 优先级（索引越小优先级越高）
-    const STOP_REASON_PRIORITY: &'static [&'static str] =
-        &["max_tokens", "refusal", "pause_turn", "tool_use", "end_turn"];
+    const STOP_REASON_PRIORITY: &'static [&'static str] = &[
+        "max_tokens",
+        "refusal",
+        "pause_turn",
+        "tool_use",
+        "end_turn",
+    ];
 
     /// 获取 stop_reason 的优先级（越小越高，未知原因返回 usize::MAX）
     fn stop_reason_priority(reason: &str) -> usize {
@@ -1336,20 +1338,20 @@ impl StreamContext {
                     thinking_index,
                     "thinking",
                     json!({
-                        "type": "content_block_start",
-                        "index": thinking_index,
-                    "content_block": {
-                        "type": "thinking",
-                        "thinking": ""
-                    }
-                }),
-            );
-            events.extend(start_events);
-        }
+                            "type": "content_block_start",
+                            "index": thinking_index,
+                        "content_block": {
+                            "type": "thinking",
+                            "thinking": ""
+                        }
+                    }),
+                );
+                events.extend(start_events);
+            }
 
-        // 发送 thinking_delta
-        if let Some(thinking_index) = self.thinking_block_index {
-            events.push(self.create_thinking_delta_event(thinking_index, text));
+            // 发送 thinking_delta
+            if let Some(thinking_index) = self.thinking_block_index {
+                events.push(self.create_thinking_delta_event(thinking_index, text));
             }
 
             // 估算 tokens
@@ -1368,18 +1370,18 @@ impl StreamContext {
                     thinking_index,
                     "thinking",
                     json!({
-                        "type": "content_block_start",
-                        "index": thinking_index,
-                    "content_block": {
-                        "type": "thinking",
-                        "thinking": ""
-                    }
-                }),
-            );
-            events.extend(start_events);
-        }
+                            "type": "content_block_start",
+                            "index": thinking_index,
+                        "content_block": {
+                            "type": "thinking",
+                            "thinking": ""
+                        }
+                    }),
+                );
+                events.extend(start_events);
+            }
 
-        self.pending_signature = Some(sig.clone());
+            self.pending_signature = Some(sig.clone());
             // signature 到达意味着 thinking 块结束，关闭它
             if self.in_thinking_block {
                 if let Some(thinking_index) = self.thinking_block_index {

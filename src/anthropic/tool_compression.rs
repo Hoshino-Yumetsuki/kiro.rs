@@ -294,8 +294,10 @@ mod tests {
                 )
             })
             .collect();
-        let mut config = CompressionConfig::default();
-        config.tool_definition_compression = false;
+        let config = CompressionConfig {
+            tool_definition_compression: false,
+            ..Default::default()
+        };
 
         let result = compress_tools_if_needed(&tools, &config);
 
@@ -310,8 +312,10 @@ mod tests {
             &"x".repeat(2000),
             serde_json::json!({"type": "object", "properties": {}}),
         )];
-        let mut config = CompressionConfig::default();
-        config.tool_definition_compression = false;
+        let config = CompressionConfig {
+            tool_definition_compression: false,
+            ..Default::default()
+        };
 
         let result = compress_tools_if_needed(&tools, &config);
 

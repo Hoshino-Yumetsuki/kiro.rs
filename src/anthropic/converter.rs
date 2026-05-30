@@ -380,14 +380,11 @@ pub fn convert_request(
     for msg in messages {
         if let serde_json::Value::Array(arr) = &msg.content {
             for item in arr {
-                if let Ok(block) = serde_json::from_value::<ContentBlock>(item.clone()) {
-                    if block.block_type == "image" {
-                        if let Some(source) = &block.source {
-                            if source.url.is_some() {
-                                return Err(ConversionError::UrlImageNotSupported);
-                            }
-                        }
-                    }
+                if let Ok(block) = serde_json::from_value::<ContentBlock>(item.clone())
+                    && block.block_type == "image"
+                    && block.source.as_ref().is_some_and(|s| s.url.is_some())
+                {
+                    return Err(ConversionError::UrlImageNotSupported);
                 }
             }
         }
@@ -3295,7 +3292,7 @@ mod tests {
     #[test]
     fn test_convert_request_rejects_url_image_source() {
         // URL 图片源应返回 UrlImageNotSupported 错误
-        use super::super::types::{ContentBlock, ImageSource, Message as AnthropicMessage};
+        use super::super::types::Message as AnthropicMessage;
 
         let req = MessagesRequest {
             model: "claude-sonnet-4".to_string(),

@@ -128,12 +128,12 @@ fn extract_literal_strings(data: &[u8]) -> Vec<String> {
     let mut offset = 0;
 
     while offset < data.len() {
-        if data[offset] == b'(' {
-            if let Some((value, next_offset)) = parse_literal_string(data, offset) {
-                strings.push(value);
-                offset = next_offset;
-                continue;
-            }
+        if data[offset] == b'('
+            && let Some((value, next_offset)) = parse_literal_string(data, offset)
+        {
+            strings.push(value);
+            offset = next_offset;
+            continue;
         }
         offset += 1;
     }
