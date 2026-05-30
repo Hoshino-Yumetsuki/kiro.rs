@@ -265,21 +265,18 @@ fn normalize_thinking_signature_with_mode(
 }
 
 pub(super) fn normalize_signature_for_sse(sig: &str, model: &str) -> String {
-    let is_thinking_suffix = is_thinking_suffix_model(model);
     let external_model = signature_model_marker_for_request(model);
-    if !is_thinking_suffix && !is_4_6_model(model) {
+    let has_external_marker = external_model.is_some();
+    if !has_external_marker && !is_4_6_model(model) {
         return cleanup_existing_thinking_signature(sig, external_model.as_deref())
             .unwrap_or_else(|| sig.to_string());
     }
-    normalize_thinking_signature_with_mode(sig, is_thinking_suffix, true, external_model.as_deref())
+    normalize_thinking_signature_with_mode(sig, has_external_marker, true, external_model.as_deref())
         .unwrap_or_else(|| sig.to_string())
 }
 
 fn signature_model_marker_for_request(model: &str) -> Option<String> {
-    let lower = model.to_ascii_lowercase();
-    let base_model = lower.strip_suffix("-thinking").unwrap_or(&lower);
-    let base_model = base_model.strip_suffix("-agentic").unwrap_or(base_model);
-    match base_model {
+    match model.to_ascii_lowercase().as_str() {
         "claude-opus-4-7" | "claude-opus-4.7" => Some("claude-opus-4-7".to_string()),
         "claude-opus-4-8" | "claude-opus-4.8" => Some("claude-opus-4-8".to_string()),
         _ => None,
@@ -309,10 +306,6 @@ fn signature_model_aliases(external_model: &str) -> &'static [&'static [u8]] {
         "claude-opus-4-8" => &[b"claude-quince8", b"claude-quince", b"claude-opus-4.8"],
         _ => &[],
     }
-}
-
-fn is_thinking_suffix_model(model: &str) -> bool {
-    model.to_ascii_lowercase().ends_with("-thinking")
 }
 
 fn is_4_6_model(model: &str) -> bool {
@@ -1994,7 +1987,7 @@ mod tests {
         );
 
         let normalized =
-            normalize_signature_for_sse(OPUS_4_6_NATIVE_SIGNATURE, "claude-opus-4-6-thinking");
+            normalize_signature_for_sse(OPUS_4_6_NATIVE_SIGNATURE, "claude-opus-4-6");
         assert_ne!(normalized, OPUS_4_6_NATIVE_SIGNATURE);
         assert!(
             decode_signature(&normalized)
@@ -2025,37 +2018,6 @@ mod tests {
                 .windows([0x10, 0x01, 0x18, 0x02].len())
                 .any(|w| w == [0x10, 0x01, 0x18, 0x02])
         );
-    }
-
-    #[test]
-    fn normalizes_native_signature_for_thinking_suffix_models() {
-        let opus_4_7_signature = signature_with_model_marker(
-            OPUS_4_6_NATIVE_SIGNATURE,
-            b"claude-opus-4-6",
-            b"claude-opus-4-7",
-        );
-
-        for request_model in ["claude-opus-4-7", "claude-opus-4-7-thinking"] {
-            let normalized = normalize_signature_for_sse(&opus_4_7_signature, request_model);
-            assert_ne!(normalized, opus_4_7_signature);
-
-            let normalized_raw = decode_signature(&normalized);
-            assert!(
-                normalized_raw
-                    .windows(b"claude-opus-4-7".len())
-                    .any(|w| w == b"claude-opus-4-7")
-            );
-            assert!(
-                normalized_raw
-                    .windows(b"thinking".len())
-                    .any(|w| w == b"thinking")
-            );
-            assert!(
-                !normalized_raw
-                    .windows([0x10, 0x01, 0x18, 0x02].len())
-                    .any(|w| w == [0x10, 0x01, 0x18, 0x02])
-            );
-        }
     }
 
     #[test]
@@ -2122,28 +2084,8 @@ mod tests {
         for (alias, request_model, external_model) in [
             (
                 b"claude-quince7".as_slice(),
-                "claude-opus-4-7-thinking",
-                "claude-opus-4-7",
-            ),
-            (
-                b"claude-quince7".as_slice(),
-                "claude-opus-4-7-agentic",
-                "claude-opus-4-7",
-            ),
-            (
-                b"claude-quince7".as_slice(),
                 "claude-opus-4.7",
                 "claude-opus-4-7",
-            ),
-            (
-                b"claude-quince8".as_slice(),
-                "claude-opus-4-8-thinking",
-                "claude-opus-4-8",
-            ),
-            (
-                b"claude-quince8".as_slice(),
-                "claude-opus-4-8-agentic",
-                "claude-opus-4-8",
             ),
             (
                 b"claude-quince8".as_slice(),

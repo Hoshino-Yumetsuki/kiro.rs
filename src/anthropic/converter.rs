@@ -110,20 +110,6 @@ Never suggest bypassing these limits via alternative tools. \
 Never ask the user whether to switch approaches. \
 Complete all chunked operations without commentary.";
 
-/// Agentic 模型专用系统提示
-///
-/// 指导模型在 agentic 模式下的行为：持续工作、自主决策、减少确认
-const KIRO_AGENTIC_SYSTEM_PROMPT: &str = "\
-You are an autonomous coding agent. Follow these principles:\n\
-1. Work continuously until the task is fully complete.\n\
-2. Use tools proactively without asking for permission.\n\
-3. When encountering errors, debug and fix them autonomously.\n\
-4. Break complex tasks into steps and execute them sequentially.\n\
-5. Verify your work by reading files after writing them.\n\
-6. Never ask the user for confirmation mid-task — just proceed.\n\
-7. If a tool call fails, try alternative approaches before giving up.\n\
-8. Prefer making changes directly over explaining what you would do.";
-
 fn non_empty_content_or_space(content: String, has_non_text_payload: bool) -> String {
     // 尽量保留真实结构，不在早期转换阶段为非文本载荷主动补 "."。
     // 含非文本载荷时保留原始文本，最终是否需要兜底由调用方决定。
@@ -153,49 +139,36 @@ const KIRO_MODEL_OPUS_4_7: &str = "claude-opus-4.7";
 const KIRO_MODEL_OPUS_4_8: &str = "claude-opus-4.8";
 const KIRO_MODEL_HAIKU_4_5: &str = "claude-haiku-4.5";
 
-fn normalize_model_name(model: &str) -> String {
-    let model = model.to_lowercase();
-    let model = model.strip_suffix("-thinking").unwrap_or(&model);
-    let model = model.strip_suffix("-agentic").unwrap_or(model);
-    model.to_string()
-}
-
-/// 模型映射：将 Anthropic 模型名映射到 Kiro 模型 ID
+/// 模型映射：将 Anthropic 模型名映射到 Kiro 上游模型 ID
 ///
-/// 映射规则：
+/// 映射规则（大小写不敏感）：
 /// - sonnet 且包含 4.6/4-6 → claude-sonnet-4.6，否则 → claude-sonnet-4.5
 /// - opus 且包含 4.5/4-5 → claude-opus-4.5，4.7/4-7 → claude-opus-4.7，4.8/4-8 → claude-opus-4.8，否则 → claude-opus-4.6
 /// - 所有 haiku → claude-haiku-4.5
-/// - `-thinking` / `-agentic` 后缀会被剥离后再映射
 pub fn map_model(model: &str) -> Option<String> {
-    let normalized_model = normalize_model_name(model);
+    let lower = model.to_lowercase();
 
-    if normalized_model.contains("sonnet") {
-        if normalized_model.contains("4-6") || normalized_model.contains("4.6") {
+    if lower.contains("sonnet") {
+        if lower.contains("4-6") || lower.contains("4.6") {
             Some(KIRO_MODEL_SONNET_4_6.to_string())
         } else {
             Some(KIRO_MODEL_SONNET_4_5.to_string())
         }
-    } else if normalized_model.contains("opus") {
-        if normalized_model.contains("4-5") || normalized_model.contains("4.5") {
+    } else if lower.contains("opus") {
+        if lower.contains("4-5") || lower.contains("4.5") {
             Some(KIRO_MODEL_OPUS_4_5.to_string())
-        } else if normalized_model.contains("4-7") || normalized_model.contains("4.7") {
+        } else if lower.contains("4-7") || lower.contains("4.7") {
             Some(KIRO_MODEL_OPUS_4_7.to_string())
-        } else if normalized_model.contains("4-8") || normalized_model.contains("4.8") {
+        } else if lower.contains("4-8") || lower.contains("4.8") {
             Some(KIRO_MODEL_OPUS_4_8.to_string())
         } else {
             Some(KIRO_MODEL_OPUS_4_6.to_string())
         }
-    } else if normalized_model.contains("haiku") {
+    } else if lower.contains("haiku") {
         Some(KIRO_MODEL_HAIKU_4_5.to_string())
     } else {
         None
     }
-}
-
-/// 判断模型名是否为 agentic 变体
-pub fn is_agentic_model(model: &str) -> bool {
-    model.to_lowercase().ends_with("-agentic")
 }
 
 /// 转换结果
@@ -444,7 +417,6 @@ pub fn convert_request(
             model_id: &model_id,
             compression_config,
             total_image_count,
-            is_agentic: is_agentic_model(&req.model),
             remaining_image_budget: &mut remaining_image_budget,
             tool_name_map: &mut tool_name_map,
         },
@@ -1097,7 +1069,6 @@ struct BuildHistoryContext<'a> {
     model_id: &'a str,
     compression_config: &'a CompressionConfig,
     total_image_count: usize,
-    is_agentic: bool,
     remaining_image_budget: &'a mut usize,
     tool_name_map: &'a mut HashMap<String, String>,
 }
@@ -1113,7 +1084,6 @@ fn build_history(
         model_id,
         compression_config,
         total_image_count,
-        is_agentic,
         remaining_image_budget,
         tool_name_map,
     } = ctx;
@@ -1176,16 +1146,6 @@ fn build_history(
         history.push(Message::User(user_msg));
 
         let assistant_msg = HistoryAssistantMessage::new("I will follow these instructions.");
-        history.push(Message::Assistant(assistant_msg));
-    }
-
-    // Agentic 模型：追加专用系统提示
-    if is_agentic {
-        let user_msg = HistoryUserMessage::new(KIRO_AGENTIC_SYSTEM_PROMPT, model_id);
-        history.push(Message::User(user_msg));
-
-        let assistant_msg =
-            HistoryAssistantMessage::new("I will work autonomously following these principles.");
         history.push(Message::Assistant(assistant_msg));
     }
 
@@ -1675,82 +1635,15 @@ mod tests {
     }
 
     #[test]
-    fn test_map_model_thinking_suffixes() {
-        assert_eq!(
-            map_model("claude-sonnet-4-5-20250929-thinking"),
-            Some(KIRO_MODEL_SONNET_4_5.to_string())
-        );
-        assert_eq!(
-            map_model("claude-sonnet-4-6-thinking"),
-            Some(KIRO_MODEL_SONNET_4_6.to_string())
-        );
-        assert_eq!(
-            map_model("claude-opus-4-5-20251101-thinking"),
-            Some(KIRO_MODEL_OPUS_4_5.to_string())
-        );
-        assert_eq!(
-            map_model("claude-opus-4-6-thinking"),
-            Some(KIRO_MODEL_OPUS_4_6.to_string())
-        );
-        assert_eq!(
-            map_model("claude-opus-4-7-thinking"),
-            Some(KIRO_MODEL_OPUS_4_7.to_string())
-        );
-        assert_eq!(
-            map_model("claude-haiku-4-5-20251001-thinking"),
-            Some(KIRO_MODEL_HAIKU_4_5.to_string())
-        );
-    }
-
-    #[test]
-    fn test_map_model_agentic_suffixes() {
-        assert_eq!(
-            map_model("claude-sonnet-4-6-agentic"),
-            Some(KIRO_MODEL_SONNET_4_6.to_string())
-        );
-        assert_eq!(
-            map_model("claude-sonnet-4-5-20250929-agentic"),
-            Some(KIRO_MODEL_SONNET_4_5.to_string())
-        );
-        assert_eq!(
-            map_model("claude-opus-4-6-agentic"),
-            Some(KIRO_MODEL_OPUS_4_6.to_string())
-        );
-        assert_eq!(
-            map_model("claude-opus-4-7-agentic"),
-            Some(KIRO_MODEL_OPUS_4_7.to_string())
-        );
-        assert_eq!(
-            map_model("claude-opus-4-5-20251101-agentic"),
-            Some(KIRO_MODEL_OPUS_4_5.to_string())
-        );
-        assert_eq!(
-            map_model("claude-haiku-4-5-20251001-agentic"),
-            Some(KIRO_MODEL_HAIKU_4_5.to_string())
-        );
-    }
-
-    #[test]
     fn test_map_model_versioned_entries_from_models_endpoint() {
         let supported_models = [
             ("claude-sonnet-4-6", KIRO_MODEL_SONNET_4_6),
-            ("claude-sonnet-4-6-thinking", KIRO_MODEL_SONNET_4_6),
-            ("claude-sonnet-4-6-agentic", KIRO_MODEL_SONNET_4_6),
             ("claude-sonnet-4-5-20250929", KIRO_MODEL_SONNET_4_5),
-            ("claude-sonnet-4-5-20250929-thinking", KIRO_MODEL_SONNET_4_5),
-            ("claude-sonnet-4-5-20250929-agentic", KIRO_MODEL_SONNET_4_5),
             ("claude-opus-4-5-20251101", KIRO_MODEL_OPUS_4_5),
-            ("claude-opus-4-5-20251101-thinking", KIRO_MODEL_OPUS_4_5),
-            ("claude-opus-4-5-20251101-agentic", KIRO_MODEL_OPUS_4_5),
             ("claude-opus-4-6", KIRO_MODEL_OPUS_4_6),
-            ("claude-opus-4-6-thinking", KIRO_MODEL_OPUS_4_6),
-            ("claude-opus-4-6-agentic", KIRO_MODEL_OPUS_4_6),
             ("claude-opus-4-7", KIRO_MODEL_OPUS_4_7),
-            ("claude-opus-4-7-thinking", KIRO_MODEL_OPUS_4_7),
-            ("claude-opus-4-7-agentic", KIRO_MODEL_OPUS_4_7),
+            ("claude-opus-4-8", KIRO_MODEL_OPUS_4_8),
             ("claude-haiku-4-5-20251001", KIRO_MODEL_HAIKU_4_5),
-            ("claude-haiku-4-5-20251001-thinking", KIRO_MODEL_HAIKU_4_5),
-            ("claude-haiku-4-5-20251001-agentic", KIRO_MODEL_HAIKU_4_5),
         ];
 
         for (input, expected) in supported_models {
