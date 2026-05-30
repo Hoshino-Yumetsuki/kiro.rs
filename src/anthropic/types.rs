@@ -113,6 +113,9 @@ const MAX_BUDGET_TOKENS: i32 = 128_000;
 pub struct Thinking {
     #[serde(rename = "type")]
     pub thinking_type: String,
+    /// Opus adaptive thinking can request visible summarized thinking output.
+    #[serde(default)]
+    pub display: Option<String>,
     /// 旧版 budget_tokens 字段，保留用于反序列化兼容性（客户端可能仍发送此字段）
     /// 实际不再使用，thinking 级别通过 output_config.effort 控制
     #[serde(
@@ -474,6 +477,7 @@ mod tests {
 
         let thinking = req.thinking.expect("thinking should be present");
         assert_eq!(thinking.thinking_type, "enabled");
+        assert_eq!(thinking.display.as_deref(), Some("summarized"));
         assert_eq!(thinking.budget_tokens, 10000);
 
         let output_config = req.output_config.expect("output_config should be present");
