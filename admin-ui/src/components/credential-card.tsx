@@ -16,7 +16,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import type { CredentialStatusItem, CachedBalanceInfo, BalanceResponse } from '@/types/api'
-import { formatKiroCredits, formatKiroCreditsAsUsd } from '@/lib/format'
+import { formatKiroCreditAmount, formatKiroCredits, formatKiroCreditsAsUsd } from '@/lib/format'
+import { cn } from '@/lib/utils'
 import {
   useSetDisabled,
   useSetPriority,
@@ -37,6 +38,9 @@ interface CredentialCardProps {
   loadingBalance: boolean
 }
 
+type BalanceDisplayInfo = Pick<BalanceResponse, 'remaining' | 'usageLimit' | 'usagePercentage'> &
+  Partial<Pick<BalanceResponse, 'currentUsage'>>
+
 function formatLastUsed(lastUsedAt: string | null): string {
   if (!lastUsedAt) return '从未使用'
   const date = new Date(lastUsedAt)
@@ -51,6 +55,13 @@ function formatLastUsed(lastUsedAt: string | null): string {
   if (hours < 24) return `${hours} 小时前`
   const days = Math.floor(hours / 24)
   return `${days} 天前`
+}
+
+function getOverspentCredits(balance: BalanceDisplayInfo): number {
+  const usageOverspend = balance.currentUsage !== undefined && balance.usageLimit > 0
+    ? balance.currentUsage - balance.usageLimit
+    : 0
+  return Math.max(usageOverspend, -balance.remaining, 0)
 }
 
 export function CredentialCard({
@@ -213,6 +224,29 @@ export function CredentialCard({
     onViewBalance(credential.id, isCacheStale())
   }
 
+  const renderBalanceInfo = (info: BalanceDisplayInfo, cacheLabel?: string, showLimit = true) => {
+    const overspentCredits = getOverspentCredits(info)
+    const isOverspent = overspentCredits > 0
+    const displayedRemaining = isOverspent ? -overspentCredits : info.remaining
+
+    return (
+      <span className="inline-flex flex-col gap-0.5 ml-1 align-top">
+        <span className={cn('font-medium tabular-nums', isOverspent ? 'text-destructive' : 'text-green-600')}>
+          {showLimit
+            ? `${formatKiroCreditAmount(displayedRemaining)} / ${formatKiroCredits(info.usageLimit)}`
+            : formatKiroCredits(displayedRemaining)}
+        </span>
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {showLimit
+            ? `≈ ${formatKiroCreditsAsUsd(displayedRemaining)} / ${formatKiroCreditsAsUsd(info.usageLimit)} · ${isOverspent ? `${info.usagePercentage.toFixed(1)}% 已使用` : `${(100 - info.usagePercentage).toFixed(1)}% 剩余`}`
+            : `≈ ${formatKiroCreditsAsUsd(displayedRemaining)}`}
+          {isOverspent && ` · 已超支 ${formatKiroCredits(overspentCredits)}`}
+          {cacheLabel && ` · ${cacheLabel}`}
+        </span>
+      </span>
+    )
+  }
+
 
   return (
     <>
@@ -352,30 +386,11 @@ export function CredentialCard({
                   <Loader2 className="inline w-3 h-3 animate-spin" aria-hidden="true" /> 加载中…
                 </span>
               ) : balance ? (
-                <span className="inline-flex flex-col gap-0.5 ml-1 align-top">
-                  <span className="font-medium tabular-nums">
-                    {formatKiroCredits(balance.remaining)} / {formatKiroCredits(balance.usageLimit)}
-                  </span>
-                  <span className="text-xs text-muted-foreground tabular-nums">
-                    ≈ {formatKiroCreditsAsUsd(balance.remaining)} / {formatKiroCreditsAsUsd(balance.usageLimit)} · {(100 - balance.usagePercentage).toFixed(1)}% 剩余
-                  </span>
-                </span>
+                renderBalanceInfo(balance)
               ) : cachedBalance && cachedBalance.ttlSecs > 0 && cachedBalance.usageLimit > 0 ? (
-                <span className="inline-flex flex-col gap-0.5 ml-1 align-top">
-                  <span className="font-medium tabular-nums">
-                    {formatKiroCredits(cachedBalance.remaining)} / {formatKiroCredits(cachedBalance.usageLimit)}
-                  </span>
-                  <span className="text-xs text-muted-foreground tabular-nums">
-                    ≈ {formatKiroCreditsAsUsd(cachedBalance.remaining)} / {formatKiroCreditsAsUsd(cachedBalance.usageLimit)} · {(100 - cachedBalance.usagePercentage).toFixed(1)}% 剩余 · {formatCacheAge(cachedBalance.cachedAt)}缓存
-                  </span>
-                </span>
+                renderBalanceInfo(cachedBalance, `${formatCacheAge(cachedBalance.cachedAt)}缓存`)
               ) : cachedBalance && cachedBalance.ttlSecs > 0 ? (
-                <span className="inline-flex flex-col gap-0.5 ml-1 align-top">
-                  <span className="font-medium tabular-nums">{formatKiroCredits(cachedBalance.remaining)}</span>
-                  <span className="text-xs text-muted-foreground tabular-nums">
-                    ≈ {formatKiroCreditsAsUsd(cachedBalance.remaining)} · {formatCacheAge(cachedBalance.cachedAt)}缓存
-                  </span>
-                </span>
+                renderBalanceInfo(cachedBalance, `${formatCacheAge(cachedBalance.cachedAt)}缓存`, false)
               ) : (
                 <span className="text-sm text-muted-foreground ml-1">未知</span>
               )}
