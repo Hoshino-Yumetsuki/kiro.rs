@@ -190,6 +190,9 @@ pub struct BalanceResponse {
 pub struct CachedBalanceItem {
     /// 凭据 ID
     pub id: u64,
+    /// 当前使用量（如果缓存中有完整余额快照）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_usage: Option<f64>,
     /// 缓存的剩余额度
     pub remaining: f64,
     /// 使用限额

@@ -264,8 +264,30 @@ impl AdminService {
     }
 
     /// 获取所有凭据的缓存余额
-    pub fn get_cached_balances(&self) -> CachedBalancesResponse {
+    pub async fn get_cached_balances(&self) -> CachedBalancesResponse {
         // 从 token_manager 获取运行时缓存（含 TTL 信息）
+        let runtime_balances_vec = self.token_manager.get_all_cached_balances();
+
+        let incomplete_balance_ids: Vec<u64> = {
+            let disk_cache = self.balance_cache.lock();
+            runtime_balances_vec
+                .iter()
+                .filter(|info| {
+                    !disk_cache.contains_key(&info.id)
+                        && (!info.remaining.is_finite()
+                            || info.remaining <= 0.0
+                            || info.ttl_secs == 0)
+                })
+                .map(|info| info.id)
+                .collect()
+        };
+
+        for id in incomplete_balance_ids {
+            if let Err(err) = self.get_balance(id).await {
+                tracing::warn!("凭据 #{} 缓存余额补全失败: {}", id, err);
+            }
+        }
+
         let runtime_balances: HashMap<u64, CachedBalanceInfo> = self
             .token_manager
             .get_all_cached_balances()
@@ -290,6 +312,7 @@ impl AdminService {
 
                     CachedBalanceItem {
                         id,
+                        current_usage: Some(cached.data.current_usage),
                         remaining,
                         usage_limit: cached.data.usage_limit,
                         usage_percentage,
@@ -300,6 +323,11 @@ impl AdminService {
                 } else {
                     CachedBalanceItem {
                         id,
+                        current_usage: if info.remaining.is_finite() && info.remaining < 0.0 {
+                            Some(-info.remaining)
+                        } else {
+                            None
+                        },
                         remaining: info.remaining,
                         usage_limit: 0.0,
                         usage_percentage: 0.0,

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, Trash2, RotateCcw, CheckCircle2, ArrowUp, ArrowDown, Wallet, Eraser, Settings } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -47,6 +47,8 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [verifyResults, setVerifyResults] = useState<Map<number, VerifyResult>>(new Map())
   const [balanceMap, setBalanceMap] = useState<Map<number, BalanceResponse>>(new Map())
   const [loadingBalanceIds, setLoadingBalanceIds] = useState<Set<number>>(new Set())
+  const balanceMapRef = useRef(balanceMap)
+  const loadingBalanceIdsRef = useRef(loadingBalanceIds)
   const [queryingInfo, setQueryingInfo] = useState(false)
   const [queryInfoProgress, setQueryInfoProgress] = useState({ current: 0, total: 0 })
   const [batchDeleteDialogOpen, setBatchDeleteDialogOpen] = useState(false)
@@ -54,6 +56,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [pendingBatchDeleteIds, setPendingBatchDeleteIds] = useState<number[]>([])
   const [pendingClearAllCount, setPendingClearAllCount] = useState(0)
   const cancelVerifyRef = useRef(false)
+  const autoHydratedBalanceIdsRef = useRef<Set<number>>(new Set())
   const [currentPage, setCurrentPage] = useState(1)
   const [sortField, setSortField] = useState<SortField>('default')
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc')
@@ -84,6 +87,15 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const cachedBalanceMap = new Map(
     cachedBalancesData?.balances.map((b) => [b.id, b]) ?? []
   )
+  const cachedBalances = cachedBalancesData?.balances
+
+  useEffect(() => {
+    balanceMapRef.current = balanceMap
+  }, [balanceMap])
+
+  useEffect(() => {
+    loadingBalanceIdsRef.current = loadingBalanceIds
+  }, [loadingBalanceIds])
 
   // 排序后的凭据列表
   const sortedCredentials = useMemo(() => {
@@ -124,6 +136,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
     if (!data?.credentials) {
       setBalanceMap(new Map())
       setLoadingBalanceIds(new Set())
+      autoHydratedBalanceIdsRef.current.clear()
       return
     }
 
@@ -153,6 +166,77 @@ export function Dashboard({ onLogout }: DashboardProps) {
     })
   }, [data?.credentials])
 
+  useEffect(() => {
+    if (!data?.credentials || !cachedBalances?.length) {
+      return
+    }
+
+    const validIds = new Set(data.credentials.map(credential => credential.id))
+    const idsToHydrate = cachedBalances
+      .filter(balance => (
+        validIds.has(balance.id)
+        && balance.usageLimit > 0
+        && balance.remaining <= 0
+        && balance.currentUsage === undefined
+        && !balanceMapRef.current.has(balance.id)
+        && !loadingBalanceIdsRef.current.has(balance.id)
+        && !autoHydratedBalanceIdsRef.current.has(balance.id)
+      ))
+      .map(balance => balance.id)
+
+    if (idsToHydrate.length === 0) {
+      return
+    }
+
+    idsToHydrate.forEach(id => autoHydratedBalanceIdsRef.current.add(id))
+
+    setLoadingBalanceIds(prev => {
+      const next = new Set(prev)
+      idsToHydrate.forEach(id => next.add(id))
+      return next
+    })
+
+    let cancelled = false
+
+    Promise.all(
+      idsToHydrate.map(async id => {
+        try {
+          return [id, await getCredentialBalance(id)] as const
+        } catch (error) {
+          autoHydratedBalanceIdsRef.current.delete(id)
+          console.warn(`自动补全凭据 #${id} 余额失败`, error)
+          return null
+        }
+      })
+    ).then(results => {
+      if (cancelled) {
+        return
+      }
+      setBalanceMap(prev => {
+        const next = new Map(prev)
+        for (const result of results) {
+          if (result) {
+            next.set(result[0], result[1])
+          }
+        }
+        return next
+      })
+    }).finally(() => {
+      if (cancelled) {
+        return
+      }
+      setLoadingBalanceIds(prev => {
+        const next = new Set(prev)
+        idsToHydrate.forEach(id => next.delete(id))
+        return next
+      })
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [cachedBalances, data?.credentials])
+
   const toggleDarkMode = () => {
     const newMode = !darkMode
     setDarkMode(newMode)
@@ -169,6 +253,17 @@ export function Dashboard({ onLogout }: DashboardProps) {
     }
     setBalanceDialogOpen(true)
   }
+
+  const handleBalanceLoaded = useCallback((id: number, balance: BalanceResponse) => {
+    setBalanceMap(prev => {
+      if (prev.get(id) === balance) {
+        return prev
+      }
+      const next = new Map(prev)
+      next.set(id, balance)
+      return next
+    })
+  }, [])
 
   const handleRefresh = () => {
     refetch()
@@ -803,6 +898,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
           }
         }}
         forceRefresh={forceRefreshBalance}
+        onBalanceLoaded={handleBalanceLoaded}
       />
 
       {/* 添加凭据对话框 */}

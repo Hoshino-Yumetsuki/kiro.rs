@@ -63,6 +63,7 @@ export interface BalanceResponse {
 // 缓存余额信息
 export interface CachedBalanceInfo {
   id: number
+  currentUsage?: number
   remaining: number
   usageLimit: number
   usagePercentage: number
