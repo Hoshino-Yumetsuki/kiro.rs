@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { Wallet } from 'lucide-react'
+import { Wallet, RefreshCw, Loader2 } from 'lucide-react'
 import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -307,6 +307,19 @@ export function CredentialCard({
                 trigger={<span className="sr-only" />}
               />
             )}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleForceRefresh}
+              disabled={forceRefreshToken.isPending}
+              aria-label="刷新 Token"
+            >
+              {forceRefreshToken.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+            </Button>
             <CardActionsMenu
               credential={credential}
               onResetFailures={handleReset}
