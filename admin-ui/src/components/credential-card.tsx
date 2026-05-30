@@ -180,7 +180,13 @@ export function CredentialCard({
   const authBadge = credential.authMethod ? AUTH_METHOD_BADGE[credential.authMethod] : null
   const totalFailures = credential.failureCount + credential.refreshFailureCount
 
-  const barRemaining = balance?.remaining ?? cachedBalance?.remaining ?? null
+  // Cached balance API may clamp remaining to 0 when overspent.
+  // Calculate actual remaining from usagePercentage when overspent.
+  const barRemaining = balance?.remaining
+    ?? (cachedBalance && cachedBalance.usagePercentage > 100 && cachedBalance.usageLimit > 0
+        ? cachedBalance.usageLimit - (cachedBalance.usagePercentage / 100) * cachedBalance.usageLimit
+        : cachedBalance?.remaining)
+    ?? null
   const barUsageLimit = balance?.usageLimit ?? cachedBalance?.usageLimit ?? null
   const barUsagePercentage = balance?.usagePercentage ?? cachedBalance?.usagePercentage ?? null
   const barSubscription = balance?.subscriptionTitle ?? cachedBalance?.subscriptionTitle ?? credential.subscriptionTitle ?? null
