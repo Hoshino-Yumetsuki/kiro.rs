@@ -68,9 +68,9 @@ export function getOverspentCredits(balance: { remaining: number; usageLimit: nu
 }
 
 const AUTH_METHOD_BADGE: Record<string, { label: string; className: string }> = {
-  social: { label: 'Social', className: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' },
-  idc: { label: 'IdC', className: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' },
-  api_key: { label: 'API Key', className: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400' },
+  social: { label: 'Social', className: 'bg-blue-100 text-blue-900 dark:bg-blue-900 dark:text-blue-300' },
+  idc: { label: 'IdC', className: 'bg-purple-100 text-purple-900 dark:bg-purple-900 dark:text-purple-300' },
+  api_key: { label: 'API Key', className: 'bg-orange-100 text-orange-900 dark:bg-orange-900 dark:text-orange-300' },
 }
 
 export function CredentialCard({
@@ -230,7 +230,7 @@ export function CredentialCard({
                     variant={credential.disabled ? 'secondary' : 'default'}
                     className={cn(
                       'text-xs shrink-0',
-                      !credential.disabled && 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                      !credential.disabled && 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
                     )}
                   >
                     {credential.disabled ? '已禁用' : '启用'}
@@ -309,7 +309,7 @@ export function CredentialCard({
             )}
             <Button
               size="sm"
-              variant="outline"
+              variant="ghost"
               onClick={handleForceRefresh}
               disabled={forceRefreshToken.isPending}
               aria-label="刷新 Token"
