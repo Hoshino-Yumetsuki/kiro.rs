@@ -96,8 +96,8 @@ export function BalanceDialog({ credentialId, open, onOpenChange, forceRefresh }
             <div className="grid grid-cols-2 gap-4 pt-4 border-t text-sm">
               <div>
                 <span className="text-muted-foreground">剩余额度：</span>
-                <div className="font-medium text-green-600 tabular-nums">
-                  {formatKiroCredits(balance.remaining)}
+              <div className={`font-medium tabular-nums ${balance.remaining < 0 ? 'text-destructive' : 'text-green-600'}`}>
+                {formatKiroCredits(balance.remaining)}
                 </div>
                 <div className="text-xs text-muted-foreground tabular-nums">
                   ≈ {formatKiroCreditsAsUsd(balance.remaining)}
