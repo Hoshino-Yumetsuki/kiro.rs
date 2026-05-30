@@ -40,11 +40,7 @@ pub struct RewriterConfig {
 }
 
 fn default_keywords() -> Vec<String> {
-    vec![
-        "Kiro".to_string(),
-        "kiro".to_string(),
-        "KIRO".to_string(),
-    ]
+    vec!["Kiro".to_string(), "kiro".to_string(), "KIRO".to_string()]
 }
 
 fn default_rewrite_prompt() -> String {
@@ -102,6 +98,45 @@ pub fn contains_keywords(text: &str, keywords: &[String]) -> bool {
         .any(|kw| text_lower.contains(&kw.to_lowercase()))
 }
 
+/// 对确定性的裸身份回答做本地改写，避免再次调用上游时被判断为非自指文本。
+pub fn rewrite_obvious_self_identity(text: &str) -> Option<String> {
+    let start = text.find(|ch: char| !ch.is_whitespace())?;
+    let end = text
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| !ch.is_whitespace())
+        .map(|(idx, ch)| idx + ch.len_utf8())?;
+    let core = &text[start..end];
+    let (identity, punctuation) = core
+        .strip_suffix('.')
+        .map(|value| (value, "."))
+        .or_else(|| core.strip_suffix('。').map(|value| (value, "。")))
+        .unwrap_or((core, ""));
+
+    if identity.eq_ignore_ascii_case("kiro") {
+        return Some(format!(
+            "{}Claude Code{}{}",
+            &text[..start],
+            punctuation,
+            &text[end..]
+        ));
+    }
+
+    let is_chinese_self_identity = identity
+        .strip_prefix("我是")
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("kiro"));
+    if is_chinese_self_identity {
+        return Some(format!(
+            "{}我是 Claude Code{}{}",
+            &text[..start],
+            punctuation,
+            &text[end..]
+        ));
+    }
+
+    None
+}
+
 /// 构建改写请求体
 ///
 /// 使用与原始请求相同的模型（经过 map_model 转换为 Kiro model_id）
@@ -115,8 +150,8 @@ fn build_rewrite_request(
     let prompt = config.rewrite_prompt.replace("{text}", original_text);
 
     // 模型映射：Anthropic 模型名 → Kiro 模型 ID
-    let kiro_model_id = super::converter::map_model(model_id)
-        .unwrap_or_else(|| model_id.to_string());
+    let kiro_model_id =
+        super::converter::map_model(model_id).unwrap_or_else(|| model_id.to_string());
 
     let user_input_message = UserInputMessage {
         user_input_message_context: UserInputMessageContext::default(),
@@ -130,9 +165,7 @@ fn build_rewrite_request(
         agent_continuation_id: None,
         agent_task_type: Some("vibe".to_string()),
         chat_trigger_type: Some("MANUAL".to_string()),
-        current_message: CurrentMessage {
-            user_input_message,
-        },
+        current_message: CurrentMessage { user_input_message },
         conversation_id: format!("rewrite-{}", fastrand::u64(..)),
         history: Vec::new(),
     };
@@ -217,4 +250,43 @@ pub async fn rewrite_text(
         input_tokens,
         output_tokens,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rewrite_obvious_self_identity;
+
+    #[test]
+    fn rewrites_bare_kiro_identity_locally() {
+        assert_eq!(
+            rewrite_obvious_self_identity("Kiro"),
+            Some("Claude Code".to_string())
+        );
+        assert_eq!(
+            rewrite_obvious_self_identity(" Kiro.\n"),
+            Some(" Claude Code.\n".to_string())
+        );
+        assert_eq!(
+            rewrite_obvious_self_identity("我是 Kiro。"),
+            Some("我是 Claude Code。".to_string())
+        );
+        assert_eq!(
+            rewrite_obvious_self_identity("我是kiro。"),
+            Some("我是 Claude Code。".to_string())
+        );
+        assert_eq!(
+            rewrite_obvious_self_identity("我是 KIRO"),
+            Some("我是 Claude Code".to_string())
+        );
+    }
+
+    #[test]
+    fn does_not_rewrite_product_mentions_locally() {
+        assert_eq!(rewrite_obvious_self_identity("Kiro IDE"), None);
+        assert_eq!(rewrite_obvious_self_identity("我是 Kiro IDE。"), None);
+        assert_eq!(
+            rewrite_obvious_self_identity("Use Kiro to build apps."),
+            None
+        );
+    }
 }

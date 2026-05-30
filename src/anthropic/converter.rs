@@ -767,7 +767,7 @@ fn process_message_content(
                                             .eq_ignore_ascii_case("application/pdf") =>
                                     {
                                         match crate::pdf::extract_text_from_base64(&source.data) {
-                                            Ok(text) => Some(text),
+                                            Ok(text) => Some((text, false)),
                                             Err(e) => {
                                                 tracing::warn!("PDF 文本提取失败: {e}");
                                                 None
@@ -776,7 +776,7 @@ fn process_message_content(
                                     }
                                     "text" => {
                                         // plain text source: 数据已经是文本
-                                        Some(source.data.clone())
+                                        Some((source.data.clone(), true))
                                     }
                                     _ => {
                                         tracing::warn!(
@@ -787,16 +787,26 @@ fn process_message_content(
                                     }
                                 };
 
-                                if let Some(text) = extracted {
-                                    let mut doc_text = String::new();
-                                    if let Some(title) = &block.title {
+                                if let Some((text, wrap_document)) = extracted {
+                                    if wrap_document {
+                                        let mut doc_text = String::new();
+                                        let title = block
+                                            .title
+                                            .as_deref()
+                                            .filter(|title| !title.trim().is_empty())
+                                            .unwrap_or("PDF");
                                         doc_text.push_str(&format!("[Document: {title}]\n"));
+                                        if let Some(context) = &block.context {
+                                            doc_text.push_str(&format!("[Context: {context}]\n"));
+                                        }
+                                        doc_text.push_str(&text);
+                                        doc_text.push_str("\n[/Document]");
+                                        text_parts.push(doc_text);
+                                    } else {
+                                        if !text.trim().is_empty() {
+                                            text_parts.push(format!("PDF text:\n{text}"));
+                                        }
                                     }
-                                    if let Some(context) = &block.context {
-                                        doc_text.push_str(&format!("[Context: {context}]\n"));
-                                    }
-                                    doc_text.push_str(&text);
-                                    text_parts.push(doc_text);
                                 }
                             }
                         }
@@ -1492,6 +1502,9 @@ mod tests {
     use super::*;
     use crate::model::config::CompressionConfig;
 
+    const MALFORMED_XREF_PDF_HVOYOWSE: &str = "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCAxNTAgNTBdIC9SZXNvdXJjZXMgPDwgL0ZvbnQgPDwgL0YxIDUgMCBSID4+ID4+IC9Db250ZW50cyA0IDAgUiA+PgplbmRvYmoKNCAwIG9iago8PCAvTGVuZ3RoIDM4ID4+CnN0cmVhbQpCVCAvRjEgMTQgVGYgMTAgMjAgVGQgKGh2b3lvd3NlKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCnRyYWlsZXIKPDwgL1NpemUgNiAvUm9vdCAxIDAgUiA+PgpzdGFydHhyZWYKMAolJUVPRg==";
+    const MALFORMED_XREF_PDF_HVOYOWSE_PADDED: &str = "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCAxNTAgNTBdIC9SZXNvdXJjZXMgPDwgL0ZvbnQgPDwgL0YxIDUgMCBSID4+ID4+IC9Db250ZW50cyA0IDAgUiA+PgplbmRvYmoKNCAwIG9iago8PCAvTGVuZ3RoIDQyID4+CnN0cmVhbQpCVCAvRjEgMTQgVGYgMTAgMjAgVGQgKCAgaHZveW93c2UgICkgVGogRVQKZW5kc3RyZWFtCmVuZG9iago1IDAgb2JqCjw8IC9UeXBlIC9Gb250IC9TdWJ0eXBlIC9UeXBlMSAvQmFzZUZvbnQgL0hlbHZldGljYSA+PgplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAp0cmFpbGVyCjw8IC9TaXplIDYgL1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjAKJSVFT0Y=";
+
     #[test]
     fn test_map_model_sonnet() {
         assert_eq!(
@@ -1547,6 +1560,95 @@ mod tests {
     #[test]
     fn test_map_model_unsupported() {
         assert!(map_model("gpt-4").is_none());
+    }
+
+    #[test]
+    fn test_pdf_document_text_is_added_to_current_message() {
+        use super::super::types::Message as AnthropicMessage;
+
+        let req = MessagesRequest {
+            model: "claude-opus-4-6".to_string(),
+            max_tokens: 1024,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": MALFORMED_XREF_PDF_HVOYOWSE
+                        }
+                    },
+                    {"type": "text", "text": "What text does this PDF contain? 只给我返回文字,不要使用工具"}
+                ]),
+            }],
+            stream: true,
+            system: None,
+            tools: Some(Vec::new()),
+            tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: None,
+        };
+
+        let result = convert_request(&req, &CompressionConfig::default()).unwrap();
+        let content = &result
+            .conversation_state
+            .current_message
+            .user_input_message
+            .content;
+
+        assert!(
+            content.starts_with("PDF text:\nhvoyowse\n"),
+            "content was: {content}"
+        );
+        assert!(!content.contains("[Document:"), "content was: {content}");
+        assert!(!content.contains("[/Document]"), "content was: {content}");
+        assert!(content.contains("What text does this PDF contain?"));
+    }
+
+    #[test]
+    fn test_pdf_document_text_preserves_extracted_whitespace() {
+        use super::super::types::Message as AnthropicMessage;
+
+        let req = MessagesRequest {
+            model: "claude-opus-4-6".to_string(),
+            max_tokens: 1024,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": MALFORMED_XREF_PDF_HVOYOWSE_PADDED
+                        }
+                    },
+                    {"type": "text", "text": "Extract the text from this PDF and return only the text."}
+                ]),
+            }],
+            stream: true,
+            system: None,
+            tools: Some(Vec::new()),
+            tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: None,
+        };
+
+        let result = convert_request(&req, &CompressionConfig::default()).unwrap();
+        let content = &result
+            .conversation_state
+            .current_message
+            .user_input_message
+            .content;
+
+        assert!(
+            content.starts_with("PDF text:\n  hvoyowse  \n"),
+            "content was: {content}"
+        );
     }
 
     #[test]
