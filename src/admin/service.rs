@@ -242,9 +242,9 @@ impl AdminService {
 
         let current_usage = usage.current_usage();
         let usage_limit = usage.usage_limit();
-        let remaining = (usage_limit - current_usage).max(0.0);
+        let remaining = usage_limit - current_usage;
         let usage_percentage = if usage_limit > 0.0 {
-            (current_usage / usage_limit * 100.0).min(100.0)
+            current_usage / usage_limit * 100.0
         } else {
             0.0
         };
@@ -281,11 +281,18 @@ impl AdminService {
             .map(|(id, info)| {
                 // 优先从磁盘缓存获取完整快照（保证字段一致性）
                 if let Some(cached) = disk_cache.get(&id) {
+                    let remaining = cached.data.usage_limit - cached.data.current_usage;
+                    let usage_percentage = if cached.data.usage_limit > 0.0 {
+                        cached.data.current_usage / cached.data.usage_limit * 100.0
+                    } else {
+                        0.0
+                    };
+
                     CachedBalanceItem {
                         id,
-                        remaining: cached.data.remaining,
+                        remaining,
                         usage_limit: cached.data.usage_limit,
-                        usage_percentage: cached.data.usage_percentage,
+                        usage_percentage,
                         subscription_title: cached.data.subscription_title.clone(),
                         cached_at: info.cached_at,
                         ttl_secs: info.ttl_secs,
