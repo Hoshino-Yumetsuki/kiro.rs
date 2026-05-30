@@ -44,6 +44,7 @@ base64 = "0.22.1"       # Base64 编解码
 pulldown-cmark = { version = "0.13.4", default-features = false }  # Markdown 解析（结构化输出 fence 剥离）
 oxidize-pdf = "2.6"      # PDF 文本提取
 sha2 = "0.11.0"
+infer = "0.19"
 
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }

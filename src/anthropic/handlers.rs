@@ -1172,6 +1172,9 @@ async fn resolve_image_urls(payload: &mut MessagesRequest) {
 }
 
 /// 从 URL 下载图片并返回 (base64_data, media_type)
+///
+/// 使用 `infer` 库通过 magic bytes 验证下载内容确实是图片，
+/// 而非信任 HTTP Content-Type header。
 async fn fetch_image_url(
     client: &reqwest::Client,
     url: &str,
@@ -1188,22 +1191,6 @@ async fn fetch_image_url(
         );
     }
 
-    // 从 Content-Type 推断 media type
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("application/octet-stream")
-        .to_string();
-
-    // 提取 mime 主类型（去掉 ;charset= 等参数）
-    let media_type = content_type
-        .split(';')
-        .next()
-        .unwrap_or("application/octet-stream")
-        .trim()
-        .to_string();
-
     let bytes = response.bytes().await?;
 
     if bytes.len() > IMAGE_URL_MAX_SIZE {
@@ -1213,6 +1200,16 @@ async fn fetch_image_url(
             IMAGE_URL_MAX_SIZE
         );
     }
+
+    // 通过 magic bytes 验证是否为图片格式
+    if !infer::is_image(&bytes) {
+        anyhow::bail!("URL 内容不是有效的图片格式");
+    }
+
+    // 从 magic bytes 推断实际 media type（不信任 Content-Type header）
+    let media_type = infer::get(&bytes)
+        .map(|t| t.mime_type().to_string())
+        .unwrap_or_else(|| "application/octet-stream".to_string());
 
     let data_base64 = STANDARD.encode(&bytes);
     Ok((data_base64, media_type))
