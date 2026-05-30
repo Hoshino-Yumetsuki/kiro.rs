@@ -137,6 +137,50 @@ fn attach_request_id_header(mut response: Response, request_id: &str) -> Respons
     response
 }
 
+/// Header name for the Anthropic compatibility warning emitted when a request
+/// uses a feature that this proxy cannot fully forward to the Kiro upstream.
+const ANTHROPIC_COMPAT_WARNING_HEADER: &str = "x-anthropic-compat-warning";
+
+/// Header value emitted when `tool_choice` is set to a non-default value.
+const TOOL_CHOICE_IGNORED_WARNING: &str = "tool_choice ignored by upstream";
+
+/// Returns `Some(value)` when the request's `tool_choice` is non-default and
+/// therefore silently dropped by the proxy. A non-default `tool_choice` is any
+/// value other than `null`, missing, or `{"type":"auto"}`.
+///
+/// The returned reference is to the original `tool_choice` JSON so callers can
+/// log it for observability.
+fn tool_choice_warning_value(payload: &MessagesRequest) -> Option<&serde_json::Value> {
+    let value = payload.tool_choice.as_ref()?;
+    if value.is_null() {
+        return None;
+    }
+    let is_auto = value
+        .as_object()
+        .and_then(|obj| obj.get("type"))
+        .and_then(|t| t.as_str())
+        == Some("auto");
+    if is_auto {
+        return None;
+    }
+    Some(value)
+}
+
+/// Attach the `x-anthropic-compat-warning` header for a non-default
+/// `tool_choice`. Safe to call with non-warning responses (no-op when
+/// `should_warn` is false).
+fn attach_tool_choice_warning_header(mut response: Response, should_warn: bool) -> Response {
+    if !should_warn {
+        return response;
+    }
+    if let Ok(value) = axum::http::HeaderValue::from_str(TOOL_CHOICE_IGNORED_WARNING) {
+        response
+            .headers_mut()
+            .insert(ANTHROPIC_COMPAT_WARNING_HEADER, value);
+    }
+    response
+}
+
 fn is_input_too_long_error(err: &Error) -> bool {
     // provider.rs 在遇到上游返回的 input-too-long 场景时，会在错误中保留以下关键字：
     // - CONTENT_LENGTH_EXCEEDS_THRESHOLD
@@ -1246,7 +1290,20 @@ pub async fn get_models(OriginalUri(uri): OriginalUri) -> Response {
 pub async fn post_messages(
     OriginalUri(uri): OriginalUri,
     State(state): State<AppState>,
-    JsonExtractor(mut payload): JsonExtractor<MessagesRequest>,
+    JsonExtractor(payload): JsonExtractor<MessagesRequest>,
+) -> Response {
+    let warn_value = tool_choice_warning_value(&payload).cloned();
+    if let Some(value) = warn_value.as_ref() {
+        tracing::debug!(target: "anthropic_compat", "tool_choice {:?} ignored", value);
+    }
+    let response = post_messages_inner(uri, state, payload).await;
+    attach_tool_choice_warning_header(response, warn_value.is_some())
+}
+
+async fn post_messages_inner(
+    uri: axum::http::Uri,
+    state: AppState,
+    mut payload: MessagesRequest,
 ) -> Response {
     let request_id = generate_request_id();
 
