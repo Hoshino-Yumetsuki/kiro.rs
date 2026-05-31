@@ -39,7 +39,7 @@ pub fn ensure_toolu_prefix(id: &str) -> String {
 /// - 反引号 (`)：行内代码
 /// - 双引号 (")：字符串
 /// - 单引号 (')：字符串
-const QUOTE_CHARS: &[u8] = b"`\"'\\#!@$%^&*()-_=+[]{};:<>,.?/";
+const QUOTE_CHARS: &[u8] = b"`\"'\\";
 
 /// 检查指定位置的字符是否是引用字符
 fn is_quote_char(buffer: &str, pos: usize) -> bool {
@@ -2728,6 +2728,96 @@ mod tests {
                 .as_str()
                 .is_some_and(|sig| sig.starts_with("kiro-rs-synthetic-")),
             "synthetic signature should be non-empty and namespaced"
+        );
+    }
+
+    fn collect_visible_text(events: &[SseEvent]) -> String {
+        let mut out = String::new();
+        for e in events {
+            if e.event == "content_block_delta" && e.data["delta"]["type"] == "text_delta" {
+                if let Some(t) = e.data["delta"]["text"].as_str() {
+                    out.push_str(t);
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn repro_inline_thinking_baseline_no_raw_tag() {
+        let mut ctx = StreamContext::new_with_thinking(
+            "claude-opus-4-8",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
+        let _ = ctx.generate_initial_events();
+        let mut events = ctx.process_kiro_event(&Event::AssistantResponse(
+            serde_json::from_value(
+                json!({"content": "<thinking>\nweighing options\n</thinking>\n\nfinal answer"}),
+            )
+            .unwrap(),
+        ));
+        events.extend(ctx.generate_final_events());
+        let visible = collect_visible_text(&events);
+        assert!(
+            !visible.contains("<thinking>") && !visible.contains("</thinking>"),
+            "baseline leaked raw tag; visible={visible:?}"
+        );
+    }
+
+    #[test]
+    fn open_tag_followed_by_markdown_punctuation_is_not_treated_as_quoted() {
+        let mut ctx = StreamContext::new_with_thinking(
+            "claude-opus-4-8",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
+        let _ = ctx.generate_initial_events();
+        let mut events = ctx.process_kiro_event(&Event::AssistantResponse(
+            serde_json::from_value(
+                json!({"content": "<thinking>- step one\n- step two</thinking>\n\nanswer"}),
+            )
+            .unwrap(),
+        ));
+        events.extend(ctx.generate_final_events());
+        let visible = collect_visible_text(&events);
+        assert!(
+            !visible.contains("<thinking>"),
+            "open tag followed by '-' leaked raw <thinking>; visible={visible:?}"
+        );
+    }
+
+    #[test]
+    fn repro_inline_thinking_end_tag_without_double_newline() {
+        let mut ctx = StreamContext::new_with_thinking(
+            "claude-opus-4-8",
+            1,
+            zero_cache_usage(),
+            true,
+            HashMap::new(),
+            false,
+            Vec::new(),
+        );
+        let _ = ctx.generate_initial_events();
+        let mut events = ctx.process_kiro_event(&Event::AssistantResponse(
+            serde_json::from_value(
+                json!({"content": "<thinking>\nreasoning here</thinking>answer text"}),
+            )
+            .unwrap(),
+        ));
+        events.extend(ctx.generate_final_events());
+        let visible = collect_visible_text(&events);
+        assert!(
+            !visible.contains("</thinking>"),
+            "end tag without \\n\\n leaked raw </thinking>; visible={visible:?}"
         );
     }
 
