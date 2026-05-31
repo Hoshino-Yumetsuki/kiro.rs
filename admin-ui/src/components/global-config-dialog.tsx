@@ -35,6 +35,7 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
   const [promptCacheAccountingEnabled, setPromptCacheAccountingEnabled] = useState(true)
   const [defaultEndpoint, setDefaultEndpoint] = useState('ide')
   const [enableCredentialCooldown, setEnableCredentialCooldown] = useState(true)
+  const [enableRateLimit, setEnableRateLimit] = useState(true)
   const [enableStickyRouting, setEnableStickyRouting] = useState(true)
   const [autoDisableInsufficientBalance, setAutoDisableInsufficientBalance] = useState(true)
   const [autoDisableRefreshFailure, setAutoDisableRefreshFailure] = useState(true)
@@ -70,6 +71,7 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
       setPromptCacheAccountingEnabled(globalConfig.promptCacheAccountingEnabled)
       setDefaultEndpoint(globalConfig.defaultEndpoint || 'ide')
       setEnableCredentialCooldown(globalConfig.enableCredentialCooldown)
+      setEnableRateLimit(globalConfig.enableRateLimit)
       setEnableStickyRouting(globalConfig.enableStickyRouting)
       setAutoDisableInsufficientBalance(globalConfig.autoDisableInsufficientBalance)
       setAutoDisableRefreshFailure(globalConfig.autoDisableRefreshFailure)
@@ -129,6 +131,11 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
 
     if (enableCredentialCooldown !== (globalConfig?.enableCredentialCooldown ?? true)) {
       globalPayload.enableCredentialCooldown = enableCredentialCooldown
+      hasGlobalChanges = true
+    }
+
+    if (enableRateLimit !== (globalConfig?.enableRateLimit ?? true)) {
+      globalPayload.enableRateLimit = enableRateLimit
       hasGlobalChanges = true
     }
 
@@ -271,6 +278,13 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
               <div className="flex items-center justify-between">
                 <label className="text-sm font-medium">凭据冷却机制</label>
                 <Switch checked={enableCredentialCooldown} onCheckedChange={setEnableCredentialCooldown} disabled={isPending} aria-label="凭据冷却机制" />
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-sm font-medium">速率限制节流</label>
+                  <p className="text-xs text-muted-foreground">每日上限 / 请求间隔 / 指数退避，关闭后凭据级主动节流完全放行</p>
+                </div>
+                <Switch checked={enableRateLimit} onCheckedChange={setEnableRateLimit} disabled={isPending} aria-label="速率限制节流" />
               </div>
               <div className="flex items-center justify-between">
                 <div>

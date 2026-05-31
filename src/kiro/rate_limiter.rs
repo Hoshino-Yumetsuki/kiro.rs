@@ -7,6 +7,7 @@
 
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// 默认每日最大请求数
@@ -116,6 +117,9 @@ impl Default for CredentialRateState {
 pub struct RateLimiter {
     config: RwLock<RateLimitConfig>,
     states: Mutex<HashMap<u64, CredentialRateState>>,
+    /// 是否启用速率限制（每日上限 / 请求间隔 / 指数退避）。
+    /// 关闭时所有检查直接放行，但仍维护计数与失败统计以便监控。
+    enabled: AtomicBool,
 }
 
 impl RateLimiter {
@@ -124,6 +128,7 @@ impl RateLimiter {
         Self {
             config: RwLock::new(config),
             states: Mutex::new(HashMap::new()),
+            enabled: AtomicBool::new(true),
         }
     }
 
@@ -137,10 +142,26 @@ impl RateLimiter {
         *self.config.write() = new_config;
     }
 
+    /// 是否启用速率限制
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    /// 热更新启用开关
+    ///
+    /// 关闭后 `check_rate_limit` / `try_acquire` 直接放行（不做每日上限、
+    /// 请求间隔、退避判断），用于一键停用整个 RateLimitConfig 节流策略。
+    pub fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::Relaxed);
+    }
+
     /// 检查凭据是否可以发送请求
     ///
     /// 返回 `Ok(())` 表示可以发送，`Err(Duration)` 表示需要等待的时间
     pub fn check_rate_limit(&self, credential_id: u64) -> Result<(), Duration> {
+        if !self.is_enabled() {
+            return Ok(());
+        }
         let config = self.config.read().clone();
         let mut states = self.states.lock();
         let state = states.entry(credential_id).or_default();
@@ -188,6 +209,13 @@ impl RateLimiter {
     ///
     /// 返回 `Ok(())` 表示已占用一个发送窗口；`Err(Duration)` 表示需要等待的时间。
     pub fn try_acquire(&self, credential_id: u64) -> Result<(), Duration> {
+        if !self.is_enabled() {
+            // 关闭节流：仍更新 last_request_at 以便监控统计，但不做任何限制
+            let mut states = self.states.lock();
+            let state = states.entry(credential_id).or_default();
+            state.last_request_at = Some(Instant::now());
+            return Ok(());
+        }
         let config = self.config.read().clone();
         let min_interval = Self::calculate_interval_with_config(&config);
 
@@ -473,5 +501,28 @@ mod tests {
 
         limiter.reset(1);
         assert!(limiter.get_state(1).is_none());
+    }
+
+    #[test]
+    fn test_rate_limiter_disabled_bypasses_limits() {
+        let config = RateLimitConfig {
+            daily_max_requests: 1,
+            min_interval_ms: 60_000,
+            max_interval_ms: 60_000,
+            ..Default::default()
+        };
+        let limiter = RateLimiter::new(config);
+        limiter.set_enabled(false);
+
+        // 关闭后即使超过每日上限、间隔未到，也始终放行
+        for _ in 0..5 {
+            assert!(limiter.try_acquire(1).is_ok());
+            assert!(limiter.check_rate_limit(1).is_ok());
+            limiter.record_success(1);
+        }
+
+        // 重新启用后，超过每日上限应被限制
+        limiter.set_enabled(true);
+        assert!(limiter.check_rate_limit(1).is_err());
     }
 }
