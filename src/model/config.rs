@@ -120,6 +120,14 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub enable_credential_cooldown: bool,
 
+    /// 是否启用速率限制节流（默认 true）
+    ///
+    /// 控制内置 RateLimitConfig 策略（每日最大请求数、请求间隔、指数退避）。
+    /// 禁用后凭据级主动节流完全放行，不再因每日上限/最小间隔/退避而等待或分流；
+    /// 不影响上游 429 触发的冷却（由 `enable_credential_cooldown` 控制）。
+    #[serde(default = "default_true")]
+    pub enable_rate_limit: bool,
+
     /// 是否启用粘性路由（默认 true）
     ///
     /// 启用后，同一 session（user_id）的请求会尽量路由到同一凭据，
@@ -311,6 +319,7 @@ impl Default for Config {
             prompt_cache_accounting_enabled: default_true(),
             extract_thinking: default_extract_thinking(),
             enable_credential_cooldown: default_true(),
+            enable_rate_limit: default_true(),
             enable_sticky_routing: default_true(),
             auto_disable_insufficient_balance: default_true(),
             auto_disable_refresh_failure: default_true(),

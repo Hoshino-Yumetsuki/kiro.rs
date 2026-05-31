@@ -858,6 +858,7 @@ impl AdminService {
             prompt_cache_accounting_enabled: config.prompt_cache_accounting_enabled,
             default_endpoint: config.default_endpoint.clone(),
             enable_credential_cooldown: config.enable_credential_cooldown,
+            enable_rate_limit: config.enable_rate_limit,
             enable_sticky_routing: config.enable_sticky_routing,
             auto_disable_insufficient_balance: config.auto_disable_insufficient_balance,
             auto_disable_refresh_failure: config.auto_disable_refresh_failure,
@@ -941,6 +942,10 @@ impl AdminService {
                 config.enable_credential_cooldown = enabled;
             }
 
+            if let Some(enabled) = req.enable_rate_limit {
+                config.enable_rate_limit = enabled;
+            }
+
             if let Some(enabled) = req.enable_sticky_routing {
                 config.enable_sticky_routing = enabled;
             }
@@ -983,6 +988,12 @@ impl AdminService {
         if req.credential_rpm.is_some() {
             self.token_manager
                 .update_credential_rpm(config.credential_rpm);
+        }
+
+        // 热更新速率限制启用开关
+        if req.enable_rate_limit.is_some() {
+            self.token_manager
+                .update_rate_limit_enabled(config.enable_rate_limit);
         }
 
         // 热更新 default_endpoint
@@ -1136,6 +1147,7 @@ mod tests {
             prompt_cache_accounting_enabled: None,
             default_endpoint: Some("cli".to_string()),
             enable_credential_cooldown: None,
+            enable_rate_limit: None,
             enable_sticky_routing: None,
             auto_disable_insufficient_balance: None,
             auto_disable_refresh_failure: None,
@@ -1165,6 +1177,7 @@ mod tests {
             prompt_cache_accounting_enabled: None,
             default_endpoint: Some("".to_string()),
             enable_credential_cooldown: None,
+            enable_rate_limit: None,
             enable_sticky_routing: None,
             auto_disable_insufficient_balance: None,
             auto_disable_refresh_failure: None,
@@ -1193,6 +1206,7 @@ mod tests {
             prompt_cache_accounting_enabled: None,
             default_endpoint: Some("   ".to_string()),
             enable_credential_cooldown: None,
+            enable_rate_limit: None,
             enable_sticky_routing: None,
             auto_disable_insufficient_balance: None,
             auto_disable_refresh_failure: None,
@@ -1221,6 +1235,7 @@ mod tests {
             prompt_cache_accounting_enabled: None,
             default_endpoint: Some("unknown".to_string()),
             enable_credential_cooldown: None,
+            enable_rate_limit: None,
             enable_sticky_routing: None,
             auto_disable_insufficient_balance: None,
             auto_disable_refresh_failure: None,
@@ -1246,6 +1261,7 @@ mod tests {
             prompt_cache_accounting_enabled: None,
             default_endpoint: Some("  cli  ".to_string()),
             enable_credential_cooldown: None,
+            enable_rate_limit: None,
             enable_sticky_routing: None,
             auto_disable_insufficient_balance: None,
             auto_disable_refresh_failure: None,

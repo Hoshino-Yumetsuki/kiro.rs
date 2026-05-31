@@ -826,6 +826,7 @@ impl MultiTokenManager {
             }
             cfg
         };
+        let rate_limit_enabled = config.enable_rate_limit;
 
         // 计算当前最大 ID，为没有 ID 的凭据分配新 ID
         let max_existing_id = credentials.iter().filter_map(|c| c.id).max().unwrap_or(0);
@@ -950,6 +951,9 @@ impl MultiTokenManager {
         // 加载持久化的统计数据（success_count, last_used_at）
         manager.load_stats();
 
+        // 应用速率限制启用开关（默认启用，配置关闭时一键停用节流）
+        manager.rate_limiter.set_enabled(rate_limit_enabled);
+
         Ok(manager)
     }
 
@@ -987,6 +991,12 @@ impl MultiTokenManager {
             cfg.jitter_percent = 0.0;
         }
         self.rate_limiter.update_config(cfg);
+    }
+
+    /// 热更新速率限制启用开关
+    pub fn update_rate_limit_enabled(&self, enabled: bool) {
+        self.config.write().enable_rate_limit = enabled;
+        self.rate_limiter.set_enabled(enabled);
     }
 
     /// 获取凭据总数
