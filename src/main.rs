@@ -195,7 +195,7 @@ async fn main() {
     let compression_config = Arc::new(RwLock::new(config.read().compression.clone()));
     let prompt_cache_runtime = Arc::new(RwLock::new(anthropic::PromptCacheRuntime::new(
         config.read().prompt_cache_ttl_seconds,
-        config.read().prompt_cache_accounting_enabled,
+        config.read().prompt_cache_mode,
     )));
 
     // 构建 Anthropic API 路由（profile_arn 由 provider 层根据实际凭据动态注入）

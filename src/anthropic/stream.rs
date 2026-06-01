@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 
 use crate::common::utf8::floor_char_boundary;
 use crate::kiro::model::events::{Event, MeteringEvent, ReasoningContentEvent};
+use crate::model::config::PromptCacheMode;
 
 /// Generate an Anthropic-style message ID: `msg_01` + 20 random alphanumeric characters.
 pub fn generate_anthropic_message_id() -> String {
@@ -548,9 +549,19 @@ impl BlockState {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct FinalUsage {
-    output_tokens: i32,
+    pub output_tokens: i32,
+    #[allow(dead_code)]
+    pub input_tokens: Option<i32>,
+    #[allow(dead_code)]
+    pub cache_creation_input_tokens: Option<i32>,
+    #[allow(dead_code)]
+    pub cache_read_input_tokens: Option<i32>,
+    #[allow(dead_code)]
+    pub cache_creation_5m_input_tokens: Option<i32>,
+    #[allow(dead_code)]
+    pub cache_creation_1h_input_tokens: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -795,9 +806,6 @@ impl SseStateManager {
         // 发送 message_delta
         if !self.message_delta_sent {
             self.message_delta_sent = true;
-            let usage_json = json!({
-                "output_tokens": usage.output_tokens,
-            });
             events.push(SseEvent::new(
                 "message_delta",
                 json!({
@@ -806,7 +814,9 @@ impl SseStateManager {
                         "stop_reason": self.get_stop_reason(),
                         "stop_sequence": null
                     },
-                    "usage": usage_json
+                    "usage": {
+                        "output_tokens": usage.output_tokens
+                    }
                 }),
             ));
         }
@@ -877,10 +887,13 @@ pub struct StreamContext {
     pub rewrite_extra_output_tokens: i32,
     /// 改写后待逐块输出的文本队列（模拟逐字流式输出）
     pub rewrite_drip_queue: std::collections::VecDeque<String>,
+    /// 本次请求的 Prompt Cache 模式（决定 message_start / message_delta 中的 usage 字段集合）
+    pub mode: PromptCacheMode,
 }
 
 impl StreamContext {
     /// 创建启用thinking的StreamContext
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_thinking(
         model: impl Into<String>,
         input_tokens: i32,
@@ -889,6 +902,7 @@ impl StreamContext {
         tool_name_map: HashMap<String, String>,
         structured_output: bool,
         rewrite_keywords: Vec<String>,
+        mode: PromptCacheMode,
     ) -> Self {
         let rewrite_enabled = !rewrite_keywords.is_empty();
         Self {
@@ -917,29 +931,53 @@ impl StreamContext {
             rewrite_text_buffer: String::new(),
             rewrite_extra_output_tokens: 0,
             rewrite_drip_queue: std::collections::VecDeque::new(),
+            mode,
         }
     }
 
     /// 生成 message_start 事件
     pub fn create_message_start_event(&self) -> serde_json::Value {
-        let billed_input_tokens = self
-            .cache_usage
-            .map(|cache_usage| {
-                billed_input_tokens(
-                    self.input_tokens,
-                    cache_usage.cache_creation_input_tokens,
-                    cache_usage.cache_read_input_tokens,
-                )
-            })
-            .unwrap_or(self.input_tokens);
-        let mut usage = json!({
-            "input_tokens": billed_input_tokens,
-            "output_tokens": 0,
-        });
-        if let Some(cache_usage) = self.cache_usage {
-            usage["cache_creation_input_tokens"] = json!(cache_usage.cache_creation_input_tokens);
-            usage["cache_read_input_tokens"] = json!(cache_usage.cache_read_input_tokens);
-        }
+        use crate::model::config::PromptCacheMode;
+
+        let usage = match self.mode {
+            PromptCacheMode::Off => {
+                json!({
+                    "input_tokens": self.input_tokens,
+                    "output_tokens": 0,
+                })
+            }
+            PromptCacheMode::Simulated => {
+                if let Some(cache_usage) = self.cache_usage {
+                    let billed = super::usage::billed_input_tokens(
+                        self.input_tokens,
+                        cache_usage.cache_creation_input_tokens,
+                        cache_usage.cache_read_input_tokens,
+                    );
+                    json!({
+                        "input_tokens": billed,
+                        "output_tokens": 0,
+                        "cache_creation_input_tokens": cache_usage.cache_creation_input_tokens,
+                        "cache_read_input_tokens": cache_usage.cache_read_input_tokens,
+                        "cache_creation": {
+                            "ephemeral_5m_input_tokens": cache_usage.cache_creation_5m_input_tokens,
+                            "ephemeral_1h_input_tokens": cache_usage.cache_creation_1h_input_tokens,
+                        }
+                    })
+                } else {
+                    json!({
+                        "input_tokens": self.input_tokens,
+                        "output_tokens": 0,
+                    })
+                }
+            }
+            PromptCacheMode::Upstream => {
+                json!({
+                    "input_tokens": self.input_tokens,
+                    "output_tokens": 0,
+                })
+            }
+        };
+
         json!({
             "type": "message_start",
             "message": {
@@ -1652,37 +1690,66 @@ impl StreamContext {
 
         // 始终基于本地估算输入与 cache 统计来生成 usage，
         // 避免因服务端压缩导致上游 token 统计偏低，使客户端误判上下文大小。
-        #[cfg(feature = "sensitive-logs")]
-        {
-            let final_input_tokens = self.input_tokens;
-            let billed_input_tokens = self
-                .cache_usage
-                .map(|cache_usage| {
-                    billed_input_tokens(
-                        final_input_tokens,
-                        cache_usage.cache_creation_input_tokens,
-                        cache_usage.cache_read_input_tokens,
-                    )
-                })
-                .unwrap_or(final_input_tokens);
+        let upstream_total = self.context_input_tokens.unwrap_or(self.input_tokens);
+        let out = self.output_tokens + self.rewrite_extra_output_tokens;
 
-            tracing::info!(
-                estimated_input_tokens = self.input_tokens,
-                context_input_tokens = ?self.context_input_tokens,
-                final_input_tokens,
-                output_tokens = self.output_tokens,
-                "StreamContext usage: final_input_tokens={} (估算值), billed_input_tokens={}, context_input_tokens={} (上游值), output_tokens={}",
-                final_input_tokens,
-                billed_input_tokens,
-                self.context_input_tokens.map_or("N/A".to_string(), |v| v.to_string()),
-                self.output_tokens
-            );
-        }
+        tracing::info!(
+            estimated_input_tokens = self.input_tokens,
+            context_input_tokens = ?self.context_input_tokens,
+            output_tokens = out,
+            "StreamContext usage: estimated_input_tokens={}, context_input_tokens={}, output_tokens={}",
+            self.input_tokens,
+            self.context_input_tokens.map_or("N/A".to_string(), |v| v.to_string()),
+            out
+        );
+
+        let final_usage = match self.mode {
+            PromptCacheMode::Off => FinalUsage {
+                output_tokens: out,
+                input_tokens: Some(self.input_tokens),
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_5m_input_tokens: None,
+                cache_creation_1h_input_tokens: None,
+            },
+            PromptCacheMode::Simulated => {
+                if let Some(c) = self.cache_usage {
+                    let billed = super::usage::billed_input_tokens(
+                        upstream_total,
+                        c.cache_creation_input_tokens,
+                        c.cache_read_input_tokens,
+                    );
+                    FinalUsage {
+                        output_tokens: out,
+                        input_tokens: Some(billed),
+                        cache_creation_input_tokens: Some(c.cache_creation_input_tokens),
+                        cache_read_input_tokens: Some(c.cache_read_input_tokens),
+                        cache_creation_5m_input_tokens: Some(c.cache_creation_5m_input_tokens),
+                        cache_creation_1h_input_tokens: Some(c.cache_creation_1h_input_tokens),
+                    }
+                } else {
+                    FinalUsage {
+                        output_tokens: out,
+                        input_tokens: Some(self.input_tokens),
+                        cache_creation_input_tokens: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_5m_input_tokens: None,
+                        cache_creation_1h_input_tokens: None,
+                    }
+                }
+            }
+            PromptCacheMode::Upstream => FinalUsage {
+                output_tokens: out,
+                input_tokens: Some(upstream_total),
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_5m_input_tokens: None,
+                cache_creation_1h_input_tokens: None,
+            },
+        };
 
         // 生成最终事件
-        events.extend(self.state_manager.generate_final_events(FinalUsage {
-            output_tokens: self.output_tokens + self.rewrite_extra_output_tokens,
-        }));
+        events.extend(self.state_manager.generate_final_events(final_usage));
         events
     }
 
@@ -1749,18 +1816,6 @@ impl StreamContext {
     pub fn has_drip_pending(&self) -> bool {
         !self.rewrite_drip_queue.is_empty()
     }
-}
-
-/// 将总输入 token 转为 Anthropic usage 的 input_tokens 口径（剔除 cache 读写）
-fn billed_input_tokens(
-    input_tokens: i32,
-    cache_creation_input_tokens: i32,
-    cache_read_input_tokens: i32,
-) -> i32 {
-    input_tokens
-        .saturating_sub(cache_creation_input_tokens)
-        .saturating_sub(cache_read_input_tokens)
-        .max(0)
 }
 
 /// 简单的 token 估算
@@ -2225,6 +2280,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let initial_events = ctx.generate_initial_events();
         let mut all_events = initial_events;
@@ -2276,6 +2332,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let all_events = ctx.generate_initial_events();
 
@@ -2299,6 +2356,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let initial_events = ctx.generate_initial_events();
         let message_start_usage = initial_events
@@ -2335,6 +2393,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let initial_events = ctx.generate_initial_events();
         let message_start_usage = initial_events
@@ -2379,6 +2438,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
 
         ctx.process_kiro_event(&Event::Metering(MeteringEvent {
@@ -2433,6 +2493,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
 
         let initial_events = ctx.generate_initial_events();
@@ -2511,6 +2572,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
 
         let mut all_events = Vec::new();
@@ -2556,6 +2618,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -2594,6 +2657,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -2641,6 +2705,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -2707,6 +2772,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -2734,10 +2800,11 @@ mod tests {
     fn collect_visible_text(events: &[SseEvent]) -> String {
         let mut out = String::new();
         for e in events {
-            if e.event == "content_block_delta" && e.data["delta"]["type"] == "text_delta" {
-                if let Some(t) = e.data["delta"]["text"].as_str() {
-                    out.push_str(t);
-                }
+            if e.event == "content_block_delta"
+                && e.data["delta"]["type"] == "text_delta"
+                && let Some(t) = e.data["delta"]["text"].as_str()
+            {
+                out.push_str(t);
             }
         }
         out
@@ -2753,6 +2820,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _ = ctx.generate_initial_events();
         let mut events = ctx.process_kiro_event(&Event::AssistantResponse(
@@ -2779,6 +2847,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _ = ctx.generate_initial_events();
         let mut events = ctx.process_kiro_event(&Event::AssistantResponse(
@@ -2805,6 +2874,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _ = ctx.generate_initial_events();
         let mut events = ctx.process_kiro_event(&Event::AssistantResponse(
@@ -2831,6 +2901,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -2878,6 +2949,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -2914,6 +2986,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -2962,6 +3035,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -3029,6 +3103,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -3089,6 +3164,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -3142,6 +3218,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -3185,6 +3262,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -3227,6 +3305,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -3300,6 +3379,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -3355,6 +3435,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -3424,6 +3505,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let msg_start = ctx.create_message_start_event();
         assert_eq!(
@@ -3443,6 +3525,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _initial_events = ctx.generate_initial_events();
 
@@ -3509,6 +3592,7 @@ mod tests {
             HashMap::new(),
             false,
             Vec::new(),
+            PromptCacheMode::Simulated,
         );
         let _initial_events = ctx.generate_initial_events();
 

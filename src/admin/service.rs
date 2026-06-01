@@ -855,7 +855,7 @@ impl AdminService {
             region: config.region.clone(),
             credential_rpm: config.credential_rpm,
             prompt_cache_ttl_seconds: config.prompt_cache_ttl_seconds,
-            prompt_cache_accounting_enabled: config.prompt_cache_accounting_enabled,
+            prompt_cache_mode: config.prompt_cache_mode,
             default_endpoint: config.default_endpoint.clone(),
             enable_credential_cooldown: config.enable_credential_cooldown,
             enable_rate_limit: config.enable_rate_limit,
@@ -913,8 +913,8 @@ impl AdminService {
                 config.prompt_cache_ttl_seconds = ttl_seconds;
             }
 
-            if let Some(enabled) = req.prompt_cache_accounting_enabled {
-                config.prompt_cache_accounting_enabled = enabled;
+            if let Some(mode) = req.prompt_cache_mode {
+                config.prompt_cache_mode = mode;
             }
 
             if let Some(ref endpoint) = req.default_endpoint {
@@ -1008,10 +1008,10 @@ impl AdminService {
         }
 
         // 热更新 Prompt Cache 运行时配置
-        if req.prompt_cache_ttl_seconds.is_some() || req.prompt_cache_accounting_enabled.is_some() {
+        if req.prompt_cache_ttl_seconds.is_some() || req.prompt_cache_mode.is_some() {
             self.prompt_cache_runtime.write().update(
                 req.prompt_cache_ttl_seconds,
-                req.prompt_cache_accounting_enabled,
+                req.prompt_cache_mode,
             );
         }
 
@@ -1081,7 +1081,7 @@ mod tests {
     use crate::kiro::model::credentials::KiroCredentials;
     use crate::kiro::provider::KiroProvider;
     use crate::kiro::token_manager::MultiTokenManager;
-    use crate::model::config::{CompressionConfig, Config};
+    use crate::model::config::{CompressionConfig, Config, PromptCacheMode};
     use std::collections::HashSet;
     use std::env;
     use std::fs;
@@ -1095,7 +1095,7 @@ mod tests {
 
         let config = Arc::new(RwLock::new(Config::load(&config_path).unwrap()));
         let compression_config = Arc::new(RwLock::new(CompressionConfig::default()));
-        let prompt_cache_runtime = Arc::new(RwLock::new(PromptCacheRuntime::new(300, true)));
+        let prompt_cache_runtime = Arc::new(RwLock::new(PromptCacheRuntime::new(300, PromptCacheMode::Simulated)));
 
         let credentials = KiroCredentials::default();
         let tm = Arc::new(
@@ -1144,7 +1144,7 @@ mod tests {
             region: None,
             credential_rpm: None,
             prompt_cache_ttl_seconds: None,
-            prompt_cache_accounting_enabled: None,
+            prompt_cache_mode: None,
             default_endpoint: Some("cli".to_string()),
             enable_credential_cooldown: None,
             enable_rate_limit: None,
@@ -1174,7 +1174,7 @@ mod tests {
             region: None,
             credential_rpm: None,
             prompt_cache_ttl_seconds: None,
-            prompt_cache_accounting_enabled: None,
+            prompt_cache_mode: None,
             default_endpoint: Some("".to_string()),
             enable_credential_cooldown: None,
             enable_rate_limit: None,
@@ -1203,7 +1203,7 @@ mod tests {
             region: None,
             credential_rpm: None,
             prompt_cache_ttl_seconds: None,
-            prompt_cache_accounting_enabled: None,
+            prompt_cache_mode: None,
             default_endpoint: Some("   ".to_string()),
             enable_credential_cooldown: None,
             enable_rate_limit: None,
@@ -1232,7 +1232,7 @@ mod tests {
             region: None,
             credential_rpm: None,
             prompt_cache_ttl_seconds: None,
-            prompt_cache_accounting_enabled: None,
+            prompt_cache_mode: None,
             default_endpoint: Some("unknown".to_string()),
             enable_credential_cooldown: None,
             enable_rate_limit: None,
@@ -1258,7 +1258,7 @@ mod tests {
             region: None,
             credential_rpm: None,
             prompt_cache_ttl_seconds: None,
-            prompt_cache_accounting_enabled: None,
+            prompt_cache_mode: None,
             default_endpoint: Some("  cli  ".to_string()),
             enable_credential_cooldown: None,
             enable_rate_limit: None,

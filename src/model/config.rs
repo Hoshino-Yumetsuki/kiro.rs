@@ -1,6 +1,8 @@
 use anyhow::Context;
+use serde::de::{self, Deserializer, Visitor};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -10,6 +12,77 @@ pub enum TlsBackend {
     #[default]
     Rustls,
     NativeTls,
+}
+
+/// Prompt Cache 记账模式
+///
+/// - `Upstream`: 直接采用上游（contextUsageEvent / 未来的 messageMetadataEvent.tokenUsage）
+///   计算的 input_tokens，不输出 cache_creation/cache_read 字段。
+/// - `Simulated`: 在 `Upstream` 总量基础上叠加本地 `CacheTracker` 的 cache 记账，
+///   输出 cache_creation/cache_read 以及 5m/1h 拆分。
+/// - `Off`: 不进行 cache 记账；input_tokens 使用本地估算。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum PromptCacheMode {
+    Upstream,
+    #[default]
+    Simulated,
+    Off,
+}
+
+
+/// 自定义反序列化：兼容老版本 `promptCacheAccountingEnabled: bool` 字段
+///
+/// - `bool` true → `Simulated`，false → `Off`
+/// - `string` 取 "upstream" / "simulated" / "off"，其它值返回 unknown_variant 错误
+fn deserialize_prompt_cache_mode<'de, D>(deserializer: D) -> Result<PromptCacheMode, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct PromptCacheModeVisitor;
+
+    impl<'de> Visitor<'de> for PromptCacheModeVisitor {
+        type Value = PromptCacheMode;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a bool or one of \"upstream\", \"simulated\", \"off\"")
+        }
+
+        fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(if value {
+                PromptCacheMode::Simulated
+            } else {
+                PromptCacheMode::Off
+            })
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            match value {
+                "upstream" => Ok(PromptCacheMode::Upstream),
+                "simulated" => Ok(PromptCacheMode::Simulated),
+                "off" => Ok(PromptCacheMode::Off),
+                other => Err(de::Error::unknown_variant(
+                    other,
+                    &["upstream", "simulated", "off"],
+                )),
+            }
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            self.visit_str(&value)
+        }
+    }
+
+    deserializer.deserialize_any(PromptCacheModeVisitor)
 }
 
 /// KNA 应用配置
@@ -99,9 +172,17 @@ pub struct Config {
     #[serde(default = "default_prompt_cache_ttl_seconds")]
     pub prompt_cache_ttl_seconds: u64,
 
-    /// 是否启用本地 Prompt Cache usage 记账，默认 true
-    #[serde(default = "default_true")]
-    pub prompt_cache_accounting_enabled: bool,
+    /// 本地 Prompt Cache 记账模式，默认 `Simulated`
+    ///
+    /// 兼容旧字段 `promptCacheAccountingEnabled`：
+    /// - `true`  → `Simulated`
+    /// - `false` → `Off`
+    #[serde(
+        default,
+        alias = "promptCacheAccountingEnabled",
+        deserialize_with = "deserialize_prompt_cache_mode"
+    )]
+    pub prompt_cache_mode: PromptCacheMode,
 
     /// 默认端点名称（凭据未显式指定 endpoint 时使用）
     #[serde(default = "default_endpoint")]
@@ -316,7 +397,7 @@ impl Default for Config {
             compression: CompressionConfig::default(),
             rewriter: crate::anthropic::rewriter::RewriterConfig::default(),
             prompt_cache_ttl_seconds: default_prompt_cache_ttl_seconds(),
-            prompt_cache_accounting_enabled: default_true(),
+            prompt_cache_mode: PromptCacheMode::default(),
             extract_thinking: default_extract_thinking(),
             enable_credential_cooldown: default_true(),
             enable_rate_limit: default_true(),
@@ -387,6 +468,46 @@ mod tests {
     fn test_config_deserializes_prompt_cache_accounting_false() {
         let config: Config = serde_json::from_str(r#"{"promptCacheAccountingEnabled":false}"#)
             .expect("config should deserialize");
-        assert!(!config.prompt_cache_accounting_enabled);
+        assert_eq!(config.prompt_cache_mode, PromptCacheMode::Off);
+    }
+
+    #[test]
+    fn test_config_deserializes_prompt_cache_accounting_true_as_simulated() {
+        let config: Config = serde_json::from_str(r#"{"promptCacheAccountingEnabled":true}"#)
+            .expect("config should deserialize");
+        assert_eq!(config.prompt_cache_mode, PromptCacheMode::Simulated);
+    }
+
+    #[test]
+    fn test_config_deserializes_prompt_cache_mode_upstream() {
+        let config: Config = serde_json::from_str(r#"{"promptCacheMode":"upstream"}"#)
+            .expect("config should deserialize");
+        assert_eq!(config.prompt_cache_mode, PromptCacheMode::Upstream);
+    }
+
+    #[test]
+    fn test_config_deserializes_prompt_cache_mode_off() {
+        let config: Config = serde_json::from_str(r#"{"promptCacheMode":"off"}"#)
+            .expect("config should deserialize");
+        assert_eq!(config.prompt_cache_mode, PromptCacheMode::Off);
+    }
+
+    #[test]
+    fn test_config_deserializes_prompt_cache_mode_simulated() {
+        let config: Config = serde_json::from_str(r#"{"promptCacheMode":"simulated"}"#)
+            .expect("config should deserialize");
+        assert_eq!(config.prompt_cache_mode, PromptCacheMode::Simulated);
+    }
+
+    #[test]
+    fn test_config_default_prompt_cache_mode_is_simulated() {
+        let config: Config = serde_json::from_str("{}").expect("config should deserialize");
+        assert_eq!(config.prompt_cache_mode, PromptCacheMode::Simulated);
+    }
+
+    #[test]
+    fn test_config_rejects_unknown_prompt_cache_mode_string() {
+        let result: Result<Config, _> = serde_json::from_str(r#"{"promptCacheMode":"bogus"}"#);
+        assert!(result.is_err(), "unknown variant should be rejected");
     }
 }
