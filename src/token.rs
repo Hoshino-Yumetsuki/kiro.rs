@@ -194,33 +194,20 @@ fn estimate_messages_tokens(messages: &[Message]) -> u64 {
         return 0;
     }
 
-    let json = serde_json::to_string(messages).unwrap_or_default();
-    count_tokens(&json) + messages.len() as u64 * TOKENS_PER_MESSAGE
-}
-
-fn count_serialized_value_tokens(value: &serde_json::Value) -> u64 {
-    let json = serde_json::to_string(value).unwrap_or_default();
-    count_tokens(&json)
+    // 逐消息累加：per-message overhead + content block tokens。
+    // 与 cache_tracker::flatten_cacheable_blocks 使用相同的 count_message_content_tokens，
+    // 保证 total_input_tokens 与 cache profile 的 cumulative_tokens 口径一致。
+    messages
+        .iter()
+        .map(|msg| TOKENS_PER_MESSAGE + count_message_content_tokens(&msg.content))
+        .sum()
 }
 
 fn estimate_content_block_tokens(obj: &serde_json::Map<String, serde_json::Value>) -> u64 {
-    if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
-        return count_tokens(text);
-    }
-
-    if let Some(thinking) = obj.get("thinking").and_then(|v| v.as_str()) {
-        return count_tokens(thinking);
-    }
-
-    if let Some(input) = obj.get("input") {
-        return count_serialized_value_tokens(input);
-    }
-
-    if let Some(content) = obj.get("content") {
-        return count_message_content_tokens(content);
-    }
-
-    0
+    // 序列化整个 content block 对象为 JSON，以包含 type/role 等结构字段的 token 开销，
+    // 与 count_all_tokens_local 对整体 messages 的计算口径保持一致。
+    let json = serde_json::to_string(obj).unwrap_or_default();
+    count_tokens(&json)
 }
 
 /// 本地计算请求的输入 tokens
@@ -235,9 +222,9 @@ fn count_all_tokens_local(
         .map(count_system_message_tokens)
         .sum();
     let message_tokens = estimate_messages_tokens(&messages);
-    let tool_tokens = tools
+    let tool_tokens: u64 = tools
         .as_ref()
-        .map(|items| items.len() as u64 * TOKENS_PER_TOOL)
+        .map(|items| items.iter().map(count_tool_definition_tokens).sum())
         .unwrap_or(0);
 
     (system_tokens + message_tokens + tool_tokens).max(1)
@@ -259,15 +246,29 @@ pub(crate) fn count_system_message_tokens(message: &SystemMessage) -> u64 {
 }
 
 /// 计算工具定义的 tokens
-pub(crate) fn count_tool_definition_tokens(_tool: &Tool) -> u64 {
-    TOKENS_PER_TOOL
+///
+/// 序列化整个 Tool 对象为 JSON 来计算，确保与 count_all_tokens_local 口径一致。
+/// 工具的 input_schema (JSON Schema) 通常包含大量结构，固定值会严重低估。
+pub(crate) fn count_tool_definition_tokens(tool: &Tool) -> u64 {
+    let json = serde_json::to_string(tool).unwrap_or_default();
+    count_tokens(&json).max(TOKENS_PER_TOOL)
 }
 
 /// 计算消息内容的 tokens
+///
+/// 与 cache_tracker::flatten_message_blocks 行为对齐：
+/// - String 内容会被包装为 `{"type": "text", "text": ...}` 再计算
+/// - Array 内容逐 block 计算
+/// - Object 内容直接序列化计算
 pub(crate) fn count_message_content_tokens(value: &serde_json::Value) -> u64 {
     match value {
         serde_json::Value::Null => 0,
-        serde_json::Value::String(s) => count_tokens(s),
+        serde_json::Value::String(s) => {
+            // 与 cache_tracker 一致：string content 被视为 {"type": "text", "text": s}
+            let wrapper = serde_json::json!({"type": "text", "text": s});
+            let json = serde_json::to_string(&wrapper).unwrap_or_default();
+            count_tokens(&json)
+        }
         serde_json::Value::Array(arr) => arr.iter().map(count_message_content_tokens).sum(),
         serde_json::Value::Object(obj) => estimate_content_block_tokens(obj),
         _ => 0,
