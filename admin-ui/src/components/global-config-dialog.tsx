@@ -32,7 +32,7 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
   const [region, setRegion] = useState('')
   const [credentialRpm, setCredentialRpm] = useState('')
   const [promptCacheTtlSeconds, setPromptCacheTtlSeconds] = useState('300')
-  const [promptCacheAccountingEnabled, setPromptCacheAccountingEnabled] = useState(true)
+  const [promptCacheMode, setPromptCacheMode] = useState<'upstream' | 'simulated' | 'off'>('simulated')
   const [defaultEndpoint, setDefaultEndpoint] = useState('ide')
   const [enableCredentialCooldown, setEnableCredentialCooldown] = useState(true)
   const [enableRateLimit, setEnableRateLimit] = useState(true)
@@ -68,7 +68,7 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
       setRegion(globalConfig.region || '')
       setCredentialRpm(globalConfig.credentialRpm?.toString() || '')
       setPromptCacheTtlSeconds(globalConfig.promptCacheTtlSeconds.toString())
-      setPromptCacheAccountingEnabled(globalConfig.promptCacheAccountingEnabled)
+      setPromptCacheMode(globalConfig.promptCacheMode)
       setDefaultEndpoint(globalConfig.defaultEndpoint || 'ide')
       setEnableCredentialCooldown(globalConfig.enableCredentialCooldown)
       setEnableRateLimit(globalConfig.enableRateLimit)
@@ -119,8 +119,8 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
       hasGlobalChanges = true
     }
 
-    if (globalConfig && promptCacheAccountingEnabled !== globalConfig.promptCacheAccountingEnabled) {
-      globalPayload.promptCacheAccountingEnabled = promptCacheAccountingEnabled
+    if (globalConfig && promptCacheMode !== globalConfig.promptCacheMode) {
+      globalPayload.promptCacheMode = promptCacheMode
       hasGlobalChanges = true
     }
 
@@ -267,9 +267,19 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
                   <option value="3600">1 小时</option>
                 </select>
               </div>
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-medium">Prompt Cache 记账</label>
-                <Switch checked={promptCacheAccountingEnabled} onCheckedChange={setPromptCacheAccountingEnabled} disabled={isPending} aria-label="Prompt Cache 记账" />
+              <div className="space-y-1">
+                <label htmlFor="gcPromptCacheMode" className="text-sm font-medium">Prompt Cache 记账模式</label>
+                <select
+                  id="gcPromptCacheMode"
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                  value={promptCacheMode}
+                  onChange={(e) => setPromptCacheMode(e.target.value as 'upstream' | 'simulated' | 'off')}
+                  disabled={isPending}
+                >
+                  <option value="upstream">Upstream（上游真实用量）</option>
+                  <option value="simulated">Simulated（本地模拟记账）</option>
+                  <option value="off">Off（不记账）</option>
+                </select>
               </div>
               <div className="space-y-1">
                 <label htmlFor="gcDefaultEndpoint" className="text-sm font-medium">默认端点</label>

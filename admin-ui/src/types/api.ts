@@ -361,7 +361,7 @@ export interface GlobalConfigResponse {
   region: string
   credentialRpm: number | null
   promptCacheTtlSeconds: number
-  promptCacheAccountingEnabled: boolean
+  promptCacheMode: 'upstream' | 'simulated' | 'off'
   defaultEndpoint: string
   enableCredentialCooldown: boolean
   enableRateLimit: boolean
@@ -394,7 +394,7 @@ export interface UpdateGlobalConfigRequest {
   region?: string
   credentialRpm?: number | null
   promptCacheTtlSeconds?: number
-  promptCacheAccountingEnabled?: boolean
+  promptCacheMode?: 'upstream' | 'simulated' | 'off'
   defaultEndpoint?: string
   enableCredentialCooldown?: boolean
   enableRateLimit?: boolean
