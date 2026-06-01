@@ -89,10 +89,6 @@ impl CacheTracker {
         let mut breakpoints = Vec::new();
         let mut cumulative_tokens = 0i32;
 
-        let mut active_ttl: Option<Duration> = None;
-        let mut seen_breakpoints: std::collections::BTreeSet<usize> =
-            std::collections::BTreeSet::new();
-
         for (index, block) in flattened.into_iter().enumerate() {
             cumulative_tokens = cumulative_tokens.saturating_add(block.tokens);
 
@@ -112,20 +108,6 @@ impl CacheTracker {
 
             if let Some(ttl) = block.breakpoint_ttl {
                 let ttl = ttl.min(self.max_supported_ttl);
-                active_ttl = Some(ttl);
-                if seen_breakpoints.insert(index) {
-                    breakpoints.push(CacheBreakpoint {
-                        block_index: index,
-                        ttl,
-                    });
-                }
-            }
-
-            if block.is_message_end
-                && block.message_index.is_some()
-                && let Some(ttl) = active_ttl
-                && seen_breakpoints.insert(index)
-            {
                 breakpoints.push(CacheBreakpoint {
                     block_index: index,
                     ttl,
@@ -309,8 +291,6 @@ struct PendingBlock {
     value: serde_json::Value,
     tokens: i32,
     breakpoint_ttl: Option<Duration>,
-    message_index: Option<usize>,
-    is_message_end: bool,
 }
 
 fn flatten_cacheable_blocks(payload: &MessagesRequest) -> Vec<PendingBlock> {
@@ -330,8 +310,6 @@ fn flatten_cacheable_blocks(payload: &MessagesRequest) -> Vec<PendingBlock> {
                 })),
                 tokens: count_tool_definition_tokens(tool) as i32,
                 breakpoint_ttl,
-                message_index: None,
-                is_message_end: false,
             });
         }
     }
@@ -351,8 +329,6 @@ fn flatten_cacheable_blocks(payload: &MessagesRequest) -> Vec<PendingBlock> {
                 })),
                 tokens: count_system_message_tokens(block) as i32,
                 breakpoint_ttl,
-                message_index: None,
-                is_message_end: false,
             });
         }
     }
@@ -402,35 +378,29 @@ fn flatten_message_blocks(message_index: usize, message: &Message) -> Vec<Pendin
                 "text": text,
             }),
             None,
-            true,
         )],
-        serde_json::Value::Array(blocks) => {
-            let last_block_index = blocks.len().saturating_sub(1);
-            blocks
-                .iter()
-                .enumerate()
-                .map(|(block_index, block)| {
-                    let breakpoint_ttl = extract_cache_ttl(block);
-                    let mut normalized = block.clone();
-                    strip_cache_control(&mut normalized);
-                    build_message_block(
-                        message_index,
-                        &message.role,
-                        block_index,
-                        normalized,
-                        breakpoint_ttl,
-                        block_index == last_block_index,
-                    )
-                })
-                .collect()
-        }
+        serde_json::Value::Array(blocks) => blocks
+            .iter()
+            .enumerate()
+            .map(|(block_index, block)| {
+                let breakpoint_ttl = extract_cache_ttl(block);
+                let mut normalized = block.clone();
+                strip_cache_control(&mut normalized);
+                build_message_block(
+                    message_index,
+                    &message.role,
+                    block_index,
+                    normalized,
+                    breakpoint_ttl,
+                )
+            })
+            .collect(),
         other => vec![build_message_block(
             message_index,
             &message.role,
             0,
             other.clone(),
             None,
-            true,
         )],
     }
 }
@@ -441,7 +411,6 @@ fn build_message_block(
     block_index: usize,
     block: serde_json::Value,
     breakpoint_ttl: Option<Duration>,
-    is_message_end: bool,
 ) -> PendingBlock {
     PendingBlock {
         tokens: count_message_content_tokens(&block) as i32,
@@ -453,8 +422,6 @@ fn build_message_block(
             "block": block,
         })),
         breakpoint_ttl,
-        message_index: Some(message_index),
-        is_message_end,
     }
 }
 
@@ -491,7 +458,7 @@ fn strip_cache_control(value: &mut serde_json::Value) {
 fn minimum_cacheable_tokens_for_model(model: &str) -> i32 {
     let model_lower = model.to_lowercase();
 
-    if model_lower.contains("opus") {
+    if model_lower.contains("opus") || model_lower.contains("haiku-4") {
         4096
     } else if model_lower.contains("haiku-3") || model_lower.contains("haiku_3") {
         2048
@@ -800,9 +767,11 @@ mod tests {
             .map(|bp| bp.cumulative_tokens)
             .unwrap_or(0);
 
+        // Both requests share the same explicit breakpoint, so the prefix cache hit
+        // covers the same tokens. No new cache creation since there's no new explicit breakpoint.
         assert!(matched_tokens > 0);
         assert_eq!(result.cache_read_input_tokens, matched_tokens);
-        assert!(result.cache_creation_input_tokens > 0);
+        assert_eq!(result.cache_creation_input_tokens, 0);
     }
 
     #[test]
@@ -823,7 +792,9 @@ mod tests {
     }
 
     #[test]
-    fn message_end_after_anchor_creates_additional_breakpoint() {
+    fn only_explicit_breakpoints_are_created() {
+        // With the implicit message-end breakpoint logic removed,
+        // only blocks with explicit cache_control create breakpoints.
         let req = build_request(vec![
             msg("user", cache_text(&long_cacheable_text())),
             msg("assistant", serde_json::json!("R1")),
@@ -831,11 +802,12 @@ mod tests {
         let tracker = CacheTracker::new(Duration::from_secs(3600));
         let profile = tracker.build_profile(&req, estimate_input_tokens(&req));
         let breakpoints = profile.cacheable_breakpoints();
-        assert!(breakpoints.len() >= 2);
+        // Only one breakpoint: the explicit cache_control on the user message
+        assert_eq!(breakpoints.len(), 1);
     }
 
     #[test]
-    fn multi_turn_history_extends_cacheable_prefix() {
+    fn multi_turn_history_same_breakpoint_gives_same_cache_read() {
         let tracker = CacheTracker::new(Duration::from_secs(3600));
         let long = long_cacheable_text();
 
@@ -846,6 +818,8 @@ mod tests {
         assert!(result1.cache_creation_input_tokens > 0);
         tracker.update(1, &profile1);
 
+        // Adding more turns without new explicit breakpoints doesn't extend cache.
+        // The same prefix is read from cache each time.
         let req2 = build_request(vec![
             msg("user", cache_text(&long)),
             msg("assistant", serde_json::json!(medium_turn_text("R1"))),
@@ -855,6 +829,7 @@ mod tests {
         let profile2 = tracker.build_profile(&req2, total2);
         let result2 = tracker.compute(1, &profile2);
         assert!(result2.cache_read_input_tokens >= result1.cache_creation_input_tokens);
+        assert_eq!(result2.cache_creation_input_tokens, 0);
         tracker.update(1, &profile2);
 
         let req3 = build_request(vec![
@@ -867,11 +842,16 @@ mod tests {
         let total3 = estimate_input_tokens(&req3);
         let profile3 = tracker.build_profile(&req3, total3);
         let result3 = tracker.compute(1, &profile3);
-        assert!(result3.cache_read_input_tokens > result2.cache_read_input_tokens);
+        // Same explicit breakpoint → same cache read tokens
+        assert_eq!(
+            result3.cache_read_input_tokens,
+            result2.cache_read_input_tokens
+        );
+        assert_eq!(result3.cache_creation_input_tokens, 0);
     }
 
     #[test]
-    fn ttl_is_inherited_for_derived_message_breakpoints() {
+    fn explicit_1h_ttl_is_preserved_on_breakpoint() {
         let req = build_request(vec![
             msg(
                 "user",
@@ -887,12 +867,9 @@ mod tests {
         let tracker = CacheTracker::new(Duration::from_secs(3600));
         let profile = tracker.build_profile(&req, estimate_input_tokens(&req));
         let breakpoints = profile.cacheable_breakpoints();
-        assert!(breakpoints.len() >= 2);
-        assert!(
-            breakpoints
-                .iter()
-                .all(|bp| bp.ttl == Duration::from_secs(3600))
-        );
+        // Only one explicit breakpoint with 1h TTL
+        assert_eq!(breakpoints.len(), 1);
+        assert_eq!(breakpoints[0].ttl, Duration::from_secs(3600));
     }
 
     #[test]
