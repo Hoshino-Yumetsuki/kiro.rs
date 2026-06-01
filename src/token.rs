@@ -17,7 +17,7 @@ use parking_lot::RwLock;
 use std::sync::OnceLock;
 
 const TOKENS_PER_TOOL: u64 = 150;
-const TOKENS_PER_MESSAGE: u64 = 4;
+const TOKENS_PER_MESSAGE: u64 = 0;
 
 /// Count Tokens API 配置
 #[derive(Clone, Default)]
