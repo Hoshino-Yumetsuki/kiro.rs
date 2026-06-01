@@ -14,28 +14,28 @@ use parking_lot::RwLock;
 
 use crate::common::auth;
 use crate::kiro::provider::KiroProvider;
-use crate::model::config::CompressionConfig;
+use crate::model::config::{CompressionConfig, PromptCacheMode};
 
 use super::cache_tracker::CacheTracker;
 use super::types::ErrorResponse;
 
 #[derive(Clone)]
 pub(crate) struct PromptCacheSnapshot {
-    pub accounting_enabled: bool,
+    pub mode: PromptCacheMode,
     pub ttl_seconds: u64,
     pub tracker: Arc<CacheTracker>,
 }
 
 pub struct PromptCacheRuntime {
-    accounting_enabled: bool,
+    mode: PromptCacheMode,
     ttl_seconds: u64,
     tracker: Arc<CacheTracker>,
 }
 
 impl PromptCacheRuntime {
-    pub fn new(ttl_seconds: u64, accounting_enabled: bool) -> Self {
+    pub fn new(ttl_seconds: u64, mode: PromptCacheMode) -> Self {
         Self {
-            accounting_enabled,
+            mode,
             ttl_seconds,
             tracker: Arc::new(CacheTracker::new(Duration::from_secs(ttl_seconds))),
         }
@@ -43,15 +43,15 @@ impl PromptCacheRuntime {
 
     pub(crate) fn snapshot(&self) -> PromptCacheSnapshot {
         PromptCacheSnapshot {
-            accounting_enabled: self.accounting_enabled,
+            mode: self.mode,
             ttl_seconds: self.ttl_seconds,
             tracker: self.tracker.clone(),
         }
     }
 
-    pub fn update(&mut self, ttl_seconds: Option<u64>, accounting_enabled: Option<bool>) {
-        if let Some(value) = accounting_enabled {
-            self.accounting_enabled = value;
+    pub fn update(&mut self, ttl_seconds: Option<u64>, mode: Option<PromptCacheMode>) {
+        if let Some(value) = mode {
+            self.mode = value;
         }
 
         if let Some(value) = ttl_seconds

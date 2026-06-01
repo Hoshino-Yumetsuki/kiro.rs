@@ -26,23 +26,14 @@ pub struct WebSearchCacheContext {
     pub cache_creation_1h_input_tokens: i32,
 }
 
-fn billed_input_tokens(
-    input_tokens: i32,
-    cache_creation_input_tokens: i32,
-    cache_read_input_tokens: i32,
-) -> i32 {
-    input_tokens
-        .saturating_sub(cache_creation_input_tokens)
-        .saturating_sub(cache_read_input_tokens)
-        .max(0)
-}
+use crate::anthropic::usage::billed_input_tokens;
 
 fn resolve_cache_usage(
     cache_tracker: &crate::anthropic::cache_tracker::CacheTracker,
-    credential_id: u64,
+    key: &crate::anthropic::cache_tracker::CacheKey,
     profile: &crate::anthropic::cache_tracker::CacheProfile,
 ) -> WebSearchCacheContext {
-    let result = cache_tracker.compute(credential_id, profile);
+    let result = cache_tracker.compute(key, profile);
     WebSearchCacheContext {
         cache_creation_input_tokens: result.cache_creation_input_tokens,
         cache_read_input_tokens: result.cache_read_input_tokens,
@@ -670,8 +661,12 @@ pub async fn handle_websearch_request(
         Ok(api_result) => {
             let resolved_cache_context = match (cache_tracker, cache_profile) {
                 (Some(cache_tracker), Some(cache_profile)) => {
+                    let cache_key = match payload.metadata.as_ref().and_then(|m| m.user_id.as_deref()) {
+                        Some(uid) => crate::anthropic::cache_tracker::CacheKey::User(uid.to_string()),
+                        None => crate::anthropic::cache_tracker::CacheKey::Global,
+                    };
                     let resolved_cache_context =
-                        resolve_cache_usage(cache_tracker, api_result.credential_id, cache_profile);
+                        resolve_cache_usage(cache_tracker, &cache_key, cache_profile);
                     tracing::info!(
                         credential_id = api_result.credential_id,
                         final_cache_creation_input_tokens =
@@ -680,7 +675,7 @@ pub async fn handle_websearch_request(
                             resolved_cache_context.cache_read_input_tokens,
                         "Resolved cache usage for websearch request"
                     );
-                    cache_tracker.update(api_result.credential_id, cache_profile);
+                    cache_tracker.update(&cache_key, cache_profile);
                     Some(resolved_cache_context)
                 }
                 _ => None,
@@ -831,7 +826,7 @@ mod tests {
 
     #[test]
     fn test_resolve_cache_usage_uses_real_credential_id() {
-        use crate::anthropic::cache_tracker::CacheTracker;
+        use crate::anthropic::cache_tracker::{CacheKey, CacheTracker};
         use crate::anthropic::types::{CacheControl, Message, SystemMessage};
 
         let long_text = "This is a cached websearch system block. ".repeat(100);
@@ -866,12 +861,13 @@ mod tests {
             payload.tools.clone(),
         ) as i32;
         let profile = tracker.build_profile(&payload, total);
+        let key = CacheKey::User("websearch_user".into());
 
-        let initial = resolve_cache_usage(&tracker, 7, &profile);
+        let initial = resolve_cache_usage(&tracker, &key, &profile);
         assert_eq!(initial.cache_read_input_tokens, 0);
 
-        tracker.update(7, &profile);
-        let resolved = resolve_cache_usage(&tracker, 7, &profile);
+        tracker.update(&key, &profile);
+        let resolved = resolve_cache_usage(&tracker, &key, &profile);
         assert!(resolved.cache_read_input_tokens > 0);
     }
 

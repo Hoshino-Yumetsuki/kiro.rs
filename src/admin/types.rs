@@ -398,8 +398,8 @@ pub struct GlobalConfigResponse {
     pub credential_rpm: Option<u32>,
     /// Prompt Cache TTL（秒）
     pub prompt_cache_ttl_seconds: u64,
-    /// 是否启用本地 Prompt Cache usage 记账
-    pub prompt_cache_accounting_enabled: bool,
+    /// Prompt Cache 模式（Off/Simulated/Upstream）
+    pub prompt_cache_mode: crate::model::config::PromptCacheMode,
     /// 默认端点名称（凭据未显式指定 endpoint 时使用）
     pub default_endpoint: String,
     /// 是否启用凭据冷却机制
@@ -444,8 +444,8 @@ pub struct UpdateGlobalConfigRequest {
     pub credential_rpm: Option<Option<u32>>,
     /// Prompt Cache TTL（秒，可选，仅支持 300 或 3600）
     pub prompt_cache_ttl_seconds: Option<u64>,
-    /// 是否启用本地 Prompt Cache usage 记账（可选）
-    pub prompt_cache_accounting_enabled: Option<bool>,
+    /// Prompt Cache 模式（可选）
+    pub prompt_cache_mode: Option<crate::model::config::PromptCacheMode>,
     /// 默认端点名称（可选）
     pub default_endpoint: Option<String>,
     /// 是否启用凭据冷却机制（可选）
