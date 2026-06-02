@@ -29,6 +29,7 @@ pub(crate) mod structured_output;
 mod tool_compression;
 mod truncation;
 pub mod types;
+mod usage;
 mod websearch;
 
 pub use middleware::PromptCacheRuntime;

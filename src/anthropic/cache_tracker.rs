@@ -14,6 +14,15 @@ const DEFAULT_CACHE_TTL: Duration = Duration::from_secs(300);
 const ONE_HOUR_CACHE_TTL: Duration = Duration::from_secs(3600);
 const PREFIX_LOOKBACK_LIMIT: usize = 10;
 
+/// Prompt cache 分桶键：按 user_id 隔离，无 user_id 时落入 Global 共享桶。
+///
+/// 与凭据 ID 解耦后，缓存命中不再受凭据故障转移影响。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum CacheKey {
+    User(String),
+    Global,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CacheResult {
     pub cache_read_input_tokens: i32,
@@ -50,7 +59,7 @@ struct CacheEntry {
 }
 
 struct CachedCheckpointStore {
-    by_credential: HashMap<u64, HashMap<[u8; 32], CacheEntry>>,
+    by_user: HashMap<CacheKey, HashMap<[u8; 32], CacheEntry>>,
 }
 
 pub struct CacheTracker {
@@ -62,7 +71,7 @@ impl CacheTracker {
     pub fn new(max_supported_ttl: Duration) -> Self {
         Self {
             entries: Mutex::new(CachedCheckpointStore {
-                by_credential: HashMap::new(),
+                by_user: HashMap::new(),
             }),
             max_supported_ttl,
         }
@@ -123,7 +132,7 @@ impl CacheTracker {
         }
     }
 
-    pub fn compute(&self, credential_id: u64, profile: &CacheProfile) -> CacheResult {
+    pub fn compute(&self, key: &CacheKey, profile: &CacheProfile) -> CacheResult {
         let Some(last_breakpoint) = profile.last_cacheable_breakpoint() else {
             return CacheResult::default();
         };
@@ -133,11 +142,10 @@ impl CacheTracker {
 
         let now = Instant::now();
         let mut entries = self.entries.lock();
-        prune_expired(&mut entries.by_credential, now);
+        prune_expired(&mut entries.by_user, now);
 
-        let Some(credential_entries) = entries.by_credential.get_mut(&credential_id) else {
-            // 首次请求，需要创建缓存
-            tracing::debug!(credential_id, "首次请求，无缓存条目");
+        let Some(user_entries) = entries.by_user.get_mut(key) else {
+            tracing::debug!(?key, "首次请求，无缓存条目");
             let (cache_5m, cache_1h) = compute_ttl_breakdown(profile, 0);
             return CacheResult {
                 cache_read_input_tokens: 0,
@@ -148,8 +156,8 @@ impl CacheTracker {
         };
 
         tracing::debug!(
-            credential_id,
-            entry_count = credential_entries.len(),
+            ?key,
+            entry_count = user_entries.len(),
             "查找缓存匹配"
         );
 
@@ -165,7 +173,7 @@ impl CacheTracker {
 
         'outer: for breakpoint in candidate_breakpoints {
             let candidate = &profile.blocks[breakpoint.block_index];
-            if let Some(entry) = credential_entries.get_mut(&candidate.prefix_fingerprint) {
+            if let Some(entry) = user_entries.get_mut(&candidate.prefix_fingerprint) {
                 if entry.expires_at <= now {
                     continue;
                 }
@@ -179,7 +187,7 @@ impl CacheTracker {
         let (cache_5m, cache_1h) = compute_ttl_breakdown(profile, matched_tokens);
 
         tracing::debug!(
-            credential_id,
+            ?key,
             matched_tokens,
             new_tokens,
             cache_5m,
@@ -195,25 +203,25 @@ impl CacheTracker {
         }
     }
 
-    pub fn update(&self, credential_id: u64, profile: &CacheProfile) {
+    pub fn update(&self, key: &CacheKey, profile: &CacheProfile) {
         let now = Instant::now();
         let mut entries = self.entries.lock();
-        prune_expired(&mut entries.by_credential, now);
+        prune_expired(&mut entries.by_user, now);
 
-        let credential_entries = entries.by_credential.entry(credential_id).or_default();
+        let user_entries = entries.by_user.entry(key.clone()).or_default();
 
         for breakpoint in profile.cacheable_breakpoints() {
             let block = &profile.blocks[breakpoint.block_index];
             let next_expiry = now + breakpoint.ttl;
 
-            match credential_entries.get_mut(&block.prefix_fingerprint) {
+            match user_entries.get_mut(&block.prefix_fingerprint) {
                 Some(existing) => {
                     existing.token_count = existing.token_count.max(block.cumulative_tokens);
                     existing.ttl = existing.ttl.max(breakpoint.ttl);
                     existing.expires_at = existing.expires_at.max(next_expiry);
                 }
                 None => {
-                    credential_entries.insert(
+                    user_entries.insert(
                         block.prefix_fingerprint,
                         CacheEntry {
                             token_count: block.cumulative_tokens,
@@ -467,10 +475,10 @@ fn minimum_cacheable_tokens_for_model(model: &str) -> i32 {
     }
 }
 
-fn prune_expired(entries: &mut HashMap<u64, HashMap<[u8; 32], CacheEntry>>, now: Instant) {
-    entries.retain(|_, credential_entries| {
-        credential_entries.retain(|_, entry| entry.expires_at > now);
-        !credential_entries.is_empty()
+fn prune_expired(entries: &mut HashMap<CacheKey, HashMap<[u8; 32], CacheEntry>>, now: Instant) {
+    entries.retain(|_, user_entries| {
+        user_entries.retain(|_, entry| entry.expires_at > now);
+        !user_entries.is_empty()
     });
 }
 
@@ -616,13 +624,13 @@ mod tests {
             build_request_with_system(vec![msg("user", serde_json::json!("hello"))], system1);
         let total1 = estimate_input_tokens(&req1);
         let profile1 = tracker.build_profile(&req1, total1);
-        tracker.update(1, &profile1);
+        tracker.update(&CacheKey::User("test_user".into()), &profile1);
 
         let req2 =
             build_request_with_system(vec![msg("user", serde_json::json!("hello"))], system2);
         let total2 = estimate_input_tokens(&req2);
         let profile2 = tracker.build_profile(&req2, total2);
-        let result = tracker.compute(1, &profile2);
+        let result = tracker.compute(&CacheKey::User("test_user".into()), &profile2);
         let expected_match = profile2
             .last_cacheable_breakpoint()
             .map(|bp| bp.cumulative_tokens.min(profile2.total_input_tokens()))
@@ -658,13 +666,13 @@ mod tests {
             build_request_with_system(vec![msg("user", serde_json::json!("hello"))], system1);
         let total1 = estimate_input_tokens(&req1);
         let profile1 = tracker.build_profile(&req1, total1);
-        tracker.update(1, &profile1);
+        tracker.update(&CacheKey::User("test_user".into()), &profile1);
 
         let req2 =
             build_request_with_system(vec![msg("user", serde_json::json!("hello"))], system2);
         let total2 = estimate_input_tokens(&req2);
         let profile2 = tracker.build_profile(&req2, total2);
-        let result = tracker.compute(1, &profile2);
+        let result = tracker.compute(&CacheKey::User("test_user".into()), &profile2);
 
         assert_eq!(result.cache_read_input_tokens, 0);
     }
@@ -675,7 +683,7 @@ mod tests {
         let req = build_request(vec![msg("user", cache_text(&long_cacheable_text()))]);
         let total = estimate_input_tokens(&req);
         let profile = tracker.build_profile(&req, total);
-        let result = tracker.compute(1, &profile);
+        let result = tracker.compute(&CacheKey::User("test_user".into()), &profile);
 
         assert_eq!(result.cache_read_input_tokens, 0);
         assert_eq!(
@@ -693,7 +701,7 @@ mod tests {
         let req1 = build_request(vec![msg("user", cache_text(&long_cacheable_text()))]);
         let total1 = estimate_input_tokens(&req1);
         let profile1 = tracker.build_profile(&req1, total1);
-        tracker.update(1, &profile1);
+        tracker.update(&CacheKey::User("test_user".into()), &profile1);
 
         let req2 = build_request(vec![
             msg("user", serde_json::json!(long_cacheable_text())),
@@ -708,7 +716,7 @@ mod tests {
         ]);
         let total2 = estimate_input_tokens(&req2);
         let profile2 = tracker.build_profile(&req2, total2);
-        let result = tracker.compute(1, &profile2);
+        let result = tracker.compute(&CacheKey::User("test_user".into()), &profile2);
 
         assert_eq!(result.cache_read_input_tokens, 0);
         assert!(result.cache_creation_input_tokens > 0);
@@ -720,12 +728,12 @@ mod tests {
         let req1 = build_request(vec![msg("user", cache_text(&long_cacheable_text()))]);
         let total1 = estimate_input_tokens(&req1);
         let profile1 = tracker.build_profile(&req1, total1);
-        tracker.update(1, &profile1);
+        tracker.update(&CacheKey::User("test_user".into()), &profile1);
 
         let req2 = build_request(vec![msg("user", cache_text(&long_cacheable_text()))]);
         let total2 = estimate_input_tokens(&req2);
         let profile2 = tracker.build_profile(&req2, total2);
-        let result = tracker.compute(1, &profile2);
+        let result = tracker.compute(&CacheKey::User("test_user".into()), &profile2);
 
         assert_eq!(
             result.cache_read_input_tokens,
@@ -748,7 +756,7 @@ mod tests {
         ]);
         let total1 = estimate_input_tokens(&req1);
         let profile1 = tracker.build_profile(&req1, total1);
-        tracker.update(1, &profile1);
+        tracker.update(&CacheKey::User("test_user".into()), &profile1);
 
         let req2 = build_request(vec![
             msg("user", cache_text(&long_cacheable_text())),
@@ -760,7 +768,7 @@ mod tests {
         ]);
         let total2 = estimate_input_tokens(&req2);
         let profile2 = tracker.build_profile(&req2, total2);
-        let result = tracker.compute(1, &profile2);
+        let result = tracker.compute(&CacheKey::User("test_user".into()), &profile2);
 
         let matched_tokens = profile1
             .last_cacheable_breakpoint()
@@ -814,9 +822,9 @@ mod tests {
         let req1 = build_request(vec![msg("user", cache_text(&long))]);
         let total1 = estimate_input_tokens(&req1);
         let profile1 = tracker.build_profile(&req1, total1);
-        let result1 = tracker.compute(1, &profile1);
+        let result1 = tracker.compute(&CacheKey::User("test_user".into()), &profile1);
         assert!(result1.cache_creation_input_tokens > 0);
-        tracker.update(1, &profile1);
+        tracker.update(&CacheKey::User("test_user".into()), &profile1);
 
         // Adding more turns without new explicit breakpoints doesn't extend cache.
         // The same prefix is read from cache each time.
@@ -827,10 +835,10 @@ mod tests {
         ]);
         let total2 = estimate_input_tokens(&req2);
         let profile2 = tracker.build_profile(&req2, total2);
-        let result2 = tracker.compute(1, &profile2);
+        let result2 = tracker.compute(&CacheKey::User("test_user".into()), &profile2);
         assert!(result2.cache_read_input_tokens >= result1.cache_creation_input_tokens);
         assert_eq!(result2.cache_creation_input_tokens, 0);
-        tracker.update(1, &profile2);
+        tracker.update(&CacheKey::User("test_user".into()), &profile2);
 
         let req3 = build_request(vec![
             msg("user", cache_text(&long)),
@@ -841,7 +849,7 @@ mod tests {
         ]);
         let total3 = estimate_input_tokens(&req3);
         let profile3 = tracker.build_profile(&req3, total3);
-        let result3 = tracker.compute(1, &profile3);
+        let result3 = tracker.compute(&CacheKey::User("test_user".into()), &profile3);
         // Same explicit breakpoint → same cache read tokens
         assert_eq!(
             result3.cache_read_input_tokens,
@@ -886,7 +894,7 @@ mod tests {
         });
         let total1 = estimate_input_tokens(&req1);
         let profile1 = tracker.build_profile(&req1, total1);
-        tracker.update(1, &profile1);
+        tracker.update(&CacheKey::User("test_user".into()), &profile1);
 
         let mut req2 = build_request(vec![msg("user", cache_text(&long_cacheable_text()))]);
         req2.tools.as_mut().unwrap().push(Tool {
@@ -899,7 +907,7 @@ mod tests {
         });
         let total2 = estimate_input_tokens(&req2);
         let profile2 = tracker.build_profile(&req2, total2);
-        let result = tracker.compute(1, &profile2);
+        let result = tracker.compute(&CacheKey::User("test_user".into()), &profile2);
 
         assert_eq!(result.cache_read_input_tokens, 0);
         assert_eq!(
@@ -909,5 +917,45 @@ mod tests {
                 .map(|bp| bp.cumulative_tokens)
                 .unwrap_or(0)
         );
+    }
+
+    #[test]
+    fn distinct_user_keys_do_not_share_cache_entries() {
+        let tracker = CacheTracker::new(Duration::from_secs(3600));
+        let req = build_request(vec![msg("user", cache_text(&long_cacheable_text()))]);
+        let total = estimate_input_tokens(&req);
+        let profile = tracker.build_profile(&req, total);
+
+        tracker.update(&CacheKey::User("alice".into()), &profile);
+
+        let bob_result = tracker.compute(&CacheKey::User("bob".into()), &profile);
+        assert_eq!(
+            bob_result.cache_read_input_tokens, 0,
+            "different user should miss the cache"
+        );
+        assert!(bob_result.cache_creation_input_tokens > 0);
+
+        let alice_result = tracker.compute(&CacheKey::User("alice".into()), &profile);
+        assert!(
+            alice_result.cache_read_input_tokens > 0,
+            "alice should still hit her own cache"
+        );
+    }
+
+    #[test]
+    fn global_key_is_shared_across_calls() {
+        let tracker = CacheTracker::new(Duration::from_secs(3600));
+        let req = build_request(vec![msg("user", cache_text(&long_cacheable_text()))]);
+        let total = estimate_input_tokens(&req);
+        let profile = tracker.build_profile(&req, total);
+
+        tracker.update(&CacheKey::Global, &profile);
+
+        let result = tracker.compute(&CacheKey::Global, &profile);
+        assert!(
+            result.cache_read_input_tokens > 0,
+            "Global key should hit cache previously written under Global"
+        );
+        assert_eq!(result.cache_creation_input_tokens, 0);
     }
 }

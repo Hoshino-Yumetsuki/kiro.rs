@@ -5,6 +5,7 @@ use std::convert::Infallible;
 use crate::kiro::model::events::Event;
 use crate::kiro::model::requests::kiro::KiroRequest;
 use crate::kiro::parser::decoder::EventStreamDecoder;
+use crate::model::config::PromptCacheMode;
 use crate::token;
 use anyhow::Error;
 use axum::{
@@ -48,6 +49,8 @@ struct TagEchoNormalizer {
 struct StreamRequestContext<'a> {
     cache_tracker: Option<&'a std::sync::Arc<crate::anthropic::cache_tracker::CacheTracker>>,
     cache_profile: Option<&'a crate::anthropic::cache_tracker::CacheProfile>,
+    cache_key: crate::anthropic::cache_tracker::CacheKey,
+    cache_mode: PromptCacheMode,
     request_body: &'a str,
     model: &'a str,
     input_tokens: i32,
@@ -66,6 +69,8 @@ struct NonStreamRequestContext<'a> {
     user_id: Option<&'a str>,
     cache_tracker: Option<&'a std::sync::Arc<crate::anthropic::cache_tracker::CacheTracker>>,
     cache_profile: Option<&'a crate::anthropic::cache_tracker::CacheProfile>,
+    cache_key: crate::anthropic::cache_tracker::CacheKey,
+    cache_mode: PromptCacheMode,
     structured_output: bool,
     rewriter_config: Option<&'a super::rewriter::RewriterConfig>,
 }
@@ -80,31 +85,16 @@ fn build_cache_profile(
 
 fn compute_cache_usage(
     cache_tracker: &crate::anthropic::cache_tracker::CacheTracker,
-    credential_id: u64,
+    key: &crate::anthropic::cache_tracker::CacheKey,
     profile: &crate::anthropic::cache_tracker::CacheProfile,
 ) -> CacheUsageContext {
-    let result = cache_tracker.compute(credential_id, profile);
+    let result = cache_tracker.compute(key, profile);
     CacheUsageContext {
         cache_creation_input_tokens: result.cache_creation_input_tokens,
         cache_read_input_tokens: result.cache_read_input_tokens,
         cache_creation_5m_input_tokens: result.cache_creation_5m_input_tokens,
         cache_creation_1h_input_tokens: result.cache_creation_1h_input_tokens,
     }
-}
-
-fn provisional_cache_usage(
-    cache_tracker: &crate::anthropic::cache_tracker::CacheTracker,
-    profile: &crate::anthropic::cache_tracker::CacheProfile,
-) -> CacheUsageContext {
-    compute_cache_usage(cache_tracker, 0, profile)
-}
-
-fn resolved_cache_usage(
-    cache_tracker: &crate::anthropic::cache_tracker::CacheTracker,
-    credential_id: u64,
-    profile: &crate::anthropic::cache_tracker::CacheProfile,
-) -> CacheUsageContext {
-    compute_cache_usage(cache_tracker, credential_id, profile)
 }
 
 fn inject_cache_usage_fields(usage: &mut serde_json::Value, cache_context: CacheUsageContext) {
@@ -114,17 +104,6 @@ fn inject_cache_usage_fields(usage: &mut serde_json::Value, cache_context: Cache
         "ephemeral_5m_input_tokens": cache_context.cache_creation_5m_input_tokens,
         "ephemeral_1h_input_tokens": cache_context.cache_creation_1h_input_tokens
     });
-}
-
-fn billed_input_tokens(
-    input_tokens: i32,
-    cache_creation_input_tokens: i32,
-    cache_read_input_tokens: i32,
-) -> i32 {
-    input_tokens
-        .saturating_sub(cache_creation_input_tokens)
-        .saturating_sub(cache_read_input_tokens)
-        .max(0)
 }
 
 fn is_input_too_long_error(err: &Error) -> bool {
@@ -1265,8 +1244,12 @@ pub async fn post_messages(
     // 预处理 URL 类型图片：下载并转换为 base64 内联数据
     resolve_image_urls(&mut payload).await;
 
-    // 提取 user_id 用于凭据亲和性
+    // 提取 user_id 用于凭据亲和性 + 缓存分桶
     let user_id = payload.metadata.as_ref().and_then(|m| m.user_id.clone());
+    let cache_key = match user_id.as_deref() {
+        Some(uid) => crate::anthropic::cache_tracker::CacheKey::User(uid.to_string()),
+        None => crate::anthropic::cache_tracker::CacheKey::Global,
+    };
 
     // 估算压缩前 input tokens（需在 convert_request 之前，因为后者会消费压缩）
     let estimated_input_tokens = token::count_all_tokens(
@@ -1303,7 +1286,8 @@ pub async fn post_messages(
     };
 
     // 检查是否为纯 WebSearch 请求（仅 web_search 单工具 / tool_choice 强制 / 前缀匹配）
-    let websearch_cache_profile = prompt_cache.accounting_enabled.then(|| {
+    let cache_enabled = !matches!(prompt_cache.mode, PromptCacheMode::Off);
+    let websearch_cache_profile = cache_enabled.then(|| {
         build_cache_profile(
             prompt_cache.tracker.as_ref(),
             &payload,
@@ -1315,7 +1299,7 @@ pub async fn post_messages(
         return websearch::handle_websearch_request(
             provider,
             &payload,
-            if prompt_cache.accounting_enabled {
+            if cache_enabled {
                 Some(&prompt_cache.tracker)
             } else {
                 None
@@ -1353,25 +1337,18 @@ pub async fn post_messages(
         return build_local_text_response(&payload, &answer, estimated_input_tokens);
     }
 
-    let cache_profile = prompt_cache.accounting_enabled.then(|| {
+    let cache_profile = cache_enabled.then(|| {
         build_cache_profile(
             prompt_cache.tracker.as_ref(),
             &payload,
             estimated_input_tokens,
         )
     });
-    let provisional_cache_context = cache_profile
-        .as_ref()
-        .map(|profile| provisional_cache_usage(prompt_cache.tracker.as_ref(), profile))
-        .unwrap_or_default();
 
     tracing::info!(
-        provisional_cache_creation_input_tokens =
-            provisional_cache_context.cache_creation_input_tokens,
-        provisional_cache_read_input_tokens = provisional_cache_context.cache_read_input_tokens,
-        cache_accounting_enabled = prompt_cache.accounting_enabled,
+        cache_mode = ?prompt_cache.mode,
         prompt_cache_ttl_seconds = prompt_cache.ttl_seconds,
-        "Computed provisional cache usage for /v1/messages"
+        "Prompt cache configuration for /v1/messages"
     );
 
     // 转换请求
@@ -1537,10 +1514,10 @@ pub async fn post_messages(
     if payload.stream {
         // 流式响应
         let stream_request = StreamRequestContext {
-            cache_tracker: prompt_cache
-                .accounting_enabled
-                .then_some(&prompt_cache.tracker),
+            cache_tracker: cache_enabled.then_some(&prompt_cache.tracker),
             cache_profile: cache_profile.as_ref(),
+            cache_key: cache_key.clone(),
+            cache_mode: prompt_cache.mode,
             request_body: &request_body,
             model: &payload.model,
             input_tokens: estimated_input_tokens,
@@ -1563,10 +1540,10 @@ pub async fn post_messages(
             input_tokens: estimated_input_tokens,
             tool_name_map,
             user_id: user_id.as_deref(),
-            cache_tracker: prompt_cache
-                .accounting_enabled
-                .then_some(&prompt_cache.tracker),
+            cache_tracker: cache_enabled.then_some(&prompt_cache.tracker),
             cache_profile: cache_profile.as_ref(),
+            cache_key: cache_key.clone(),
+            cache_mode: prompt_cache.mode,
             structured_output,
             rewriter_config: if rewriter_config.enabled {
                 Some(&rewriter_config)
@@ -1590,16 +1567,18 @@ async fn handle_stream_request(
         Err(e) => return map_kiro_provider_error_to_response(context.request_body, e),
     };
 
+    // 缓存计算和落库都使用 user_id 维度的 CacheKey；
+    // 凭据故障转移不会丢失上一轮缓存条目。
     let final_cache_context = match (context.cache_tracker, context.cache_profile) {
         (Some(tracker), Some(profile)) => {
-            let resolved = resolved_cache_usage(tracker, api_result.credential_id, profile);
+            let resolved = compute_cache_usage(tracker, &context.cache_key, profile);
             tracing::info!(
                 credential_id = api_result.credential_id,
                 final_cache_creation_input_tokens = resolved.cache_creation_input_tokens,
                 final_cache_read_input_tokens = resolved.cache_read_input_tokens,
                 "Resolved cache usage for stream request"
             );
-            tracker.update(api_result.credential_id, profile);
+            tracker.update(&context.cache_key, profile);
             Some(resolved)
         }
         _ => None,
@@ -1624,6 +1603,7 @@ async fn handle_stream_request(
         context.tool_name_map,
         context.structured_output,
         rewrite_keywords,
+        context.cache_mode,
     );
     ctx.rewrite_enabled = is_response_rewrite_enabled(context.rewriter_config);
 
@@ -1870,14 +1850,14 @@ async fn handle_non_stream_request(
 
     let final_cache_context = match (context.cache_tracker, context.cache_profile) {
         (Some(tracker), Some(profile)) => {
-            let resolved = resolved_cache_usage(tracker, api_result.credential_id, profile);
+            let resolved = compute_cache_usage(tracker, &context.cache_key, profile);
             tracing::info!(
                 credential_id = api_result.credential_id,
                 final_cache_creation_input_tokens = resolved.cache_creation_input_tokens,
                 final_cache_read_input_tokens = resolved.cache_read_input_tokens,
                 "Resolved cache usage for non-stream request"
             );
-            tracker.update(api_result.credential_id, profile);
+            tracker.update(&context.cache_key, profile);
             Some(resolved)
         }
         _ => None,
@@ -1909,8 +1889,7 @@ async fn handle_non_stream_request(
     let mut tool_uses: Vec<serde_json::Value> = Vec::new();
     let mut has_tool_use = false;
     let mut stop_reason = "end_turn".to_string();
-    #[cfg(feature = "sensitive-logs")]
-    let mut context_input_tokens_for_log: Option<i32> = None;
+    let mut context_input_tokens: Option<i32> = None;
 
     // 推理内容收集（原生 reasoningContentEvent）
     let mut reasoning_text = String::new();
@@ -2011,10 +1990,7 @@ async fn handle_non_stream_request(
                             let actual_input_tokens =
                                 (context_usage.context_usage_percentage * context_window / 100.0)
                                     as i32;
-                            #[cfg(feature = "sensitive-logs")]
-                            {
-                                context_input_tokens_for_log = Some(actual_input_tokens);
-                            }
+                            context_input_tokens = Some(actual_input_tokens);
                             // 上下文使用量达到 100% 时，设置 stop_reason 为 max_tokens
                             if context_usage.context_usage_percentage >= 100.0 {
                                 stop_reason = "max_tokens".to_string();
@@ -2045,10 +2021,10 @@ async fn handle_non_stream_request(
                                 redacted_thinking_blocks.push(redacted.clone());
                             }
                         }
-                        Event::Exception { exception_type, .. } => {
-                            if exception_type == "ContentLengthExceededException" {
-                                stop_reason = "max_tokens".to_string();
-                            }
+                        Event::Exception { exception_type, .. }
+                            if exception_type == "ContentLengthExceededException" =>
+                        {
+                            stop_reason = "max_tokens".to_string();
                         }
                         _ => {}
                     }
@@ -2139,38 +2115,50 @@ async fn handle_non_stream_request(
     // 估算输出 tokens（加上改写消耗的额外 token）
     let output_tokens = token::estimate_output_tokens(&content) + rewrite_extra_output_tokens;
 
-    // non-stream 与 stream 保持一致：始终使用本地估算的 input_tokens 作为最终口径。
-    let final_input_tokens = context.input_tokens;
-    let billed_input_tokens = final_cache_context
-        .map(|ctx| {
-            billed_input_tokens(
-                final_input_tokens,
-                ctx.cache_creation_input_tokens,
-                ctx.cache_read_input_tokens,
-            )
-        })
-        .unwrap_or(final_input_tokens);
+    // 按 PromptCacheMode 决定 total input_tokens 的来源：
+    // - Off:       仅使用本地估算
+    // - Simulated/Upstream: 优先使用上游 contextUsageEvent (~ 实际值)，无则回退到本地估算
+    //
+    // TODO: 当上游开始发送 messageMetadataEvent.tokenUsage 时，优先使用其计算结果。
+    let local_estimate = context.input_tokens;
+    let total_input_tokens = match context.cache_mode {
+        PromptCacheMode::Off => local_estimate,
+        PromptCacheMode::Upstream | PromptCacheMode::Simulated => {
+            context_input_tokens.unwrap_or(local_estimate)
+        }
+    };
 
-    #[cfg(feature = "sensitive-logs")]
+    let response_input_tokens = match context.cache_mode {
+        PromptCacheMode::Off | PromptCacheMode::Upstream => total_input_tokens,
+        PromptCacheMode::Simulated => final_cache_context
+            .map(|ctx| {
+                crate::anthropic::usage::billed_input_tokens(
+                    total_input_tokens,
+                    ctx.cache_creation_input_tokens,
+                    ctx.cache_read_input_tokens,
+                )
+            })
+            .unwrap_or(total_input_tokens),
+    };
+
     tracing::info!(
-        estimated_input_tokens = context.input_tokens,
-        context_input_tokens = ?context_input_tokens_for_log,
-        final_input_tokens,
-        billed_input_tokens,
+        estimated_input_tokens = local_estimate,
+        context_input_tokens = ?context_input_tokens,
+        total_input_tokens,
+        response_input_tokens,
         output_tokens,
-        "Non-stream usage: final_input_tokens={} (估算值), context_input_tokens={} (上游值), billed_input_tokens={}, output_tokens={}",
-        final_input_tokens,
-        context_input_tokens_for_log.map_or("N/A".to_string(), |v| v.to_string()),
-        billed_input_tokens,
-        output_tokens
+        cache_mode = ?context.cache_mode,
+        "Non-stream usage summary"
     );
 
     let response_body = {
         let mut usage = json!({
-            "input_tokens": billed_input_tokens,
+            "input_tokens": response_input_tokens,
             "output_tokens": output_tokens
         });
-        if let Some(cache_context) = final_cache_context {
+        if matches!(context.cache_mode, PromptCacheMode::Simulated)
+            && let Some(cache_context) = final_cache_context
+        {
             inject_cache_usage_fields(&mut usage, cache_context);
         }
 
@@ -2322,7 +2310,7 @@ pub async fn count_tokens(
     ) as i32;
 
     Json(CountTokensResponse {
-        input_tokens: total_tokens.max(1) as i32,
+        input_tokens: total_tokens.max(1),
     })
 }
 
@@ -2624,7 +2612,8 @@ mod tests {
         let expected = token::count_tokens(system_text) as i32;
 
         let cache_profile = build_cache_profile(&cache_tracker, &payload, expected);
-        let cache_context = compute_cache_usage(&cache_tracker, 0, &cache_profile);
+        let cache_key = crate::anthropic::cache_tracker::CacheKey::Global;
+        let cache_context = compute_cache_usage(&cache_tracker, &cache_key, &cache_profile);
 
         // 验证 cache_creation_input_tokens 等于 system message 的 token 数
         assert_eq!(cache_context.cache_creation_input_tokens, expected);
@@ -2632,7 +2621,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolved_cache_usage_uses_real_credential_id() {
+    fn test_resolved_cache_usage_uses_user_key() {
         let payload = sample_messages_request();
         let estimated = token::count_all_tokens(
             payload.model.clone(),
@@ -2643,19 +2632,21 @@ mod tests {
         let cache_tracker =
             crate::anthropic::cache_tracker::CacheTracker::new(std::time::Duration::from_secs(300));
         let cache_profile = build_cache_profile(&cache_tracker, &payload, estimated);
+        let cache_key = crate::anthropic::cache_tracker::CacheKey::User("user_42".into());
 
-        let provisional = provisional_cache_usage(&cache_tracker, &cache_profile);
-        assert_eq!(provisional.cache_read_input_tokens, 0);
+        let initial = compute_cache_usage(&cache_tracker, &cache_key, &cache_profile);
+        assert_eq!(initial.cache_read_input_tokens, 0);
 
-        cache_tracker.update(42, &cache_profile);
-        let resolved = resolved_cache_usage(&cache_tracker, 42, &cache_profile);
+        cache_tracker.update(&cache_key, &cache_profile);
+        let resolved = compute_cache_usage(&cache_tracker, &cache_key, &cache_profile);
 
         assert!(resolved.cache_read_input_tokens > 0);
-        assert!(resolved.cache_creation_input_tokens <= provisional.cache_creation_input_tokens);
+        assert!(resolved.cache_creation_input_tokens <= initial.cache_creation_input_tokens);
     }
 
     #[test]
     fn test_billed_input_tokens_subtracts_cache_tokens() {
+        use crate::anthropic::usage::billed_input_tokens;
         assert_eq!(billed_input_tokens(3829, 0, 1788), 2041);
         assert_eq!(billed_input_tokens(4131, 544, 2544), 1043);
         assert_eq!(billed_input_tokens(10, 3, 20), 0);
@@ -2663,6 +2654,7 @@ mod tests {
 
     #[test]
     fn test_non_stream_usage_uses_estimated_input_tokens_as_base() {
+        use crate::anthropic::usage::billed_input_tokens;
         let estimated_input_tokens = 1493;
         let upstream_context_input_tokens = 3106;
         let cache_creation_input_tokens = 9;
@@ -3072,8 +3064,10 @@ mod tests {
             additional_model_request_fields: None,
         };
         let mut request_body = serde_json::to_string(&kiro_request).unwrap();
-        let mut config = CompressionConfig::default();
-        config.adaptive_compression = false;
+        let config = CompressionConfig {
+            adaptive_compression: false,
+            ..Default::default()
+        };
 
         let outcome = adaptive_shrink_request_body(
             &mut kiro_request,
