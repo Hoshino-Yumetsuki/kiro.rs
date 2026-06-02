@@ -143,6 +143,46 @@ fn is_all_credentials_cooling_down_error(err: &Error) -> (bool, Option<u64>) {
     (true, retry)
 }
 
+/// Header name for the Anthropic compatibility warning emitted when a request
+/// uses a feature that this proxy cannot fully forward to the Kiro upstream.
+const ANTHROPIC_COMPAT_WARNING_HEADER: &str = "x-anthropic-compat-warning";
+
+/// Header value emitted when `tool_choice` is set to a non-default value.
+const TOOL_CHOICE_IGNORED_WARNING: &str = "tool_choice ignored by upstream";
+
+/// Returns `Some(value)` when the request's `tool_choice` is non-default and
+/// therefore silently dropped by the proxy. A non-default `tool_choice` is any
+/// value other than `null`, missing, or `{"type":"auto"}`.
+fn tool_choice_warning_value(payload: &MessagesRequest) -> Option<&serde_json::Value> {
+    let value = payload.tool_choice.as_ref()?;
+    if value.is_null() {
+        return None;
+    }
+    let is_auto = value
+        .as_object()
+        .and_then(|obj| obj.get("type"))
+        .and_then(|t| t.as_str())
+        == Some("auto");
+    if is_auto {
+        return None;
+    }
+    Some(value)
+}
+
+/// Attach the `x-anthropic-compat-warning` header for a non-default
+/// `tool_choice`.
+fn attach_tool_choice_warning_header(mut response: Response, should_warn: bool) -> Response {
+    if !should_warn {
+        return response;
+    }
+    if let Ok(value) = axum::http::HeaderValue::from_str(TOOL_CHOICE_IGNORED_WARNING) {
+        response
+            .headers_mut()
+            .insert(ANTHROPIC_COMPAT_WARNING_HEADER, value);
+    }
+    response
+}
+
 /// 网络错误关键字（is_transient_upstream_error 和 is_network_error 共用）
 const NETWORK_ERROR_PATTERNS: &[&str] = &[
     "error sending request",
@@ -1236,13 +1276,27 @@ pub async fn post_messages(
     State(state): State<AppState>,
     JsonExtractor(mut payload): JsonExtractor<MessagesRequest>,
 ) -> Response {
+    let should_warn = tool_choice_warning_value(&payload).is_some();
+    if should_warn {
+        tracing::debug!(target: "anthropic_compat", "tool_choice {:?} ignored", payload.tool_choice);
+    }
+
+    let response = post_messages_inner(uri, state, &mut payload).await;
+    attach_tool_choice_warning_header(response, should_warn)
+}
+
+async fn post_messages_inner(
+    uri: axum::http::Uri,
+    state: AppState,
+    payload: &mut MessagesRequest,
+) -> Response {
     // 读取压缩配置快照（读锁 + clone，避免持锁跨 await）
     let compression_config = state.compression_config.read().clone();
     let rewriter_config = state.rewriter_config.read().clone();
     let prompt_cache = state.prompt_cache_snapshot();
 
     // 预处理 URL 类型图片：下载并转换为 base64 内联数据
-    resolve_image_urls(&mut payload).await;
+    resolve_image_urls(payload).await;
 
     // 提取 user_id 用于凭据亲和性 + 缓存分桶
     let user_id = payload.metadata.as_ref().and_then(|m| m.user_id.clone());
@@ -1313,7 +1367,7 @@ pub async fn post_messages(
     // 混合工具场景：剔除 web_search 后转发上游
     if websearch::has_web_search_tool(&payload) {
         tracing::info!("检测到混合工具列表中的 web_search，剔除后转发上游");
-        websearch::strip_web_search_tools(&mut payload);
+        websearch::strip_web_search_tools(payload);
     }
 
     // 剔除空 text content block（客户端可能将 tool_use-only 响应中的空 text block 写回 history）
