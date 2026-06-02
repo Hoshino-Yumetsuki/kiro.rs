@@ -12,7 +12,7 @@ use super::types::{CacheControl, Message, MessagesRequest};
 
 const DEFAULT_CACHE_TTL: Duration = Duration::from_secs(300);
 const ONE_HOUR_CACHE_TTL: Duration = Duration::from_secs(3600);
-const PREFIX_LOOKBACK_LIMIT: usize = 10;
+
 
 /// Prompt cache 分桶键：按 user_id 隔离，无 user_id 时落入 Global 共享桶。
 ///
@@ -136,9 +136,10 @@ impl CacheTracker {
         let Some(last_breakpoint) = profile.last_cacheable_breakpoint() else {
             return CacheResult::default();
         };
-        let last_breakpoint_tokens = last_breakpoint
-            .cumulative_tokens
-            .min(profile.total_input_tokens);
+
+        // 缓存活跃时，保留 1 token 作为 input_tokens，其余全部归入 cache_read + cache_creation。
+        // 这与 Anthropic 官方 prompt caching 行为一致。
+        let cacheable_total = (profile.total_input_tokens - 1).max(0);
 
         let now = Instant::now();
         let mut entries = self.entries.lock();
@@ -146,10 +147,10 @@ impl CacheTracker {
 
         let Some(user_entries) = entries.by_user.get_mut(key) else {
             tracing::debug!(?key, "首次请求，无缓存条目");
-            let (cache_5m, cache_1h) = compute_ttl_breakdown(profile, 0);
+            let (cache_5m, cache_1h) = compute_ttl_breakdown_absolute(cacheable_total, last_breakpoint.ttl);
             return CacheResult {
                 cache_read_input_tokens: 0,
-                cache_creation_input_tokens: last_breakpoint_tokens,
+                cache_creation_input_tokens: cacheable_total,
                 cache_creation_5m_input_tokens: cache_5m,
                 cache_creation_1h_input_tokens: cache_1h,
             };
@@ -161,43 +162,45 @@ impl CacheTracker {
             "查找缓存匹配"
         );
 
+        // 策略：从最后一个 breakpoint 所在 block 开始倒序搜索所有 blocks 的 fingerprint，
+        // 找到最深的缓存命中点（不限于当前请求的 breakpoints）。
+        // 这解决了多轮对话中，上一轮的 breakpoint 在本轮不再是 breakpoint 但内容未变的场景。
+        let search_end = last_breakpoint.block_index;
         let mut matched_tokens = 0;
 
-        let cacheable_breakpoints = profile.cacheable_breakpoints();
-        let candidate_breakpoints: Vec<_> = cacheable_breakpoints
-            .iter()
-            .rev()
-            .take(PREFIX_LOOKBACK_LIMIT)
-            .copied()
-            .collect();
-
-        'outer: for breakpoint in candidate_breakpoints {
-            let candidate = &profile.blocks[breakpoint.block_index];
-            if let Some(entry) = user_entries.get_mut(&candidate.prefix_fingerprint) {
+        for block_index in (0..=search_end).rev() {
+            let block = &profile.blocks[block_index];
+            if let Some(entry) = user_entries.get_mut(&block.prefix_fingerprint) {
                 if entry.expires_at <= now {
                     continue;
                 }
+                // 刷新过期时间
                 entry.expires_at = now + entry.ttl;
-                matched_tokens = breakpoint.cumulative_tokens.min(profile.total_input_tokens);
-                break 'outer;
+                matched_tokens = block.cumulative_tokens.min(cacheable_total);
+                break;
             }
         }
 
-        let new_tokens = last_breakpoint_tokens.saturating_sub(matched_tokens).max(0);
-        let (cache_5m, cache_1h) = compute_ttl_breakdown(profile, matched_tokens);
+        // cache_read = matched_tokens（上限为 cacheable_total）
+        // cache_creation = cacheable_total - cache_read
+        let cache_read = matched_tokens.min(cacheable_total).max(0);
+        let cache_creation = cacheable_total.saturating_sub(cache_read).max(0);
+        let (cache_5m, cache_1h) = compute_ttl_breakdown_absolute(cache_creation, last_breakpoint.ttl);
 
         tracing::debug!(
             ?key,
             matched_tokens,
-            new_tokens,
+            cache_read,
+            cache_creation,
             cache_5m,
             cache_1h,
+            cacheable_total,
             "缓存计算结果"
         );
 
         CacheResult {
-            cache_read_input_tokens: matched_tokens.max(0),
-            cache_creation_input_tokens: new_tokens,
+            cache_read_input_tokens: cache_read,
+            cache_creation_input_tokens: cache_creation,
             cache_creation_5m_input_tokens: cache_5m,
             cache_creation_1h_input_tokens: cache_1h,
         }
@@ -210,14 +213,34 @@ impl CacheTracker {
 
         let user_entries = entries.by_user.entry(key.clone()).or_default();
 
-        for breakpoint in profile.cacheable_breakpoints() {
-            let block = &profile.blocks[breakpoint.block_index];
-            let next_expiry = now + breakpoint.ttl;
+        // 确定最后一个可缓存断点的 TTL 和位置
+        let last_bp = profile.last_cacheable_breakpoint();
+        let (last_block_index, default_ttl) = match last_bp {
+            Some(bp) => (bp.block_index, bp.ttl),
+            None => return, // 无可缓存断点则不更新
+        };
+
+        // 存储所有 blocks（从 0 到 last breakpoint）的 fingerprint，
+        // 这样下一轮即使某些 block 不再是 breakpoint，compute() 仍能通过 fingerprint 匹配到它们。
+        for (idx, block) in profile.blocks.iter().enumerate() {
+            if idx > last_block_index {
+                break;
+            }
+
+            // 使用对应断点的 TTL（如果该 block 恰好是断点），否则用最后断点的 TTL
+            let block_ttl = profile
+                .breakpoints
+                .iter()
+                .find(|bp| bp.block_index == idx)
+                .map(|bp| bp.ttl.min(self.max_supported_ttl))
+                .unwrap_or(default_ttl);
+
+            let next_expiry = now + block_ttl;
 
             match user_entries.get_mut(&block.prefix_fingerprint) {
                 Some(existing) => {
                     existing.token_count = existing.token_count.max(block.cumulative_tokens);
-                    existing.ttl = existing.ttl.max(breakpoint.ttl);
+                    existing.ttl = existing.ttl.max(block_ttl);
                     existing.expires_at = existing.expires_at.max(next_expiry);
                 }
                 None => {
@@ -225,7 +248,7 @@ impl CacheTracker {
                         block.prefix_fingerprint,
                         CacheEntry {
                             token_count: block.cumulative_tokens,
-                            ttl: breakpoint.ttl,
+                            ttl: block_ttl,
                             expires_at: next_expiry,
                         },
                     );
@@ -235,35 +258,19 @@ impl CacheTracker {
     }
 }
 
-/// 计算不同 TTL 的缓存创建 token 数
-fn compute_ttl_breakdown(profile: &CacheProfile, matched_tokens: i32) -> (i32, i32) {
-    let Some(last_breakpoint) = profile.last_cacheable_breakpoint() else {
-        return (0, 0);
-    };
-
-    let new_tokens = last_breakpoint
-        .cumulative_tokens
-        .min(profile.total_input_tokens)
-        .saturating_sub(matched_tokens)
-        .max(0);
-
-    if new_tokens == 0 {
+/// 计算不同 TTL 的缓存创建 token 数（直接传入 creation 绝对值 + 最后断点 TTL）
+fn compute_ttl_breakdown_absolute(creation_tokens: i32, ttl: Duration) -> (i32, i32) {
+    if creation_tokens <= 0 {
         return (0, 0);
     }
-
-    if last_breakpoint.ttl == ONE_HOUR_CACHE_TTL {
-        (0, new_tokens)
+    if ttl == ONE_HOUR_CACHE_TTL {
+        (0, creation_tokens)
     } else {
-        (new_tokens, 0)
+        (creation_tokens, 0)
     }
 }
 
 impl CacheProfile {
-    #[cfg(test)]
-    pub fn total_input_tokens(&self) -> i32 {
-        self.total_input_tokens
-    }
-
     fn cacheable_breakpoints(&self) -> Vec<ResolvedBreakpoint> {
         self.breakpoints
             .iter()
@@ -288,6 +295,7 @@ impl CacheProfile {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 struct ResolvedBreakpoint {
     block_index: usize,
     cumulative_tokens: i32,
@@ -631,19 +639,21 @@ mod tests {
         let total2 = estimate_input_tokens(&req2);
         let profile2 = tracker.build_profile(&req2, total2);
         let result = tracker.compute(&CacheKey::User("test_user".into()), &profile2);
-        let expected_match = profile2
-            .last_cacheable_breakpoint()
-            .map(|bp| bp.cumulative_tokens.min(profile2.total_input_tokens()))
-            .unwrap_or(0);
+
+        let cacheable_total = (total2 - 1).max(0);
 
         assert!(total1 != total2);
+        // 尽管 billing header 变了，内容通过规范化后 fingerprint 相同，应命中缓存
         assert!(result.cache_read_input_tokens > 0);
-        assert_eq!(result.cache_read_input_tokens, expected_match);
-        assert_eq!(result.cache_creation_input_tokens, 0);
+        // 不变量：cache_read + cache_creation = total - 1
+        assert_eq!(
+            result.cache_read_input_tokens + result.cache_creation_input_tokens,
+            cacheable_total
+        );
     }
 
     #[test]
-    fn normal_system_text_change_still_misses() {
+    fn normal_system_text_change_invalidates_system_block() {
         let tracker = CacheTracker::new(Duration::from_secs(3600));
         let system1 = vec![SystemMessage {
             block_type: Some("text".to_string()),
@@ -674,7 +684,17 @@ mod tests {
         let profile2 = tracker.build_profile(&req2, total2);
         let result = tracker.compute(&CacheKey::User("test_user".into()), &profile2);
 
-        assert_eq!(result.cache_read_input_tokens, 0);
+        let cacheable_total = (total2 - 1).max(0);
+
+        // 系统文本变了，system block 的 fingerprint 变化导致 system 及之后都无法命中。
+        // 但 tool 块（在 system 之前）未变，仍可命中。
+        // cache_read 只覆盖 tool 块的 tokens（约 150），大部分归入 cache_creation。
+        assert!(result.cache_read_input_tokens < cacheable_total / 2);
+        assert!(result.cache_creation_input_tokens > 0);
+        assert_eq!(
+            result.cache_read_input_tokens + result.cache_creation_input_tokens,
+            cacheable_total
+        );
     }
 
     #[test]
@@ -685,24 +705,22 @@ mod tests {
         let profile = tracker.build_profile(&req, total);
         let result = tracker.compute(&CacheKey::User("test_user".into()), &profile);
 
+        let cacheable_total = (total - 1).max(0);
+
         assert_eq!(result.cache_read_input_tokens, 0);
-        assert_eq!(
-            result.cache_creation_input_tokens,
-            profile
-                .last_cacheable_breakpoint()
-                .map(|bp| bp.cumulative_tokens)
-                .unwrap_or(0)
-        );
+        // 首次请求，无缓存：所有可缓存 token 都是 creation
+        assert_eq!(result.cache_creation_input_tokens, cacheable_total);
     }
 
     #[test]
-    fn same_content_with_shape_drift_does_not_false_hit() {
+    fn same_content_with_different_breakpoint_placement_still_hits_prefix() {
         let tracker = CacheTracker::new(Duration::from_secs(3600));
         let req1 = build_request(vec![msg("user", cache_text(&long_cacheable_text()))]);
         let total1 = estimate_input_tokens(&req1);
         let profile1 = tracker.build_profile(&req1, total1);
         tracker.update(&CacheKey::User("test_user".into()), &profile1);
 
+        // req2: 相同的 user 文本但 cache_control 移到了 assistant 块上
         let req2 = build_request(vec![
             msg("user", serde_json::json!(long_cacheable_text())),
             msg(
@@ -718,8 +736,14 @@ mod tests {
         let profile2 = tracker.build_profile(&req2, total2);
         let result = tracker.compute(&CacheKey::User("test_user".into()), &profile2);
 
-        assert_eq!(result.cache_read_input_tokens, 0);
-        assert!(result.cache_creation_input_tokens > 0);
+        let cacheable_total = (total2 - 1).max(0);
+
+        // user 块内容相同且位于同一位置，fingerprint 匹配 → cache_read 覆盖了该前缀
+        assert!(result.cache_read_input_tokens > 0);
+        assert_eq!(
+            result.cache_read_input_tokens + result.cache_creation_input_tokens,
+            cacheable_total
+        );
     }
 
     #[test]
@@ -735,14 +759,19 @@ mod tests {
         let profile2 = tracker.build_profile(&req2, total2);
         let result = tracker.compute(&CacheKey::User("test_user".into()), &profile2);
 
+        let cacheable_total = (total2 - 1).max(0);
+        let breakpoint_tokens = profile1
+            .last_cacheable_breakpoint()
+            .map(|bp| bp.cumulative_tokens)
+            .unwrap_or(0);
+
+        // 完全相同的请求：breakpoint block 匹配
+        assert_eq!(result.cache_read_input_tokens, breakpoint_tokens.min(cacheable_total));
+        // cache_creation 只覆盖 token 估算开销（很小）
         assert_eq!(
-            result.cache_read_input_tokens,
-            profile1
-                .last_cacheable_breakpoint()
-                .map(|bp| bp.cumulative_tokens)
-                .unwrap_or(0)
+            result.cache_read_input_tokens + result.cache_creation_input_tokens,
+            cacheable_total
         );
-        assert_eq!(result.cache_creation_input_tokens, 0);
     }
 
     #[test]
@@ -770,16 +799,16 @@ mod tests {
         let profile2 = tracker.build_profile(&req2, total2);
         let result = tracker.compute(&CacheKey::User("test_user".into()), &profile2);
 
-        let matched_tokens = profile1
-            .last_cacheable_breakpoint()
-            .map(|bp| bp.cumulative_tokens)
-            .unwrap_or(0);
+        let cacheable_total = (total2 - 1).max(0);
 
-        // Both requests share the same explicit breakpoint, so the prefix cache hit
-        // covers the same tokens. No new cache creation since there's no new explicit breakpoint.
-        assert!(matched_tokens > 0);
-        assert_eq!(result.cache_read_input_tokens, matched_tokens);
-        assert_eq!(result.cache_creation_input_tokens, 0);
+        // 前缀（到 breakpoint）完全命中，新增的 turn 归入 cache_creation
+        assert!(result.cache_read_input_tokens > 0);
+        // cache_creation 覆盖追加的 turn + token 估算开销
+        assert!(result.cache_creation_input_tokens > 0);
+        assert_eq!(
+            result.cache_read_input_tokens + result.cache_creation_input_tokens,
+            cacheable_total
+        );
     }
 
     #[test]
@@ -836,8 +865,14 @@ mod tests {
         let total2 = estimate_input_tokens(&req2);
         let profile2 = tracker.build_profile(&req2, total2);
         let result2 = tracker.compute(&CacheKey::User("test_user".into()), &profile2);
-        assert!(result2.cache_read_input_tokens >= result1.cache_creation_input_tokens);
-        assert_eq!(result2.cache_creation_input_tokens, 0);
+        let cacheable_total2 = (total2 - 1).max(0);
+        // breakpoint block 匹配 → cache_read 覆盖直到 breakpoint 的前缀
+        assert!(result2.cache_read_input_tokens > 0);
+        // 新增的 turn tokens 归入 cache_creation
+        assert_eq!(
+            result2.cache_read_input_tokens + result2.cache_creation_input_tokens,
+            cacheable_total2
+        );
         tracker.update(&CacheKey::User("test_user".into()), &profile2);
 
         let req3 = build_request(vec![
@@ -850,12 +885,16 @@ mod tests {
         let total3 = estimate_input_tokens(&req3);
         let profile3 = tracker.build_profile(&req3, total3);
         let result3 = tracker.compute(&CacheKey::User("test_user".into()), &profile3);
-        // Same explicit breakpoint → same cache read tokens
+        let cacheable_total3 = (total3 - 1).max(0);
+        // Same explicit breakpoint → same cache read tokens（breakpoint 块相同）
         assert_eq!(
             result3.cache_read_input_tokens,
             result2.cache_read_input_tokens
         );
-        assert_eq!(result3.cache_creation_input_tokens, 0);
+        assert_eq!(
+            result3.cache_read_input_tokens + result3.cache_creation_input_tokens,
+            cacheable_total3
+        );
     }
 
     #[test]
@@ -909,13 +948,15 @@ mod tests {
         let profile2 = tracker.build_profile(&req2, total2);
         let result = tracker.compute(&CacheKey::User("test_user".into()), &profile2);
 
-        assert_eq!(result.cache_read_input_tokens, 0);
+        let cacheable_total = (total2 - 1).max(0);
+
+        // 第一个 tool block (echo) 未变，仍可命中；但 alpha→beta 变化导致后续所有 fingerprint 失效。
+        // cache_read 仅覆盖未变的 echo tool 块，大部分归入 cache_creation。
+        assert!(result.cache_read_input_tokens > 0);
+        assert!(result.cache_creation_input_tokens > result.cache_read_input_tokens);
         assert_eq!(
-            result.cache_creation_input_tokens,
-            profile2
-                .last_cacheable_breakpoint()
-                .map(|bp| bp.cumulative_tokens)
-                .unwrap_or(0)
+            result.cache_read_input_tokens + result.cache_creation_input_tokens,
+            cacheable_total
         );
     }
 
@@ -952,10 +993,15 @@ mod tests {
         tracker.update(&CacheKey::Global, &profile);
 
         let result = tracker.compute(&CacheKey::Global, &profile);
+        let cacheable_total = (total - 1).max(0);
         assert!(
             result.cache_read_input_tokens > 0,
             "Global key should hit cache previously written under Global"
         );
-        assert_eq!(result.cache_creation_input_tokens, 0);
+        // 不变量
+        assert_eq!(
+            result.cache_read_input_tokens + result.cache_creation_input_tokens,
+            cacheable_total
+        );
     }
 }

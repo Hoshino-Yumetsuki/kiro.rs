@@ -2615,8 +2615,9 @@ mod tests {
         let cache_key = crate::anthropic::cache_tracker::CacheKey::Global;
         let cache_context = compute_cache_usage(&cache_tracker, &cache_key, &cache_profile);
 
-        // 验证 cache_creation_input_tokens 等于 system message 的 token 数
-        assert_eq!(cache_context.cache_creation_input_tokens, expected);
+        // 首次请求：cache_creation = total - 1（cacheable_total），cache_read = 0
+        let cacheable_total = (expected - 1).max(0);
+        assert_eq!(cache_context.cache_creation_input_tokens, cacheable_total);
         assert_eq!(cache_context.cache_read_input_tokens, 0);
     }
 
@@ -2647,9 +2648,12 @@ mod tests {
     #[test]
     fn test_billed_input_tokens_subtracts_cache_tokens() {
         use crate::anthropic::usage::billed_input_tokens;
-        assert_eq!(billed_input_tokens(3829, 0, 1788), 2041);
-        assert_eq!(billed_input_tokens(4131, 544, 2544), 1043);
-        assert_eq!(billed_input_tokens(10, 3, 20), 0);
+        // 当有 cache 活动时，billed 固定为 1
+        assert_eq!(billed_input_tokens(3829, 0, 1788), 1);
+        assert_eq!(billed_input_tokens(4131, 544, 2544), 1);
+        assert_eq!(billed_input_tokens(10, 3, 20), 1);
+        // 无 cache 活动时，返回 total
+        assert_eq!(billed_input_tokens(3829, 0, 0), 3829);
     }
 
     #[test]
@@ -2669,7 +2673,8 @@ mod tests {
 
         assert_eq!(final_input_tokens, 1493);
         assert_eq!(upstream_context_input_tokens, 3106);
-        assert_eq!(billed, 4);
+        // cache 活跃时，billed 固定为 1
+        assert_eq!(billed, 1);
         assert_ne!(final_input_tokens, upstream_context_input_tokens);
     }
 

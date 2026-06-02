@@ -896,7 +896,7 @@ mod tests {
             .find(|e| e.event == "message_delta")
             .expect("should have message_delta");
 
-        assert_eq!(message_start.data["message"]["usage"]["input_tokens"], 107);
+        assert_eq!(message_start.data["message"]["usage"]["input_tokens"], 1);
         assert_eq!(
             message_start.data["message"]["usage"]["cache_creation_input_tokens"],
             7
