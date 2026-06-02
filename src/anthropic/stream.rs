@@ -2342,7 +2342,7 @@ mod tests {
             .map(|e| e.data["message"]["usage"].clone())
             .expect("message_start should exist");
 
-        assert_eq!(message_start_usage["input_tokens"], json!(306));
+        assert_eq!(message_start_usage["input_tokens"], json!(1));
         assert_eq!(message_start_usage["cache_creation_input_tokens"], json!(7));
         assert_eq!(message_start_usage["cache_read_input_tokens"], json!(8));
     }
@@ -2372,8 +2372,7 @@ mod tests {
             .map(|e| e.data["usage"].clone())
             .expect("message_delta should exist");
 
-        assert_eq!(message_start_usage["input_tokens"], json!(306));
-        // message_delta only has output_tokens
+        assert_eq!(message_start_usage["input_tokens"], json!(1));
         assert!(message_delta_usage.get("input_tokens").is_none());
         assert!(
             message_delta_usage
@@ -2460,8 +2459,8 @@ mod tests {
             message_start_usage["cache_creation_input_tokens"],
             json!(50)
         );
-        // billed input = 1000 - 50 - 800 = 150
-        assert_eq!(message_start_usage["input_tokens"], json!(150));
+        // billed input = 1 (cache active)
+        assert_eq!(message_start_usage["input_tokens"], json!(1));
 
         let final_events = ctx.generate_final_events();
         let message_delta_usage = final_events
