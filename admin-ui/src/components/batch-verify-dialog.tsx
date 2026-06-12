@@ -114,7 +114,7 @@ export function BatchVerifyDialog({
           {/* 提示信息 */}
           {verifying && (
             <p className="text-xs text-muted-foreground">
-              💡 验活过程中每次请求间隔 2 秒，防止被封号。你可以关闭此窗口，验活会在后台继续进行。
+              💡 验活请求会并行执行以加快完成速度。你可以关闭此窗口，验活会在后台继续进行。
             </p>
           )}
         </div>
