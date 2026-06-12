@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type MouseEvent } from 'react'
 import { toast } from 'sonner'
 import { Wallet, RefreshCw, Loader2 } from 'lucide-react'
 import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card'
@@ -39,7 +39,7 @@ interface CredentialCardProps {
   cachedBalance?: CachedBalanceInfo
   onViewBalance: (id: number, forceRefresh: boolean) => void
   selected: boolean
-  onToggleSelect: () => void
+  onToggleSelect: (event?: MouseEvent) => void
   balance: BalanceResponse | null
   loadingBalance: boolean
 }
@@ -212,7 +212,7 @@ export function CredentialCard({
           <div className="flex items-center gap-2">
             <Checkbox
               checked={selected}
-              onCheckedChange={onToggleSelect}
+              onClick={(event) => onToggleSelect(event)}
               aria-label={`选择凭据 ${displayEmail}`}
             />
             <Tooltip>

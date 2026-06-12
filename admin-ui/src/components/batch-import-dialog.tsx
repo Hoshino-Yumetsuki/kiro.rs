@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import PQueue from 'p-queue'
 import { toast } from 'sonner'
 import { CheckCircle2, XCircle, AlertCircle, Loader2 } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   Dialog,
   DialogContent,
@@ -9,8 +11,8 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { useCredentials, useAddCredential, useDeleteCredential } from '@/hooks/use-credentials'
-import { getCredentialBalance, setCredentialDisabled } from '@/api/credentials'
+import { useCredentials } from '@/hooks/use-credentials'
+import { addCredential, deleteCredential, getCredentialBalance, setCredentialDisabled } from '@/api/credentials'
 import { formatKiroUsageWithUsd } from '@/lib/format'
 import { extractErrorMessage, sha256Hex } from '@/lib/utils'
 
@@ -52,10 +54,10 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
   const [progress, setProgress] = useState({ current: 0, total: 0 })
   const [currentProcessing, setCurrentProcessing] = useState<string>('')
   const [results, setResults] = useState<VerificationResult[]>([])
+  const cancelImportRef = useRef<(() => void) | null>(null)
 
+  const queryClient = useQueryClient()
   const { data: existingCredentials } = useCredentials()
-  const { mutateAsync: addCredential } = useAddCredential()
-  const { mutateAsync: deleteCredential } = useDeleteCredential()
 
   const rollbackCredential = async (id: number): Promise<{ success: boolean; error?: string }> => {
     try {
@@ -134,13 +136,22 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
       const reservedOauthHashes = new Set(existingOauthHashes)
       const reservedApiKeyHashes = new Set(existingApiKeyHashes)
       let completedCount = 0
+      const controller = new AbortController()
+      const queue = new PQueue({ concurrency: 5 })
+      cancelImportRef.current = () => {
+        queue.clear()
+        controller.abort()
+      }
 
       setCurrentProcessing(`正在并行处理 ${credentials.length} 个凭据`)
 
       // 4. 并行导入并验活
-      await Promise.all(credentials.map(async (cred, i) => {
-        const isApiKeyCred = !!(cred.kiroApiKey?.trim()) || cred.authMethod === 'api_key'
-        let addedCredId: number | null = null
+      credentials.forEach((cred, i) => {
+        void queue.add(async () => {
+          if (controller.signal.aborted) return
+
+          const isApiKeyCred = !!(cred.kiroApiKey?.trim()) || cred.authMethod === 'api_key'
+          let addedCredId: number | null = null
 
         try {
           setResults(prev => {
@@ -234,7 +245,7 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
               apiRegion: cred.apiRegion?.trim() || undefined,
               machineId: cred.machineId?.trim() || undefined,
               endpoint: cred.endpoint?.trim() || undefined,
-            })
+            }, controller.signal)
             : await addCredential({
               refreshToken: cred.refreshToken!.trim(),
               authMethod: (() => {
@@ -252,10 +263,11 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
               priority: cred.priority || 0,
               machineId: cred.machineId?.trim() || undefined,
               endpoint: cred.endpoint?.trim() || undefined,
-            })
+            }, controller.signal)
 
           addedCredId = addedCred.credentialId
-          const balance = await getCredentialBalance(addedCred.credentialId)
+          const balance = await getCredentialBalance(addedCred.credentialId, controller.signal)
+          if (controller.signal.aborted) return
 
           successCount++
           setCurrentProcessing(addedCred.email ? `验活成功: ${addedCred.email}` : `验活成功: 凭据 ${i + 1}`)
@@ -288,6 +300,8 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
             rollbackSkippedCount++
           }
 
+          if (controller.signal.aborted) return
+
           failCount++
           setResults(prev => {
             const newResults = [...prev]
@@ -305,7 +319,17 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
           completedCount++
           setProgress({ current: completedCount, total: credentials.length })
         }
-      }))
+        })
+      })
+
+      await queue.onIdle()
+      cancelImportRef.current = null
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
+
+      if (controller.signal.aborted) {
+        setCurrentProcessing('已取消导入')
+        return
+      }
 
       // 显示结果
       if (failCount === 0 && duplicateCount === 0) {
@@ -323,6 +347,7 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
     } catch (error) {
       toast.error('导入失败: ' + extractErrorMessage(error))
     } finally {
+      cancelImportRef.current = null
       setImporting(false)
     }
   }
@@ -473,12 +498,15 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
             type="button"
             variant="outline"
             onClick={() => {
+              if (importing) {
+                cancelImportRef.current?.()
+                return
+              }
               onOpenChange(false)
               resetForm()
             }}
-            disabled={importing}
           >
-            {importing ? '验活中…' : results.length > 0 ? '关闭' : '取消'}
+            {importing ? '取消导入' : results.length > 0 ? '关闭' : '取消'}
           </Button>
           {results.length === 0 && (
             <Button
