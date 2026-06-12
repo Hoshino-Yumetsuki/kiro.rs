@@ -686,8 +686,10 @@ pub struct MultiTokenManager {
     proxy: RwLock<Option<ProxyConfig>>,
     /// 凭据条目列表
     entries: Mutex<Vec<CredentialEntry>>,
-    /// Token 刷新锁，确保同一时间只有一个刷新操作
-    refresh_lock: TokioMutex<()>,
+    /// Token 刷新锁，按凭据 ID 隔离，避免不同账号刷新互相阻塞
+    refresh_locks: Mutex<HashMap<u64, Arc<TokioMutex<()>>>>,
+    /// 凭据文件回写锁，避免并发持久化互相覆盖
+    persist_lock: Mutex<()>,
     /// 凭据文件路径（用于回写）
     credentials_path: Option<PathBuf>,
     /// 是否为多凭据格式（数组格式才回写）
@@ -799,6 +801,14 @@ fn resolve_symlink_target(path: &PathBuf) -> PathBuf {
 }
 
 impl MultiTokenManager {
+    fn refresh_lock_for(&self, id: u64) -> Arc<TokioMutex<()>> {
+        let mut locks = self.refresh_locks.lock();
+        locks
+            .entry(id)
+            .or_insert_with(|| Arc::new(TokioMutex::new(())))
+            .clone()
+    }
+
     /// 创建多凭据 Token 管理器
     ///
     /// # Arguments
@@ -924,7 +934,8 @@ impl MultiTokenManager {
             config: RwLock::new(config),
             proxy: RwLock::new(proxy),
             entries: Mutex::new(entries),
-            refresh_lock: TokioMutex::new(()),
+            refresh_locks: Mutex::new(HashMap::new()),
+            persist_lock: Mutex::new(()),
             credentials_path,
             is_multiple_format,
             model_unavailable_count: AtomicU32::new(0),
@@ -1721,8 +1732,9 @@ impl MultiTokenManager {
             || is_token_expiring_soon(credentials);
 
         let creds = if needs_refresh {
-            // 获取刷新锁，确保同一时间只有一个刷新操作
-            let _guard = self.refresh_lock.lock().await;
+            // 同一凭据只允许一个刷新操作；不同凭据可并行刷新
+            let refresh_lock = self.refresh_lock_for(id);
+            let _guard = refresh_lock.lock().await;
 
             // 第二次检查：获取锁后重新读取凭据，因为其他请求可能已经完成刷新
             let current_creds = {
@@ -1942,10 +1954,13 @@ impl MultiTokenManager {
             Ok(())
         };
 
-        if tokio::runtime::Handle::try_current().is_ok() {
-            tokio::task::block_in_place(do_atomic_write)?;
-        } else {
-            do_atomic_write()?;
+        {
+            let _guard = self.persist_lock.lock();
+            if tokio::runtime::Handle::try_current().is_ok() {
+                tokio::task::block_in_place(do_atomic_write)?;
+            } else {
+                do_atomic_write()?;
+            }
         }
 
         tracing::debug!("已回写凭据到文件: {:?}", path);
@@ -2527,8 +2542,9 @@ impl MultiTokenManager {
                 .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?
         };
 
-        // 持有刷新锁，避免与业务请求自动刷新并发
-        let _guard = self.refresh_lock.lock().await;
+        // 同一凭据只允许一个刷新操作；不同凭据可并行刷新
+        let refresh_lock = self.refresh_lock_for(id);
+        let _guard = refresh_lock.lock().await;
 
         if credentials.is_api_key_credential() {
             anyhow::bail!("API Key 凭据无需刷新 Token");
@@ -2580,7 +2596,8 @@ impl MultiTokenManager {
                     .clone()
                     .ok_or_else(|| anyhow::anyhow!("凭据无 kiroApiKey"))?
             } else if needs_refresh {
-                let _guard = self.refresh_lock.lock().await;
+                let refresh_lock = self.refresh_lock_for(id);
+                let _guard = refresh_lock.lock().await;
                 let current_creds = {
                     let entries = self.entries.lock();
                     entries
@@ -2724,14 +2741,7 @@ impl MultiTokenManager {
             refresh_token(&new_cred, &config, proxy.as_ref()).await?
         };
 
-        // 4. 分配新 ID
-        let new_id = {
-            let entries = self.entries.lock();
-            entries.iter().map(|e| e.id).max().unwrap_or(0) + 1
-        };
-
-        // 5. 设置 ID 并保留用户输入的元数据
-        validated_cred.id = Some(new_id);
+        // 4. 保留用户输入的元数据
         validated_cred.priority = new_cred.priority;
         validated_cred.auth_method = new_cred.auth_method.clone();
         validated_cred.canonicalize_auth_method();
@@ -2746,20 +2756,33 @@ impl MultiTokenManager {
         validated_cred.proxy_password = new_cred.proxy_password;
         validated_cred.kiro_api_key = new_cred.kiro_api_key;
 
-        // 为新凭据生成设备指纹
-        let fingerprint_seed = validated_cred
-            .refresh_token
-            .as_deref()
-            .or(validated_cred.kiro_api_key.as_deref())
-            .or(validated_cred.machine_id.as_deref())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("credential-{}", new_id));
-        let fingerprint = Fingerprint::generate_from_seed(&fingerprint_seed);
-
-        let entry_secret_hash = credential_secret_hash(&validated_cred);
-
-        {
+        let id = {
             let mut entries = self.entries.lock();
+            let duplicate_exists = entries.iter().any(|entry| {
+                let hash = entry
+                    .refresh_token_hash
+                    .clone()
+                    .or_else(|| credential_secret_hash(&entry.credentials));
+                hash.as_deref() == Some(new_secret_hash.as_str())
+            });
+            if duplicate_exists {
+                anyhow::bail!("凭据已存在（refreshToken 或 kiroApiKey 重复）");
+            }
+
+            let new_id = entries.iter().map(|e| e.id).max().unwrap_or(0) + 1;
+            validated_cred.id = Some(new_id);
+
+            // 为新凭据生成设备指纹
+            let fingerprint_seed = validated_cred
+                .refresh_token
+                .as_deref()
+                .or(validated_cred.kiro_api_key.as_deref())
+                .or(validated_cred.machine_id.as_deref())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("credential-{}", new_id));
+            let fingerprint = Fingerprint::generate_from_seed(&fingerprint_seed);
+
+            let entry_secret_hash = credential_secret_hash(&validated_cred);
             entries.push(CredentialEntry {
                 id: new_id,
                 credentials: validated_cred,
@@ -2773,13 +2796,14 @@ impl MultiTokenManager {
                 last_used_at: None,
                 refresh_token_hash: entry_secret_hash,
             });
-        }
+            new_id
+        };
 
         // 6. 持久化
         self.persist_credentials()?;
 
-        tracing::info!("成功添加凭据 #{}", new_id);
-        Ok(new_id)
+        tracing::info!("成功添加凭据 #{}", id);
+        Ok(id)
     }
 
     /// 删除凭据（Admin API）
@@ -3001,6 +3025,10 @@ impl MultiTokenManager {
                 .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?
         };
 
+        // 同一凭据只允许一个刷新操作；不同凭据可并行刷新
+        let refresh_lock = self.refresh_lock_for(id);
+        let _guard = refresh_lock.lock().await;
+
         // 尝试刷新
         let proxy = self.proxy.read().clone();
         match refresh_token_with_id(&credentials, &config, proxy.as_ref(), id).await {
@@ -3015,7 +3043,6 @@ impl MultiTokenManager {
                             new_creds.refresh_token.as_deref().map(sha256_hex);
                     }
                 }
-
                 // 持久化
                 if let Err(e) = self.persist_credentials() {
                     tracing::warn!("Token 刷新后持久化失败: {}", e);
