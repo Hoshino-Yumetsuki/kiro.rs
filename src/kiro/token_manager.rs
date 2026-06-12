@@ -2428,12 +2428,12 @@ impl MultiTokenManager {
 
     /// 初始化所有凭据的余额缓存
     ///
-    /// 启动时顺序查询所有凭据的余额，每次间隔 0.5 秒避免触发限流。
+    /// 并发查询所有凭据的余额（最多 10 并发），避免阻塞启动。
     /// 查询失败的凭据会被跳过（保持 initialized: false）。
     ///
     /// # 返回
     /// - 成功初始化的凭据数量
-    pub async fn initialize_balances(&self) -> usize {
+    pub async fn initialize_balances(self: &Arc<Self>) -> usize {
         let credential_ids: Vec<u64> = {
             let entries = self.entries.lock();
             entries
@@ -2450,62 +2450,63 @@ impl MultiTokenManager {
 
         tracing::info!("正在初始化 {} 个凭据的余额...", credential_ids.len());
 
-        let mut success_count = 0;
+        let success_count = std::sync::atomic::AtomicUsize::new(0);
 
-        // 顺序查询每个凭据的余额，间隔 0.5 秒避免触发限流
-        for (index, &id) in credential_ids.iter().enumerate() {
-            match self.get_usage_limits_for(id).await {
-                Ok(limits) => {
-                    // 计算剩余额度
-                    let used = limits.current_usage();
-                    let limit = limits.usage_limit();
-                    let remaining = (limit - used).max(0.0);
+        // 并发查询，最多 10 个同时进行
+        use futures::stream::{self, StreamExt};
+        stream::iter(credential_ids.iter().copied())
+            .for_each_concurrent(10, |id| {
+                let success_count = &success_count;
+                async move {
+                    match self.get_usage_limits_for(id).await {
+                        Ok(limits) => {
+                            let used = limits.current_usage();
+                            let limit = limits.usage_limit();
+                            let remaining = (limit - used).max(0.0);
 
-                    self.update_balance_cache(id, remaining);
+                            self.update_balance_cache(id, remaining);
 
-                    // 余额小于 1 时自动禁用凭据
-                    if remaining < 1.0 {
-                        if self.config.read().auto_disable_insufficient_balance {
-                            let mut entries = self.entries.lock();
-                            if let Some(entry) = entries.get_mut(&id) {
-                                entry.disabled = true;
-                                entry.disable_reason = Some(DisableReason::InsufficientBalance);
-                                tracing::warn!(
-                                    "凭据 #{} 余额不足 ({:.2})，已自动禁用",
-                                    id,
-                                    remaining
-                                );
+                            if remaining < 1.0 {
+                                if self.config.read().auto_disable_insufficient_balance {
+                                    let mut entries = self.entries.lock();
+                                    if let Some(entry) = entries.get_mut(&id) {
+                                        entry.disabled = true;
+                                        entry.disable_reason =
+                                            Some(DisableReason::InsufficientBalance);
+                                        tracing::warn!(
+                                            "凭据 #{} 余额不足 ({:.2})，已自动禁用",
+                                            id,
+                                            remaining
+                                        );
+                                    }
+                                } else {
+                                    tracing::warn!(
+                                        "凭据 #{} 余额不足 ({:.2})，但自动禁用已关闭",
+                                        id,
+                                        remaining
+                                    );
+                                }
+                            } else {
+                                tracing::info!("凭据 #{} 余额初始化成功: {:.2}", id, remaining);
                             }
-                        } else {
-                            tracing::warn!(
-                                "凭据 #{} 余额不足 ({:.2})，但自动禁用已关闭",
-                                id,
-                                remaining
-                            );
+                            success_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         }
-                    } else {
-                        tracing::info!("凭据 #{} 余额初始化成功: {:.2}", id, remaining);
+                        Err(e) => {
+                            tracing::warn!("凭据 #{} 余额查询失败: {}", id, e);
+                        }
                     }
-                    success_count += 1;
                 }
-                Err(e) => {
-                    tracing::warn!("凭据 #{} 余额查询失败: {}", id, e);
-                }
-            }
+            })
+            .await;
 
-            // 非最后一个凭据时，间隔 0.5 秒
-            if index < credential_ids.len() - 1 {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            }
-        }
-
+        let count = success_count.load(std::sync::atomic::Ordering::Relaxed);
         tracing::info!(
             "余额初始化完成: {}/{} 成功",
-            success_count,
+            count,
             credential_ids.len()
         );
 
-        success_count
+        count
     }
 
     // ========================================================================
