@@ -2,6 +2,7 @@
 
 use axum::{
     Router, middleware,
+    extract::DefaultBodyLimit,
     routing::{delete, get, post},
 };
 
@@ -57,5 +58,6 @@ pub fn create_admin_router(state: AdminState) -> Router {
             state.clone(),
             admin_auth_middleware,
         ))
+        .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .with_state(state)
 }

@@ -58,6 +58,51 @@ pub struct CredentialStatusItem {
     pub effective_endpoint: String,
 }
 
+/// 凭据列表查询参数
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialQueryParams {
+    /// 页码，从 1 开始
+    pub page: Option<u32>,
+    /// 每页数量
+    #[serde(rename = "per_page", alias = "perPage")]
+    pub per_page: Option<u32>,
+    /// 排序字段：priority、id、status
+    pub sort: Option<String>,
+    /// 排序方向：asc、desc
+    pub order: Option<String>,
+    /// 搜索文本，匹配 email、subscription_title、region
+    pub search: Option<String>,
+    /// 状态过滤：disabled、enabled、all
+    pub filter: Option<String>,
+}
+
+impl CredentialQueryParams {
+    pub fn has_query(&self) -> bool {
+        self.page.is_some()
+            || self.per_page.is_some()
+            || self.sort.is_some()
+            || self.order.is_some()
+            || self.search.is_some()
+            || self.filter.is_some()
+    }
+}
+
+/// 分页凭据状态响应
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaginatedCredentialsResponse {
+    /// 当前页凭据
+    pub items: Vec<CredentialStatusItem>,
+    /// 过滤后的总数
+    pub total: usize,
+    /// 当前页码
+    pub page: u32,
+    /// 每页数量
+    #[serde(rename = "per_page")]
+    pub per_page: u32,
+}
+
 // ============ 操作请求 ============
 
 /// 启用/禁用凭据请求

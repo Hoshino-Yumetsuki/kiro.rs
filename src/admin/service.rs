@@ -20,13 +20,29 @@ use parking_lot::RwLock;
 use super::error::AdminServiceError;
 use super::types::{
     AddCredentialRequest, AddCredentialResponse, BalanceResponse, CachedBalanceItem,
-    CachedBalancesResponse, CredentialStatusItem, CredentialsStatusResponse, ImportAction,
-    ImportItemResult, ImportSummary, ImportTokenJsonRequest, ImportTokenJsonResponse,
-    ProxyConfigResponse, TokenJsonItem, UpdateProxyConfigRequest,
+    CachedBalancesResponse, CredentialQueryParams, CredentialStatusItem, CredentialsStatusResponse,
+    ImportAction, ImportItemResult, ImportSummary, ImportTokenJsonRequest, ImportTokenJsonResponse,
+    PaginatedCredentialsResponse, ProxyConfigResponse, TokenJsonItem, UpdateProxyConfigRequest,
 };
 
 /// 余额缓存过期时间（秒），5 分钟
 const BALANCE_CACHE_TTL_SECS: i64 = 300;
+
+fn contains_case_insensitive(value: Option<&str>, search_lower: &str) -> bool {
+    value
+        .map(|value| value.to_lowercase().contains(search_lower))
+        .unwrap_or(false)
+}
+
+fn sort_by_direction<T, K>(items: &mut [T], descending: bool, key: impl FnMut(&T) -> K)
+where
+    K: Ord,
+{
+    items.sort_by_key(key);
+    if descending {
+        items.reverse();
+    }
+}
 
 /// 缓存的余额条目（含时间戳）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,10 +103,88 @@ impl AdminService {
 
     /// 获取所有凭据状态
     pub fn get_all_credentials(&self) -> CredentialsStatusResponse {
+        let (snapshot_total, snapshot_available, mut credentials) = self.credential_status_items();
+
+        // 按优先级排序（数字越小优先级越高）
+        credentials.sort_by_key(|c| c.priority);
+
+        CredentialsStatusResponse {
+            total: snapshot_total,
+            available: snapshot_available,
+            credentials,
+        }
+    }
+
+    /// 获取分页、过滤后的凭据状态
+    pub fn get_credentials_paginated(
+        &self,
+        params: CredentialQueryParams,
+    ) -> PaginatedCredentialsResponse {
+        let (_, _, mut items) = self.credential_status_items();
+
+        if let Some(filter) = params.filter.as_deref().map(str::trim) {
+            match filter.to_ascii_lowercase().as_str() {
+                "disabled" => items.retain(|credential| credential.disabled),
+                "enabled" => items.retain(|credential| !credential.disabled),
+                "all" => {}
+                _ => {}
+            }
+        }
+
+        if let Some(search) = params.search.as_deref().map(str::trim)
+            && !search.is_empty()
+        {
+            let search = search.to_lowercase();
+            items.retain(|credential| {
+                contains_case_insensitive(credential.email.as_deref(), &search)
+                    || contains_case_insensitive(credential.subscription_title.as_deref(), &search)
+                    || contains_case_insensitive(credential.region.as_deref(), &search)
+            });
+        }
+
+        let descending = params
+            .order
+            .as_deref()
+            .is_some_and(|order| order.eq_ignore_ascii_case("desc"));
+        match params
+            .sort
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("priority")
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "id" => sort_by_direction(&mut items, descending, |credential| credential.id),
+            "status" => sort_by_direction(&mut items, descending, |credential| credential.disabled),
+            "priority" | "balance" => {
+                sort_by_direction(&mut items, descending, |credential| credential.priority);
+            }
+            _ => items.sort_by_key(|credential| credential.priority),
+        }
+
+        let total = items.len();
+        let page = params.page.unwrap_or(1).max(1);
+        let per_page = params.per_page.unwrap_or(total as u32).max(1).min(100);
+        let start = ((page - 1) as usize).saturating_mul(per_page as usize);
+        let items = items
+            .into_iter()
+            .skip(start)
+            .take(per_page as usize)
+            .collect();
+
+        PaginatedCredentialsResponse {
+            items,
+            total,
+            page,
+            per_page,
+        }
+    }
+
+    fn credential_status_items(&self) -> (usize, usize, Vec<CredentialStatusItem>) {
         let snapshot = self.token_manager.snapshot();
 
         let default_endpoint = self.config.read().default_endpoint.clone();
-        let mut credentials: Vec<CredentialStatusItem> = snapshot
+        let credentials = snapshot
             .entries
             .into_iter()
             .map(|entry| {
@@ -110,7 +204,7 @@ impl AdminService {
                     email: entry.email,
                     subscription_title: entry.subscription_title,
                     success_count: entry.success_count,
-                    last_used_at: entry.last_used_at.clone(),
+                    last_used_at: entry.last_used_at,
                     region: entry.region,
                     api_region: entry.api_region,
                     endpoint,
@@ -119,14 +213,7 @@ impl AdminService {
             })
             .collect();
 
-        // 按优先级排序（数字越小优先级越高）
-        credentials.sort_by_key(|c| c.priority);
-
-        CredentialsStatusResponse {
-            total: snapshot.total,
-            available: snapshot.available,
-            credentials,
-        }
+        (snapshot.total, snapshot.available, credentials)
     }
 
     /// 设置凭据禁用状态

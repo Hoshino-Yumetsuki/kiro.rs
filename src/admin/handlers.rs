@@ -2,23 +2,30 @@
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::IntoResponse,
 };
 
 use super::{
     middleware::AdminState,
     types::{
-        AddCredentialRequest, ImportTokenJsonRequest, SetDisabledRequest, SetEndpointRequest,
-        SetPriorityRequest, SetRegionRequest, SuccessResponse, UpdateProxyConfigRequest,
+        AddCredentialRequest, CredentialQueryParams, ImportTokenJsonRequest, SetDisabledRequest,
+        SetEndpointRequest, SetPriorityRequest, SetRegionRequest, SuccessResponse,
+        UpdateProxyConfigRequest,
     },
 };
 
 /// GET /api/admin/credentials
 /// 获取所有凭据状态
-pub async fn get_all_credentials(State(state): State<AdminState>) -> impl IntoResponse {
-    let response = state.service.get_all_credentials();
-    Json(response)
+pub async fn get_all_credentials(
+    State(state): State<AdminState>,
+    Query(params): Query<CredentialQueryParams>,
+) -> impl IntoResponse {
+    if params.has_query() {
+        Json(serde_json::to_value(state.service.get_credentials_paginated(params)).unwrap())
+    } else {
+        Json(serde_json::to_value(state.service.get_all_credentials()).unwrap())
+    }
 }
 
 /// POST /api/admin/credentials/:id/disabled
