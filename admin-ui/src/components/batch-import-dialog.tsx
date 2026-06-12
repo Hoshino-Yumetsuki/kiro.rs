@@ -131,103 +131,102 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
       let rollbackFailedCount = 0
       let rollbackSkippedCount = 0
 
-      // 4. 导入并验活
-      for (let i = 0; i < credentials.length; i++) {
-        const cred = credentials[i]
+      const reservedOauthHashes = new Set(existingOauthHashes)
+      const reservedApiKeyHashes = new Set(existingApiKeyHashes)
+      let completedCount = 0
+
+      setCurrentProcessing(`正在并行处理 ${credentials.length} 个凭据`)
+
+      // 4. 并行导入并验活
+      await Promise.all(credentials.map(async (cred, i) => {
         const isApiKeyCred = !!(cred.kiroApiKey?.trim()) || cred.authMethod === 'api_key'
-
-        // 更新状态为检查中
-        setCurrentProcessing(`正在处理凭据 ${i + 1}/${credentials.length}`)
-        setResults(prev => {
-          const newResults = [...prev]
-          newResults[i] = { ...newResults[i], status: 'checking' }
-          return newResults
-        })
-
-        // 客户端去重：OAuth 基于 refreshToken hash，API Key 基于 kiroApiKey hash
-        let credHash = ''
-        if (isApiKeyCred) {
-          const apiKey = cred.kiroApiKey?.trim() || ''
-          if (!apiKey) {
-            setResults(prev => {
-              const newResults = [...prev]
-              newResults[i] = {
-                ...newResults[i],
-                status: 'failed',
-                error: '缺少 kiroApiKey',
-              }
-              return newResults
-            })
-            failCount++
-            setProgress({ current: i + 1, total: credentials.length })
-            continue
-          }
-          credHash = await sha256Hex(apiKey)
-          if (existingApiKeyHashes.has(credHash)) {
-            duplicateCount++
-            const existingCred = existingCredentials?.credentials.find(c => c.apiKeyHash === credHash)
-            setResults(prev => {
-              const newResults = [...prev]
-              newResults[i] = {
-                ...newResults[i],
-                status: 'duplicate',
-                error: '该凭据已存在',
-                email: existingCred?.email || undefined
-              }
-              return newResults
-            })
-            setProgress({ current: i + 1, total: credentials.length })
-            continue
-          }
-        } else {
-          const token = cred.refreshToken?.trim() || ''
-          if (!token) {
-            setResults(prev => {
-              const newResults = [...prev]
-              newResults[i] = {
-                ...newResults[i],
-                status: 'failed',
-                error: '缺少 refreshToken',
-              }
-              return newResults
-            })
-            failCount++
-            setProgress({ current: i + 1, total: credentials.length })
-            continue
-          }
-          credHash = await sha256Hex(token)
-          if (existingOauthHashes.has(credHash)) {
-            duplicateCount++
-            const existingCred = existingCredentials?.credentials.find(c => c.refreshTokenHash === credHash)
-            setResults(prev => {
-              const newResults = [...prev]
-              newResults[i] = {
-                ...newResults[i],
-                status: 'duplicate',
-                error: '该凭据已存在',
-                email: existingCred?.email || undefined
-              }
-              return newResults
-            })
-            setProgress({ current: i + 1, total: credentials.length })
-            continue
-          }
-        }
-
-        // 更新状态为验活中
-        setResults(prev => {
-          const newResults = [...prev]
-          newResults[i] = { ...newResults[i], status: 'verifying' }
-          return newResults
-        })
-
         let addedCredId: number | null = null
 
         try {
-          // 添加凭据
+          setResults(prev => {
+            const newResults = [...prev]
+            newResults[i] = { ...newResults[i], status: 'checking' }
+            return newResults
+          })
+
+          // 客户端去重：OAuth 基于 refreshToken hash，API Key 基于 kiroApiKey hash
+          let credHash = ''
           if (isApiKeyCred) {
-            // API Key 凭据
-            const addedCred = await addCredential({
+            const apiKey = cred.kiroApiKey?.trim() || ''
+            if (!apiKey) {
+              failCount++
+              setResults(prev => {
+                const newResults = [...prev]
+                newResults[i] = {
+                  ...newResults[i],
+                  status: 'failed',
+                  error: '缺少 kiroApiKey',
+                }
+                return newResults
+              })
+              return
+            }
+
+            credHash = await sha256Hex(apiKey)
+            if (reservedApiKeyHashes.has(credHash)) {
+              duplicateCount++
+              const existingCred = existingCredentials?.credentials.find(c => c.apiKeyHash === credHash)
+              setResults(prev => {
+                const newResults = [...prev]
+                newResults[i] = {
+                  ...newResults[i],
+                  status: 'duplicate',
+                  error: '该凭据已存在或在本次导入中重复',
+                  email: existingCred?.email || undefined
+                }
+                return newResults
+              })
+              return
+            }
+            reservedApiKeyHashes.add(credHash)
+          } else {
+            const token = cred.refreshToken?.trim() || ''
+            if (!token) {
+              failCount++
+              setResults(prev => {
+                const newResults = [...prev]
+                newResults[i] = {
+                  ...newResults[i],
+                  status: 'failed',
+                  error: '缺少 refreshToken',
+                }
+                return newResults
+              })
+              return
+            }
+
+            credHash = await sha256Hex(token)
+            if (reservedOauthHashes.has(credHash)) {
+              duplicateCount++
+              const existingCred = existingCredentials?.credentials.find(c => c.refreshTokenHash === credHash)
+              setResults(prev => {
+                const newResults = [...prev]
+                newResults[i] = {
+                  ...newResults[i],
+                  status: 'duplicate',
+                  error: '该凭据已存在或在本次导入中重复',
+                  email: existingCred?.email || undefined
+                }
+                return newResults
+              })
+              return
+            }
+            reservedOauthHashes.add(credHash)
+          }
+
+          setResults(prev => {
+            const newResults = [...prev]
+            newResults[i] = { ...newResults[i], status: 'verifying' }
+            return newResults
+          })
+
+          const addedCred = isApiKeyCred
+            ? await addCredential({
               authMethod: 'api_key',
               kiroApiKey: cred.kiroApiKey?.trim(),
               priority: cred.priority || 0,
@@ -236,67 +235,29 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
               machineId: cred.machineId?.trim() || undefined,
               endpoint: cred.endpoint?.trim() || undefined,
             })
-
-            addedCredId = addedCred.credentialId
-
-            // 延迟 1 秒
-            await new Promise(resolve => setTimeout(resolve, 1000))
-
-            // 验活
-            const balance = await getCredentialBalance(addedCred.credentialId)
-
-            successCount++
-            existingApiKeyHashes.add(credHash)
-            setCurrentProcessing(addedCred.email ? `验活成功: ${addedCred.email}` : `验活成功: 凭据 ${i + 1}`)
-            setResults(prev => {
-              const newResults = [...prev]
-              newResults[i] = {
-                ...newResults[i],
-                status: 'verified',
-                usage: formatKiroUsageWithUsd(balance.currentUsage, balance.usageLimit),
-                email: addedCred.email || undefined,
-                credentialId: addedCred.credentialId
-              }
-              return newResults
+            : await addCredential({
+              refreshToken: cred.refreshToken!.trim(),
+              authMethod: (() => {
+                const clientId = cred.clientId?.trim() || undefined
+                const clientSecret = cred.clientSecret?.trim() || undefined
+                if ((clientId && !clientSecret) || (!clientId && clientSecret)) {
+                  throw new Error('idc 模式需要同时提供 clientId 和 clientSecret')
+                }
+                return clientId && clientSecret ? 'idc' : 'social'
+              })(),
+              region: cred.authRegion?.trim() || cred.region?.trim() || undefined,
+              apiRegion: cred.apiRegion?.trim() || undefined,
+              clientId: cred.clientId?.trim() || undefined,
+              clientSecret: cred.clientSecret?.trim() || undefined,
+              priority: cred.priority || 0,
+              machineId: cred.machineId?.trim() || undefined,
+              endpoint: cred.endpoint?.trim() || undefined,
             })
-            setProgress({ current: i + 1, total: credentials.length })
-            continue
-          }
-
-          // OAuth 凭据
-          const token = cred.refreshToken!.trim()
-          const clientId = cred.clientId?.trim() || undefined
-          const clientSecret = cred.clientSecret?.trim() || undefined
-          const authMethod = clientId && clientSecret ? 'idc' : 'social'
-
-          // idc 模式下必须同时提供 clientId 和 clientSecret
-          if (authMethod === 'social' && (clientId || clientSecret)) {
-            throw new Error('idc 模式需要同时提供 clientId 和 clientSecret')
-          }
-
-          const addedCred = await addCredential({
-            refreshToken: token,
-            authMethod,
-            region: cred.authRegion?.trim() || cred.region?.trim() || undefined,
-            apiRegion: cred.apiRegion?.trim() || undefined,
-            clientId,
-            clientSecret,
-            priority: cred.priority || 0,
-            machineId: cred.machineId?.trim() || undefined,
-            endpoint: cred.endpoint?.trim() || undefined,
-          })
 
           addedCredId = addedCred.credentialId
-
-          // 延迟 1 秒
-          await new Promise(resolve => setTimeout(resolve, 1000))
-
-          // 验活
           const balance = await getCredentialBalance(addedCred.credentialId)
 
-          // 验活成功
           successCount++
-          existingOauthHashes.add(credHash)
           setCurrentProcessing(addedCred.email ? `验活成功: ${addedCred.email}` : `验活成功: 凭据 ${i + 1}`)
           setResults(prev => {
             const newResults = [...prev]
@@ -310,7 +271,6 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
             return newResults
           })
         } catch (error) {
-          // 验活失败，尝试回滚（先禁用再删除）
           let rollbackStatus: VerificationResult['rollbackStatus'] = 'skipped'
           let rollbackError: string | undefined
 
@@ -341,10 +301,11 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
             }
             return newResults
           })
+        } finally {
+          completedCount++
+          setProgress({ current: completedCount, total: credentials.length })
         }
-
-        setProgress({ current: i + 1, total: credentials.length })
-      }
+      }))
 
       // 显示结果
       if (failCount === 0 && duplicateCount === 0) {
