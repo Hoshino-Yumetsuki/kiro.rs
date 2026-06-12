@@ -753,6 +753,34 @@ impl KiroProvider {
                     continue;
                 }
 
+                // 403 且非 bearer token 问题：检查是否配置了自动禁用
+                if status.as_u16() == 403 && config.auto_disable_on_forbidden {
+                    tracing::warn!(
+                        "API 请求失败（上游 403 Forbidden，自动禁用凭据 #{}）: {}",
+                        ctx.id,
+                        body
+                    );
+
+                    let has_available = self.token_manager.report_forbidden(ctx.id);
+                    if !has_available {
+                        anyhow::bail!(
+                            "{} API 请求失败（所有凭据已用尽）: {} {}",
+                            api_type,
+                            status,
+                            body
+                        );
+                    }
+
+                    last_error = Some(anyhow::anyhow!(
+                        "{} API 请求失败: {} {}",
+                        api_type,
+                        status,
+                        body
+                    ));
+                    continue;
+                }
+
+                // 401 或未启用 403 自动禁用：计入失败并允许故障转移
                 tracing::warn!(
                     "API 请求失败（可能为凭据错误，尝试 {}/{}）: {} {}",
                     attempt + 1,

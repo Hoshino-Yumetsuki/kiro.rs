@@ -862,6 +862,7 @@ impl AdminService {
             enable_sticky_routing: config.enable_sticky_routing,
             auto_disable_insufficient_balance: config.auto_disable_insufficient_balance,
             auto_disable_refresh_failure: config.auto_disable_refresh_failure,
+            auto_disable_on_forbidden: config.auto_disable_on_forbidden,
             compression: super::types::CompressionConfigResponse {
                 enabled: c.enabled,
                 whitespace_compression: c.whitespace_compression,
@@ -956,6 +957,10 @@ impl AdminService {
 
             if let Some(enabled) = req.auto_disable_refresh_failure {
                 config.auto_disable_refresh_failure = enabled;
+            }
+
+            if let Some(enabled) = req.auto_disable_on_forbidden {
+                config.auto_disable_on_forbidden = enabled;
             }
 
             if let Some(c) = &req.compression {
@@ -1151,6 +1156,7 @@ mod tests {
             enable_sticky_routing: None,
             auto_disable_insufficient_balance: None,
             auto_disable_refresh_failure: None,
+            auto_disable_on_forbidden: None,
             compression: None,
             rewriter: None,
         };
@@ -1181,6 +1187,7 @@ mod tests {
             enable_sticky_routing: None,
             auto_disable_insufficient_balance: None,
             auto_disable_refresh_failure: None,
+            auto_disable_on_forbidden: None,
             compression: None,
             rewriter: None,
         };
@@ -1210,6 +1217,7 @@ mod tests {
             enable_sticky_routing: None,
             auto_disable_insufficient_balance: None,
             auto_disable_refresh_failure: None,
+            auto_disable_on_forbidden: None,
             compression: None,
             rewriter: None,
         };
@@ -1239,6 +1247,7 @@ mod tests {
             enable_sticky_routing: None,
             auto_disable_insufficient_balance: None,
             auto_disable_refresh_failure: None,
+            auto_disable_on_forbidden: None,
             compression: None,
             rewriter: None,
         };
@@ -1265,6 +1274,7 @@ mod tests {
             enable_sticky_routing: None,
             auto_disable_insufficient_balance: None,
             auto_disable_refresh_failure: None,
+            auto_disable_on_forbidden: None,
             compression: None,
             rewriter: None,
         };

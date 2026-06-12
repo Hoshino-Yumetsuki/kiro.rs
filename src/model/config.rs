@@ -230,6 +230,10 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub auto_disable_refresh_failure: bool,
 
+    /// 上游返回 403 时是否自动禁用凭据
+    #[serde(default = "default_true")]
+    pub auto_disable_on_forbidden: bool,
+
     /// 端点特定的配置
     ///
     /// 键为端点名（如 "ide" / "cli"），值为该端点自由定义的参数对象。
@@ -404,6 +408,7 @@ impl Default for Config {
             enable_sticky_routing: default_true(),
             auto_disable_insufficient_balance: default_true(),
             auto_disable_refresh_failure: default_true(),
+            auto_disable_on_forbidden: default_true(),
             default_endpoint: default_endpoint(),
             endpoints: HashMap::new(),
             config_path: None,

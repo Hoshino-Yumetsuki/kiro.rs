@@ -525,6 +525,8 @@ pub enum DisableReason {
     Manual,
     /// 额度已用尽（如 MONTHLY_REQUEST_COUNT）
     QuotaExceeded,
+    /// 上游返回 403 Forbidden
+    Forbidden,
 }
 
 /// 单个凭据条目的状态
@@ -564,6 +566,8 @@ enum AutoHealReason {
     /// 额度已用尽（如 MONTHLY_REQUEST_COUNT）
     #[allow(dead_code)]
     QuotaExceeded,
+    /// 上游返回 403 被禁用（可自动恢复）
+    ForbiddenResponse,
 }
 
 /// 统计数据持久化条目
@@ -2176,6 +2180,37 @@ impl MultiTokenManager {
             entry.failure_count = MAX_FAILURES_PER_CREDENTIAL;
 
             tracing::error!("凭据 #{} 额度已用尽（MONTHLY_REQUEST_COUNT），已被禁用", id);
+
+            entries.iter().any(|e| !e.disabled)
+        };
+        self.save_stats_debounced();
+        result
+    }
+
+    /// 报告上游返回 403 Forbidden
+    ///
+    /// 立即禁用该凭据（不等待连续失败阈值）
+    /// 返回是否还有可用凭据
+    pub fn report_forbidden(&self, id: u64) -> bool {
+        let result = {
+            let mut entries = self.entries.lock();
+
+            let entry = match entries.iter_mut().find(|e| e.id == id) {
+                Some(e) => e,
+                None => return entries.iter().any(|e| !e.disabled),
+            };
+
+            if entry.disabled {
+                return entries.iter().any(|e| !e.disabled);
+            }
+
+            entry.disabled = true;
+            entry.auto_heal_reason = Some(AutoHealReason::ForbiddenResponse);
+            entry.disable_reason = Some(DisableReason::Forbidden);
+            entry.last_used_at = Some(Utc::now().to_rfc3339());
+            entry.failure_count = MAX_FAILURES_PER_CREDENTIAL;
+
+            tracing::error!("凭据 #{} 上游返回 403 Forbidden，已被禁用", id);
 
             entries.iter().any(|e| !e.disabled)
         };
