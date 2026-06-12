@@ -16,7 +16,7 @@ use chrono::{DateTime, Duration, Utc};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -168,6 +168,24 @@ fn credential_secret_hash(credentials: &KiroCredentials) -> Option<String> {
         .as_deref()
         .map(sha256_hex)
         .or_else(|| credentials.refresh_token.as_deref().map(sha256_hex))
+}
+
+fn refresh_token_prefix_hash(refresh_token: &str) -> String {
+    let prefix_len = floor_char_boundary(refresh_token, 32);
+    sha256_hex(&refresh_token[..prefix_len])
+}
+
+fn credential_lookup_hashes(credentials: &KiroCredentials) -> Vec<String> {
+    let mut hashes = Vec::with_capacity(2);
+    if let Some(hash) = credential_secret_hash(credentials) {
+        hashes.push(hash);
+    }
+    if let Some(refresh_token) = credentials.refresh_token.as_deref() {
+        hashes.push(refresh_token_prefix_hash(refresh_token));
+    }
+    hashes.sort_unstable();
+    hashes.dedup();
+    hashes
 }
 
 fn is_invalid_grant_error(err: &anyhow::Error) -> bool {
@@ -688,8 +706,12 @@ const LOW_BALANCE_THRESHOLD: f64 = 1.0;
 pub struct MultiTokenManager {
     config: RwLock<Config>,
     proxy: RwLock<Option<ProxyConfig>>,
-    /// 凭据条目列表
-    entries: Mutex<Vec<CredentialEntry>>,
+    /// 凭据条目表（按凭据 ID 索引）
+    entries: Mutex<HashMap<u64, CredentialEntry>>,
+    /// 下一个自动分配的凭据 ID
+    next_id: AtomicU64,
+    /// 凭据密钥哈希索引（完整密钥哈希 + refreshToken 前缀哈希）
+    refresh_token_hashes: Mutex<HashSet<String>>,
     /// Token 刷新锁，按凭据 ID 隔离，避免不同账号刷新互相阻塞
     refresh_locks: Mutex<HashMap<u64, Arc<TokioMutex<()>>>>,
     /// 凭据文件回写锁，避免并发持久化互相覆盖
@@ -718,6 +740,10 @@ pub struct MultiTokenManager {
     last_stats_save_at: Mutex<Option<Instant>>,
     /// 统计数据是否有未落盘更新
     stats_dirty: AtomicBool,
+    /// 最近一次凭据持久化时间（用于 debounce）
+    last_persist_at: Mutex<Option<Instant>>,
+    /// 凭据是否有未落盘更新
+    persist_dirty: AtomicBool,
 }
 
 /// 凭据可用性诊断：被禁用的凭据
@@ -758,6 +784,9 @@ const GLOBAL_DISABLE_RECOVERY_MINUTES: i64 = 5;
 
 /// 统计数据持久化防抖间隔
 const STATS_SAVE_DEBOUNCE: StdDuration = StdDuration::from_secs(30);
+
+/// 凭据持久化防抖间隔
+const PERSIST_DEBOUNCE: StdDuration = StdDuration::from_millis(500);
 
 /// 当所有可用凭据都进入冷却/速率限制时，如果最短等待时间不超过该阈值，
 /// 继续短睡重试（平滑瞬时抖动）；超过则立即 bail，由上层返回 429 + Retry-After，
@@ -844,7 +873,7 @@ impl MultiTokenManager {
 
         // 计算当前最大 ID，为没有 ID 的凭据分配新 ID
         let max_existing_id = credentials.iter().filter_map(|c| c.id).max().unwrap_or(0);
-        let mut next_id = max_existing_id + 1;
+        let mut next_credential_id = max_existing_id + 1;
         let mut has_new_ids = false;
         let mut has_new_machine_ids = false;
         let config_ref = &config;
@@ -854,8 +883,8 @@ impl MultiTokenManager {
             .map(|mut cred| {
                 cred.canonicalize_auth_method();
                 let id = cred.id.unwrap_or_else(|| {
-                    let id = next_id;
-                    next_id += 1;
+                    let id = next_credential_id;
+                    next_credential_id += 1;
                     cred.id = Some(id);
                     if !cred.runtime_only {
                         has_new_ids = true;
@@ -916,6 +945,11 @@ impl MultiTokenManager {
             anyhow::bail!("检测到重复的凭据 ID: {:?}", duplicate_ids);
         }
 
+        let mut refresh_token_hashes = HashSet::new();
+        for entry in &entries {
+            refresh_token_hashes.extend(credential_lookup_hashes(&entry.credentials));
+        }
+
         // 初始化余额缓存（为每个凭据创建初始条目，支持负载均衡）
         let now = std::time::Instant::now();
         let initial_cache: HashMap<u64, CachedBalance> = entries
@@ -934,10 +968,15 @@ impl MultiTokenManager {
             })
             .collect();
 
+        let entries: HashMap<u64, CredentialEntry> =
+            entries.into_iter().map(|entry| (entry.id, entry)).collect();
+
         let manager = Self {
             config: RwLock::new(config),
             proxy: RwLock::new(proxy),
             entries: Mutex::new(entries),
+            next_id: AtomicU64::new(next_credential_id),
+            refresh_token_hashes: Mutex::new(refresh_token_hashes),
             refresh_locks: Mutex::new(HashMap::new()),
             persist_lock: Mutex::new(()),
             credentials_path,
@@ -952,6 +991,8 @@ impl MultiTokenManager {
             background_refresher: None,
             last_stats_save_at: Mutex::new(None),
             stats_dirty: AtomicBool::new(false),
+            last_persist_at: Mutex::new(None),
+            persist_dirty: AtomicBool::new(false),
         };
 
         // 如果有新分配的 ID 或新生成的 machineId，立即持久化到配置文件
@@ -1021,7 +1062,7 @@ impl MultiTokenManager {
 
     /// 获取可用凭据数量
     pub fn available_count(&self) -> usize {
-        self.entries.lock().iter().filter(|e| !e.disabled).count()
+        self.entries.lock().values().filter(|e| !e.disabled).count()
     }
 
     /// 输出一份"为什么当前没有可用凭据"的诊断信息（用于排障）
@@ -1044,7 +1085,7 @@ impl MultiTokenManager {
             let mut enabled_ids: Vec<u64> = Vec::with_capacity(entries.len());
             let mut disabled: Vec<DisabledCredentialDiag> = Vec::new();
 
-            for e in entries.iter() {
+            for e in entries.values() {
                 if e.disabled {
                     disabled.push(DisabledCredentialDiag {
                         id: e.id,
@@ -1165,6 +1206,9 @@ impl MultiTokenManager {
         if scored.len() == 1 {
             return Some(scored[0].0);
         }
+
+        // 按 ID 排序保证确定性（HashMap 迭代顺序不保证）
+        scored.sort_unstable_by_key(|(id, _, _)| *id);
 
         // 兜底：完全相同则轮询，避免总选第一个
         let index = rr % scored.len();
@@ -1303,21 +1347,21 @@ impl MultiTokenManager {
                 let mut entries = self.entries.lock();
 
                 let mut candidates: Vec<(u64, u32, bool)> = entries
-                    .iter()
+                    .values()
                     .filter(|e| !e.disabled && !tried_ids.contains(&e.id))
                     .map(|e| (e.id, e.credentials.priority, e.credentials.runtime_only))
                     .collect();
 
                 // 没有可用凭据：如果是"自动禁用导致全灭"，做一次类似重启的自愈
                 if candidates.is_empty()
-                    && entries.iter().any(|e| {
+                    && entries.values().any(|e| {
                         e.disabled && e.auto_heal_reason == Some(AutoHealReason::TooManyFailures)
                     })
                 {
                     tracing::warn!(
                         "所有凭据均已被自动禁用，执行自愈：重置失败计数并重新启用（等价于重启）"
                     );
-                    for e in entries.iter_mut() {
+                    for e in entries.values_mut() {
                         if e.auto_heal_reason == Some(AutoHealReason::TooManyFailures) {
                             e.disabled = false;
                             e.auto_heal_reason = None;
@@ -1327,14 +1371,14 @@ impl MultiTokenManager {
                     }
 
                     candidates = entries
-                        .iter()
+                        .values()
                         .filter(|e| !e.disabled && !tried_ids.contains(&e.id))
                         .map(|e| (e.id, e.credentials.priority, e.credentials.runtime_only))
                         .collect();
                 }
 
                 if candidates.is_empty() {
-                    let available = entries.iter().filter(|e| !e.disabled).count();
+                    let available = entries.values().filter(|e| !e.disabled).count();
                     if available == 0 {
                         anyhow::bail!("所有凭据均已禁用（{}/{}）", available, total);
                     }
@@ -1404,8 +1448,7 @@ impl MultiTokenManager {
             let credentials = {
                 let entries = self.entries.lock();
                 entries
-                    .iter()
-                    .find(|e| e.id == id)
+                    .get(&id)
                     .map(|e| e.credentials.clone())
                     .ok_or_else(|| anyhow::anyhow!("凭据 #{} 不存在", id))?
             };
@@ -1451,7 +1494,7 @@ impl MultiTokenManager {
         if let Some(bound_id) = self.affinity.get(user_id) {
             let is_enabled = {
                 let entries = self.entries.lock();
-                entries.iter().any(|e| e.id == bound_id && !e.disabled)
+                entries.get(&bound_id).is_some_and(|e| !e.disabled)
             };
 
             if is_enabled {
@@ -1494,8 +1537,7 @@ impl MultiTokenManager {
                     let credentials = {
                         let entries = self.entries.lock();
                         entries
-                            .iter()
-                            .find(|e| e.id == bound_id)
+                            .get(&bound_id)
                             .map(|e| e.credentials.clone())
                     };
 
@@ -1662,7 +1704,7 @@ impl MultiTokenManager {
         // 先获取 entries 的 ID 列表，避免同时持有两个锁
         let entry_ids: Vec<u64> = {
             let entries = self.entries.lock();
-            entries.iter().map(|e| e.id).collect()
+            entries.keys().copied().collect()
         };
 
         let cache = self.balance_cache.lock();
@@ -1744,8 +1786,7 @@ impl MultiTokenManager {
             let current_creds = {
                 let entries = self.entries.lock();
                 entries
-                    .iter()
-                    .find(|e| e.id == id)
+                    .get(&id)
                     .map(|e| e.credentials.clone())
                     .ok_or_else(|| anyhow::anyhow!("凭据 #{} 不存在", id))?
             };
@@ -1765,7 +1806,7 @@ impl MultiTokenManager {
                         {
                             Ok(creds) => {
                                 let mut entries = self.entries.lock();
-                                if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+                                if let Some(entry) = entries.get_mut(&id) {
                                     entry.refresh_failure_count = 0;
                                     if entry.disable_reason
                                         == Some(DisableReason::RefreshFailureLimit)
@@ -1791,7 +1832,7 @@ impl MultiTokenManager {
                                 let auto_disable = self.config.read().auto_disable_refresh_failure;
                                 let has_available = {
                                     let mut entries = self.entries.lock();
-                                    if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+                                    if let Some(entry) = entries.get_mut(&id) {
                                         entry.refresh_failure_count += 1;
                                         let refresh_failure_count = entry.refresh_failure_count;
                                         if refresh_failure_count >= MAX_FAILURES_PER_CREDENTIAL
@@ -1804,7 +1845,7 @@ impl MultiTokenManager {
                                                 Some(DisableReason::RefreshFailureLimit);
                                         }
                                     }
-                                    entries.iter().any(|e| !e.disabled && e.id != id)
+                                    entries.values().any(|e| !e.disabled && e.id != id)
                                 };
                                 tracing::warn!(
                                     credential_id = id,
@@ -1823,17 +1864,21 @@ impl MultiTokenManager {
                     // 更新凭据
                     {
                         let mut entries = self.entries.lock();
-                        if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+                        if let Some(entry) = entries.get_mut(&id) {
+                            let old_credentials = entry.credentials.clone();
                             entry.credentials = new_creds.clone();
                             // 更新哈希缓存
                             entry.refresh_token_hash = credential_secret_hash(&new_creds);
+                            let mut refresh_token_hashes = self.refresh_token_hashes.lock();
+                            for hash in credential_lookup_hashes(&old_credentials) {
+                                refresh_token_hashes.remove(&hash);
+                            }
+                            refresh_token_hashes.extend(credential_lookup_hashes(&new_creds));
                         }
                     }
 
-                    // 回写凭据到文件（仅多凭据格式），失败只记录警告
-                    if let Err(e) = self.persist_credentials() {
-                        tracing::warn!("Token 刷新后持久化失败（不影响本次请求）: {}", e);
-                    }
+                    // 标记凭据回写（仅多凭据格式），按 debounce 策略合并高频刷新写入
+                    self.mark_persist_dirty();
 
                     new_creds
                 }
@@ -1874,7 +1919,7 @@ impl MultiTokenManager {
     /// 返回是否找到并更新了该凭据。
     pub fn invalidate_access_token(&self, id: u64) -> bool {
         let mut entries = self.entries.lock();
-        let Some(entry) = entries.iter_mut().find(|e| e.id == id) else {
+        let Some(entry) = entries.get_mut(&id) else {
             return false;
         };
 
@@ -1900,12 +1945,18 @@ impl MultiTokenManager {
 
         // 仅多凭据格式才回写
         if !self.is_multiple_format {
+            *self.last_persist_at.lock() = Some(Instant::now());
+            self.persist_dirty.store(false, Ordering::Relaxed);
             return Ok(false);
         }
 
         let path = match &self.credentials_path {
             Some(p) => p.clone(),
-            None => return Ok(false),
+            None => {
+                *self.last_persist_at.lock() = Some(Instant::now());
+                self.persist_dirty.store(false, Ordering::Relaxed);
+                return Ok(false);
+            }
         };
 
         // 在持有 entries 锁的情况下收集凭据并序列化
@@ -1913,7 +1964,7 @@ impl MultiTokenManager {
         let json = {
             let entries = self.entries.lock();
             let credentials: Vec<KiroCredentials> = entries
-                .iter()
+                .values()
                 .filter(|e| !e.credentials.runtime_only)
                 .map(|e| {
                     let mut cred = e.credentials.clone();
@@ -1924,6 +1975,8 @@ impl MultiTokenManager {
                     cred
                 })
                 .collect();
+            let mut credentials = credentials;
+            credentials.sort_by_key(|c| c.id.unwrap_or(0));
             serde_json::to_string_pretty(&credentials).context("序列化凭据失败")?
         };
 
@@ -1968,7 +2021,41 @@ impl MultiTokenManager {
         }
 
         tracing::debug!("已回写凭据到文件: {:?}", path);
+        *self.last_persist_at.lock() = Some(Instant::now());
+        self.persist_dirty.store(false, Ordering::Relaxed);
         Ok(true)
+    }
+
+    /// 标记凭据已更新，并按 debounce 策略决定是否立即落盘
+    fn mark_persist_dirty(&self) {
+        self.persist_dirty.store(true, Ordering::Relaxed);
+
+        let should_flush = {
+            let last = *self.last_persist_at.lock();
+            match last {
+                Some(last_persisted_at) => last_persisted_at.elapsed() >= PERSIST_DEBOUNCE,
+                None => true,
+            }
+        };
+
+        if should_flush && let Err(e) = self.persist_if_dirty() {
+            tracing::warn!("延迟持久化凭据失败: {}", e);
+        }
+    }
+
+    /// 如果凭据有未落盘更新，则立即持久化
+    fn persist_if_dirty(&self) -> anyhow::Result<bool> {
+        if !self.persist_dirty.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
+
+        match self.persist_credentials() {
+            Ok(written) => Ok(written),
+            Err(err) => {
+                self.persist_dirty.store(true, Ordering::Relaxed);
+                Err(err)
+            }
+        }
     }
 
     /// 获取缓存目录（凭据文件所在目录）
@@ -2004,7 +2091,7 @@ impl MultiTokenManager {
         };
 
         let mut entries = self.entries.lock();
-        for entry in entries.iter_mut() {
+        for entry in entries.values_mut() {
             if let Some(s) = stats.get(&entry.id.to_string()) {
                 entry.success_count = s.success_count;
                 entry.last_used_at = s.last_used_at.clone();
@@ -2025,7 +2112,7 @@ impl MultiTokenManager {
         let stats: HashMap<String, StatsEntry> = {
             let entries = self.entries.lock();
             entries
-                .iter()
+                .values()
                 .map(|e| {
                     (
                         e.id.to_string(),
@@ -2091,7 +2178,7 @@ impl MultiTokenManager {
 
         {
             let mut entries = self.entries.lock();
-            if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+            if let Some(entry) = entries.get_mut(&id) {
                 entry.failure_count = 0;
                 entry.success_count += 1;
                 entry.last_used_at = Some(Utc::now().to_rfc3339());
@@ -2116,9 +2203,9 @@ impl MultiTokenManager {
         let result = {
             let mut entries = self.entries.lock();
 
-            let entry = match entries.iter_mut().find(|e| e.id == id) {
+            let entry = match entries.get_mut(&id) {
                 Some(e) => e,
-                None => return entries.iter().any(|e| !e.disabled),
+                None => return entries.values().any(|e| !e.disabled),
             };
 
             entry.failure_count += 1;
@@ -2143,11 +2230,11 @@ impl MultiTokenManager {
                 self.affinity.remove_by_credential(id);
 
                 let entries = self.entries.lock();
-                return entries.iter().any(|e| !e.disabled);
+                return entries.values().any(|e| !e.disabled);
             }
 
             // 检查是否还有可用凭据
-            entries.iter().any(|e| !e.disabled)
+            entries.values().any(|e| !e.disabled)
         };
         self.save_stats_debounced();
         result
@@ -2163,13 +2250,13 @@ impl MultiTokenManager {
         let result = {
             let mut entries = self.entries.lock();
 
-            let entry = match entries.iter_mut().find(|e| e.id == id) {
+            let entry = match entries.get_mut(&id) {
                 Some(e) => e,
-                None => return entries.iter().any(|e| !e.disabled),
+                None => return entries.values().any(|e| !e.disabled),
             };
 
             if entry.disabled {
-                return entries.iter().any(|e| !e.disabled);
+                return entries.values().any(|e| !e.disabled);
             }
 
             entry.disabled = true;
@@ -2181,7 +2268,7 @@ impl MultiTokenManager {
 
             tracing::error!("凭据 #{} 额度已用尽（MONTHLY_REQUEST_COUNT），已被禁用", id);
 
-            entries.iter().any(|e| !e.disabled)
+            entries.values().any(|e| !e.disabled)
         };
         self.save_stats_debounced();
         result
@@ -2195,13 +2282,13 @@ impl MultiTokenManager {
         let result = {
             let mut entries = self.entries.lock();
 
-            let entry = match entries.iter_mut().find(|e| e.id == id) {
+            let entry = match entries.get_mut(&id) {
                 Some(e) => e,
-                None => return entries.iter().any(|e| !e.disabled),
+                None => return entries.values().any(|e| !e.disabled),
             };
 
             if entry.disabled {
-                return entries.iter().any(|e| !e.disabled);
+                return entries.values().any(|e| !e.disabled);
             }
 
             entry.disabled = true;
@@ -2212,7 +2299,7 @@ impl MultiTokenManager {
 
             tracing::error!("凭据 #{} 上游返回 403 Forbidden，已被禁用", id);
 
-            entries.iter().any(|e| !e.disabled)
+            entries.values().any(|e| !e.disabled)
         };
         self.save_stats_debounced();
         result
@@ -2243,7 +2330,7 @@ impl MultiTokenManager {
         let mut entries = self.entries.lock();
         let mut recovery_time = self.global_recovery_time.lock();
 
-        for entry in entries.iter_mut() {
+        for entry in entries.values_mut() {
             if !entry.disabled {
                 entry.disabled = true;
                 entry.disable_reason = Some(reason);
@@ -2281,7 +2368,7 @@ impl MultiTokenManager {
         let mut recovery_time = self.global_recovery_time.lock();
         let mut recovered_count = 0;
 
-        for entry in entries.iter_mut() {
+        for entry in entries.values_mut() {
             // 只恢复因 ModelUnavailable 禁用的凭据，余额不足的不恢复
             if entry.disabled && entry.disable_reason == Some(DisableReason::ModelUnavailable) {
                 entry.disabled = false;
@@ -2305,7 +2392,7 @@ impl MultiTokenManager {
     /// 标记凭据为认证失败（如 invalid_grant，不会被自动恢复）
     pub fn mark_authentication_failed(&self, id: u64) {
         let mut entries = self.entries.lock();
-        if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+        if let Some(entry) = entries.get_mut(&id) {
             entry.disabled = true;
             entry.auto_heal_reason = None;
             entry.disable_reason = Some(DisableReason::AuthenticationFailed);
@@ -2318,7 +2405,7 @@ impl MultiTokenManager {
     /// 标记凭据为账户暂停（不会被自动恢复）
     pub fn mark_account_suspended(&self, id: u64) {
         let mut entries = self.entries.lock();
-        if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+        if let Some(entry) = entries.get_mut(&id) {
             entry.disabled = true;
             entry.auto_heal_reason = None;
             entry.disable_reason = Some(DisableReason::AccountSuspended);
@@ -2331,7 +2418,7 @@ impl MultiTokenManager {
     /// 标记凭据为余额不足（不会被自动恢复）
     pub fn mark_insufficient_balance(&self, id: u64) {
         let mut entries = self.entries.lock();
-        if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+        if let Some(entry) = entries.get_mut(&id) {
             entry.disabled = true;
             entry.auto_heal_reason = None; // 清除自愈原因，防止被自愈循环错误恢复
             entry.disable_reason = Some(DisableReason::InsufficientBalance);
@@ -2350,7 +2437,7 @@ impl MultiTokenManager {
         let credential_ids: Vec<u64> = {
             let entries = self.entries.lock();
             entries
-                .iter()
+                .values()
                 .filter(|e| !e.disabled)
                 .map(|e| e.id)
                 .collect()
@@ -2380,7 +2467,7 @@ impl MultiTokenManager {
                     if remaining < 1.0 {
                         if self.config.read().auto_disable_insufficient_balance {
                             let mut entries = self.entries.lock();
-                            if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+                            if let Some(entry) = entries.get_mut(&id) {
                                 entry.disabled = true;
                                 entry.disable_reason = Some(DisableReason::InsufficientBalance);
                                 tracing::warn!(
@@ -2428,46 +2515,48 @@ impl MultiTokenManager {
     /// 获取管理器状态快照（用于 Admin API）
     pub fn snapshot(&self) -> ManagerSnapshot {
         let entries = self.entries.lock();
-        let available = entries.iter().filter(|e| !e.disabled).count();
+        let available = entries.values().filter(|e| !e.disabled).count();
+
+        let mut snapshots: Vec<CredentialEntrySnapshot> = entries
+            .values()
+            .map(|e| {
+                // 使用缓存的哈希，如果不存在则计算并缓存
+                let hash = e
+                    .refresh_token_hash
+                    .clone()
+                    .or_else(|| credential_secret_hash(&e.credentials));
+
+                CredentialEntrySnapshot {
+                    id: e.id,
+                    priority: e.credentials.priority,
+                    disabled: e.disabled,
+                    disable_reason: e.disable_reason,
+                    failure_count: e.failure_count,
+                    refresh_failure_count: e.refresh_failure_count,
+                    auth_method: e.credentials.auth_method.as_deref().map(|m| {
+                        if m.eq_ignore_ascii_case("builder-id") || m.eq_ignore_ascii_case("iam") {
+                            "idc".to_string()
+                        } else {
+                            m.to_string()
+                        }
+                    }),
+                    has_profile_arn: e.credentials.profile_arn.is_some(),
+                    expires_at: e.credentials.expires_at.clone(),
+                    refresh_token_hash: hash,
+                    email: e.credentials.email.clone(),
+                    subscription_title: e.credentials.subscription_title.clone(),
+                    success_count: e.success_count,
+                    last_used_at: e.last_used_at.clone(),
+                    region: e.credentials.region.clone(),
+                    api_region: e.credentials.api_region.clone(),
+                    endpoint: e.credentials.endpoint.clone(),
+                }
+            })
+            .collect();
+        snapshots.sort_by_key(|entry| entry.id);
 
         ManagerSnapshot {
-            entries: entries
-                .iter()
-                .map(|e| {
-                    // 使用缓存的哈希，如果不存在则计算并缓存
-                    let hash = e
-                        .refresh_token_hash
-                        .clone()
-                        .or_else(|| credential_secret_hash(&e.credentials));
-
-                    CredentialEntrySnapshot {
-                        id: e.id,
-                        priority: e.credentials.priority,
-                        disabled: e.disabled,
-                        disable_reason: e.disable_reason,
-                        failure_count: e.failure_count,
-                        refresh_failure_count: e.refresh_failure_count,
-                        auth_method: e.credentials.auth_method.as_deref().map(|m| {
-                            if m.eq_ignore_ascii_case("builder-id") || m.eq_ignore_ascii_case("iam")
-                            {
-                                "idc".to_string()
-                            } else {
-                                m.to_string()
-                            }
-                        }),
-                        has_profile_arn: e.credentials.profile_arn.is_some(),
-                        expires_at: e.credentials.expires_at.clone(),
-                        refresh_token_hash: hash,
-                        email: e.credentials.email.clone(),
-                        subscription_title: e.credentials.subscription_title.clone(),
-                        success_count: e.success_count,
-                        last_used_at: e.last_used_at.clone(),
-                        region: e.credentials.region.clone(),
-                        api_region: e.credentials.api_region.clone(),
-                        endpoint: e.credentials.endpoint.clone(),
-                    }
-                })
-                .collect(),
+            entries: snapshots,
             total: entries.len(),
             available,
         }
@@ -2478,8 +2567,7 @@ impl MultiTokenManager {
         {
             let mut entries = self.entries.lock();
             let entry = entries
-                .iter_mut()
-                .find(|e| e.id == id)
+                .get_mut(&id)
                 .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?;
             entry.disabled = disabled;
             if !disabled {
@@ -2492,8 +2580,8 @@ impl MultiTokenManager {
                 entry.disable_reason = Some(DisableReason::Manual);
             }
         }
-        // 持久化更改
-        self.persist_credentials()?;
+        // 标记持久化更改
+        self.mark_persist_dirty();
         Ok(())
     }
 
@@ -2502,13 +2590,12 @@ impl MultiTokenManager {
         {
             let mut entries = self.entries.lock();
             let entry = entries
-                .iter_mut()
-                .find(|e| e.id == id)
+                .get_mut(&id)
                 .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?;
             entry.credentials.priority = priority;
         }
-        // 持久化更改
-        self.persist_credentials()?;
+        // 标记持久化更改
+        self.mark_persist_dirty();
         Ok(())
     }
 
@@ -2522,13 +2609,12 @@ impl MultiTokenManager {
         {
             let mut entries = self.entries.lock();
             let entry = entries
-                .iter_mut()
-                .find(|e| e.id == id)
+                .get_mut(&id)
                 .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?;
             entry.credentials.region = region;
             entry.credentials.api_region = api_region;
         }
-        self.persist_credentials()?;
+        self.mark_persist_dirty();
         Ok(())
     }
 
@@ -2537,12 +2623,11 @@ impl MultiTokenManager {
         {
             let mut entries = self.entries.lock();
             let entry = entries
-                .iter_mut()
-                .find(|e| e.id == id)
+                .get_mut(&id)
                 .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?;
             entry.credentials.endpoint = endpoint;
         }
-        self.persist_credentials()?;
+        self.mark_persist_dirty();
         Ok(())
     }
 
@@ -2551,8 +2636,7 @@ impl MultiTokenManager {
         {
             let mut entries = self.entries.lock();
             let entry = entries
-                .iter_mut()
-                .find(|e| e.id == id)
+                .get_mut(&id)
                 .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?;
             entry.failure_count = 0;
             entry.refresh_failure_count = 0;
@@ -2560,8 +2644,8 @@ impl MultiTokenManager {
             entry.auto_heal_reason = None;
             entry.disable_reason = None;
         }
-        // 持久化更改
-        self.persist_credentials()?;
+        // 标记持久化更改
+        self.mark_persist_dirty();
         Ok(())
     }
 
@@ -2571,8 +2655,7 @@ impl MultiTokenManager {
         let credentials = {
             let entries = self.entries.lock();
             entries
-                .iter()
-                .find(|e| e.id == id)
+                .get(&id)
                 .map(|e| e.credentials.clone())
                 .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?
         };
@@ -2590,10 +2673,16 @@ impl MultiTokenManager {
 
         {
             let mut entries = self.entries.lock();
-            if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+            if let Some(entry) = entries.get_mut(&id) {
+                let old_credentials = entry.credentials.clone();
                 entry.credentials = new_creds.clone();
                 entry.refresh_failure_count = 0;
                 entry.refresh_token_hash = credential_secret_hash(&new_creds);
+                let mut refresh_token_hashes = self.refresh_token_hashes.lock();
+                for hash in credential_lookup_hashes(&old_credentials) {
+                    refresh_token_hashes.remove(&hash);
+                }
+                refresh_token_hashes.extend(credential_lookup_hashes(&new_creds));
 
                 // 仅对自动禁用（失败阈值/刷新失败）自动恢复，手动禁用状态保持不变
                 if entry.disabled && entry.disable_reason != Some(DisableReason::Manual) {
@@ -2605,7 +2694,7 @@ impl MultiTokenManager {
             }
         }
 
-        self.persist_credentials()?;
+        self.mark_persist_dirty();
         Ok(())
     }
 
@@ -2615,8 +2704,7 @@ impl MultiTokenManager {
         let credentials = {
             let entries = self.entries.lock();
             entries
-                .iter()
-                .find(|e| e.id == id)
+                .get(&id)
                 .map(|e| e.credentials.clone())
                 .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?
         };
@@ -2636,8 +2724,7 @@ impl MultiTokenManager {
                 let current_creds = {
                     let entries = self.entries.lock();
                     entries
-                        .iter()
-                        .find(|e| e.id == id)
+                        .get(&id)
                         .map(|e| e.credentials.clone())
                         .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?
                 };
@@ -2658,16 +2745,20 @@ impl MultiTokenManager {
                         };
                     {
                         let mut entries = self.entries.lock();
-                        if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+                        if let Some(entry) = entries.get_mut(&id) {
+                            let old_credentials = entry.credentials.clone();
                             entry.credentials = new_creds.clone();
                             // 更新哈希缓存
                             entry.refresh_token_hash = credential_secret_hash(&new_creds);
+                            let mut refresh_token_hashes = self.refresh_token_hashes.lock();
+                            for hash in credential_lookup_hashes(&old_credentials) {
+                                refresh_token_hashes.remove(&hash);
+                            }
+                            refresh_token_hashes.extend(credential_lookup_hashes(&new_creds));
                         }
                     }
-                    // 持久化失败只记录警告，不影响本次请求
-                    if let Err(e) = self.persist_credentials() {
-                        tracing::warn!("Token 刷新后持久化失败（不影响本次请求）: {}", e);
-                    }
+                    // 标记凭据回写，按 debounce 策略合并高频刷新写入
+                    self.mark_persist_dirty();
                     new_creds
                         .access_token
                         .ok_or_else(|| anyhow::anyhow!("刷新后无 access_token"))?
@@ -2685,8 +2776,7 @@ impl MultiTokenManager {
         let credentials = {
             let entries = self.entries.lock();
             entries
-                .iter()
-                .find(|e| e.id == id)
+                .get(&id)
                 .map(|e| e.credentials.clone())
                 .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?
         };
@@ -2698,7 +2788,7 @@ impl MultiTokenManager {
                 let mut should_persist = false;
                 if let Some(subscription_title) = usage.subscription_title() {
                     let mut entries = self.entries.lock();
-                    if let Some(entry) = entries.iter_mut().find(|e| e.id == id)
+                    if let Some(entry) = entries.get_mut(&id)
                         && entry.credentials.subscription_title.as_deref()
                             != Some(subscription_title)
                     {
@@ -2707,8 +2797,8 @@ impl MultiTokenManager {
                     }
                 }
 
-                if should_persist && let Err(e) = self.persist_credentials() {
-                    tracing::warn!("订阅等级更新后持久化失败（不影响本次请求）: {}", e);
+                if should_persist {
+                    self.mark_persist_dirty();
                 }
 
                 Ok(usage)
@@ -2745,16 +2835,7 @@ impl MultiTokenManager {
         // 2. 基于 refreshToken / API Key 的 SHA-256 哈希检测重复
         let new_secret_hash = credential_secret_hash(&new_cred)
             .ok_or_else(|| anyhow::anyhow!("缺少 refreshToken 或 kiroApiKey"))?;
-        let duplicate_exists = {
-            let entries = self.entries.lock();
-            entries.iter().any(|entry| {
-                let hash = entry
-                    .refresh_token_hash
-                    .clone()
-                    .or_else(|| credential_secret_hash(&entry.credentials));
-                hash.as_deref() == Some(new_secret_hash.as_str())
-            })
-        };
+        let duplicate_exists = self.refresh_token_hashes.lock().contains(&new_secret_hash);
         if duplicate_exists {
             anyhow::bail!("凭据已存在（refreshToken 或 kiroApiKey 重复）");
         }
@@ -2793,18 +2874,12 @@ impl MultiTokenManager {
 
         let id = {
             let mut entries = self.entries.lock();
-            let duplicate_exists = entries.iter().any(|entry| {
-                let hash = entry
-                    .refresh_token_hash
-                    .clone()
-                    .or_else(|| credential_secret_hash(&entry.credentials));
-                hash.as_deref() == Some(new_secret_hash.as_str())
-            });
+            let duplicate_exists = self.refresh_token_hashes.lock().contains(&new_secret_hash);
             if duplicate_exists {
                 anyhow::bail!("凭据已存在（refreshToken 或 kiroApiKey 重复）");
             }
 
-            let new_id = entries.iter().map(|e| e.id).max().unwrap_or(0) + 1;
+            let new_id = self.next_id.fetch_add(1, Ordering::Relaxed);
             validated_cred.id = Some(new_id);
 
             // 为新凭据生成设备指纹
@@ -2818,7 +2893,8 @@ impl MultiTokenManager {
             let fingerprint = Fingerprint::generate_from_seed(&fingerprint_seed);
 
             let entry_secret_hash = credential_secret_hash(&validated_cred);
-            entries.push(CredentialEntry {
+            let entry_lookup_hashes = credential_lookup_hashes(&validated_cred);
+            entries.insert(new_id, CredentialEntry {
                 id: new_id,
                 credentials: validated_cred,
                 failure_count: 0,
@@ -2831,6 +2907,7 @@ impl MultiTokenManager {
                 last_used_at: None,
                 refresh_token_hash: entry_secret_hash,
             });
+            self.refresh_token_hashes.lock().extend(entry_lookup_hashes);
             new_id
         };
 
@@ -2861,8 +2938,7 @@ impl MultiTokenManager {
 
             // 查找凭据
             let entry = entries
-                .iter()
-                .find(|e| e.id == id)
+                .get(&id)
                 .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?;
 
             // 检查是否已禁用
@@ -2870,8 +2946,11 @@ impl MultiTokenManager {
                 anyhow::bail!("只能删除已禁用的凭据（请先禁用凭据 #{}）", id);
             }
 
-            // 删除凭据
-            entries.retain(|e| e.id != id);
+            let removed = entries.remove(&id).expect("entry checked above");
+            let mut refresh_token_hashes = self.refresh_token_hashes.lock();
+            for hash in credential_lookup_hashes(&removed.credentials) {
+                refresh_token_hashes.remove(&hash);
+            }
         }
 
         // 持久化更改
@@ -2889,20 +2968,9 @@ impl MultiTokenManager {
     /// 用于批量导入时的去重检查，通过比较 refreshToken 前 32 字符判断是否重复
     /// 使用 floor_char_boundary 安全截断，避免在多字节字符中间切割导致 panic
     pub fn has_refresh_token_prefix(&self, refresh_token: &str) -> bool {
-        let prefix_len = floor_char_boundary(refresh_token, 32);
-        let new_prefix = &refresh_token[..prefix_len];
-
-        let entries = self.entries.lock();
-        entries.iter().any(|e| {
-            e.credentials
-                .refresh_token
-                .as_ref()
-                .map(|rt| {
-                    let existing_prefix_len = floor_char_boundary(rt, 32);
-                    &rt[..existing_prefix_len] == new_prefix
-                })
-                .unwrap_or(false)
-        })
+        self.refresh_token_hashes
+            .lock()
+            .contains(&refresh_token_prefix_hash(refresh_token))
     }
 
     // ========================================================================
@@ -2914,8 +2982,7 @@ impl MultiTokenManager {
     pub fn get_fingerprint(&self, id: u64) -> Option<Fingerprint> {
         let entries = self.entries.lock();
         entries
-            .iter()
-            .find(|e| e.id == id)
+            .get(&id)
             .map(|e| e.fingerprint.clone())
     }
 
@@ -2938,8 +3005,7 @@ impl MultiTokenManager {
         let is_disabled = {
             let entries = self.entries.lock();
             entries
-                .iter()
-                .find(|e| e.id == id)
+                .get(&id)
                 .map(|e| e.disabled)
                 .unwrap_or(true)
         };
@@ -2972,7 +3038,7 @@ impl MultiTokenManager {
     ) -> std::time::Duration {
         {
             let mut entries = self.entries.lock();
-            if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+            if let Some(entry) = entries.get_mut(&id) {
                 entry.last_used_at = Some(Utc::now().to_rfc3339());
             }
         }
@@ -2995,7 +3061,7 @@ impl MultiTokenManager {
     pub fn get_expiring_credential_ids(&self, minutes_before_expiry: i64) -> Vec<u64> {
         let entries = self.entries.lock();
         entries
-            .iter()
+            .values()
             .filter(|e| {
                 !e.disabled
                     && is_token_expiring_within(&e.credentials, minutes_before_expiry)
@@ -3054,8 +3120,7 @@ impl MultiTokenManager {
         let credentials = {
             let entries = self.entries.lock();
             entries
-                .iter()
-                .find(|e| e.id == id)
+                .get(&id)
                 .map(|e| e.credentials.clone())
                 .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?
         };
@@ -3071,17 +3136,20 @@ impl MultiTokenManager {
                 // 更新凭据
                 {
                     let mut entries = self.entries.lock();
-                    if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+                    if let Some(entry) = entries.get_mut(&id) {
+                        let old_credentials = entry.credentials.clone();
                         entry.credentials = new_creds.clone();
                         // 更新哈希缓存
-                        entry.refresh_token_hash =
-                            new_creds.refresh_token.as_deref().map(sha256_hex);
+                        entry.refresh_token_hash = credential_secret_hash(&new_creds);
+                        let mut refresh_token_hashes = self.refresh_token_hashes.lock();
+                        for hash in credential_lookup_hashes(&old_credentials) {
+                            refresh_token_hashes.remove(&hash);
+                        }
+                        refresh_token_hashes.extend(credential_lookup_hashes(&new_creds));
                     }
                 }
-                // 持久化
-                if let Err(e) = self.persist_credentials() {
-                    tracing::warn!("Token 刷新后持久化失败: {}", e);
-                }
+                // 标记凭据回写，按 debounce 策略合并后台刷新写入
+                self.mark_persist_dirty();
 
                 let expires_at = new_creds.expires_at.unwrap_or_default();
                 Ok(RefreshResult::success(id, expires_at))
@@ -3134,6 +3202,12 @@ impl MultiTokenManager {
 
 impl Drop for MultiTokenManager {
     fn drop(&mut self) {
+        if self.persist_dirty.load(Ordering::Relaxed)
+            && let Err(e) = self.persist_if_dirty()
+        {
+            tracing::warn!("退出前持久化凭据失败: {}", e);
+        }
+
         if self.stats_dirty.load(Ordering::Relaxed) {
             self.save_stats();
         }
