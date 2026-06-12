@@ -39,6 +39,7 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
   const [enableStickyRouting, setEnableStickyRouting] = useState(true)
   const [autoDisableInsufficientBalance, setAutoDisableInsufficientBalance] = useState(true)
   const [autoDisableRefreshFailure, setAutoDisableRefreshFailure] = useState(true)
+  const [autoDisableOnForbidden, setAutoDisableOnForbidden] = useState(true)
 
   // 代理设置
   const [proxyUrl, setProxyUrl] = useState('')
@@ -75,6 +76,7 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
       setEnableStickyRouting(globalConfig.enableStickyRouting)
       setAutoDisableInsufficientBalance(globalConfig.autoDisableInsufficientBalance)
       setAutoDisableRefreshFailure(globalConfig.autoDisableRefreshFailure)
+      setAutoDisableOnForbidden(globalConfig.autoDisableOnForbidden)
       const c = globalConfig.compression
       setCEnabled(c.enabled)
       setCWhitespace(c.whitespaceCompression)
@@ -151,6 +153,11 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
 
     if (autoDisableRefreshFailure !== (globalConfig?.autoDisableRefreshFailure ?? true)) {
       globalPayload.autoDisableRefreshFailure = autoDisableRefreshFailure
+      hasGlobalChanges = true
+    }
+
+    if (autoDisableOnForbidden !== (globalConfig?.autoDisableOnForbidden ?? true)) {
+      globalPayload.autoDisableOnForbidden = autoDisableOnForbidden
       hasGlobalChanges = true
     }
 
@@ -315,6 +322,13 @@ export function GlobalConfigDialog({ open, onOpenChange }: GlobalConfigDialogPro
                   <p className="text-xs text-muted-foreground">Token 刷新连续失败达阈值时自动禁用凭据</p>
                 </div>
                 <Switch checked={autoDisableRefreshFailure} onCheckedChange={setAutoDisableRefreshFailure} disabled={isPending} aria-label="刷新失败自动禁用" />
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-sm font-medium">403 自动禁用</label>
+                  <p className="text-xs text-muted-foreground">上游返回 403 Forbidden 时自动禁用凭据</p>
+                </div>
+                <Switch checked={autoDisableOnForbidden} onCheckedChange={setAutoDisableOnForbidden} disabled={isPending} aria-label="403 自动禁用" />
               </div>
             </div>
 

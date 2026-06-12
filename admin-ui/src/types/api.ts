@@ -368,6 +368,7 @@ export interface GlobalConfigResponse {
   enableStickyRouting: boolean
   autoDisableInsufficientBalance: boolean
   autoDisableRefreshFailure: boolean
+  autoDisableOnForbidden: boolean
   compression: CompressionConfigResponse
   rewriter: RewriterConfigResponse
 }
@@ -401,6 +402,7 @@ export interface UpdateGlobalConfigRequest {
   enableStickyRouting?: boolean
   autoDisableInsufficientBalance?: boolean
   autoDisableRefreshFailure?: boolean
+  autoDisableOnForbidden?: boolean
   compression?: UpdateCompressionConfigRequest
   rewriter?: UpdateRewriterConfigRequest
 }

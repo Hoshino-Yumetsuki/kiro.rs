@@ -412,6 +412,8 @@ pub struct GlobalConfigResponse {
     pub auto_disable_insufficient_balance: bool,
     /// Token 刷新失败时是否自动禁用凭据
     pub auto_disable_refresh_failure: bool,
+    /// 上游返回 403 时是否自动禁用凭据
+    pub auto_disable_on_forbidden: bool,
     /// 压缩配置
     pub compression: CompressionConfigResponse,
     /// 响应改写配置
@@ -458,6 +460,8 @@ pub struct UpdateGlobalConfigRequest {
     pub auto_disable_insufficient_balance: Option<bool>,
     /// Token 刷新失败时是否自动禁用凭据（可选）
     pub auto_disable_refresh_failure: Option<bool>,
+    /// 上游返回 403 时是否自动禁用凭据（可选）
+    pub auto_disable_on_forbidden: Option<bool>,
     /// 压缩配置（可选）
     pub compression: Option<UpdateCompressionConfigRequest>,
     /// 响应改写配置（可选）
