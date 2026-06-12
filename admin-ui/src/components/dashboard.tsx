@@ -420,7 +420,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
     let successCount = 0
     let failCount = 0
 
-    for (const id of ids) {
+    await Promise.all(ids.map(async (id) => {
       try {
         await new Promise<void>((resolve, reject) => {
           forceRefreshToken(id, {
@@ -437,7 +437,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
       } catch {
         // noop
       }
-    }
+    }))
 
     if (failCount === 0) {
       toast.success(`成功刷新 ${successCount} 个凭据`)
@@ -584,28 +584,23 @@ export function Dashboard({ onLogout }: DashboardProps) {
     setVerifyResults(initialResults)
     setVerifyDialogOpen(true)
 
-    // 开始验活
-    for (let i = 0; i < ids.length; i++) {
-      // 检查是否取消
-      if (cancelVerifyRef.current) {
-        toast.info('已取消验活')
-        break
-      }
-
-      const id = ids[i]
-
-      // 更新当前凭据状态为 verifying
-      setVerifyResults(prev => {
-        const newResults = new Map(prev)
+    setVerifyResults(prev => {
+      const newResults = new Map(prev)
+      ids.forEach(id => {
         newResults.set(id, { id, status: 'verifying' })
-        return newResults
       })
+      return newResults
+    })
 
+    let completedCount = 0
+
+    await Promise.all(ids.map(async (id) => {
       try {
         const balance = await getCredentialBalance(id)
+        if (cancelVerifyRef.current) return
+
         successCount++
 
-        // 更新为成功状态
         setVerifyResults(prev => {
           const newResults = new Map(prev)
           newResults.set(id, {
@@ -616,7 +611,8 @@ export function Dashboard({ onLogout }: DashboardProps) {
           return newResults
         })
       } catch (error) {
-        // 更新为失败状态
+        if (cancelVerifyRef.current) return
+
         setVerifyResults(prev => {
           const newResults = new Map(prev)
           newResults.set(id, {
@@ -626,16 +622,11 @@ export function Dashboard({ onLogout }: DashboardProps) {
           })
           return newResults
         })
+      } finally {
+        completedCount++
+        setVerifyProgress({ current: completedCount, total: ids.length })
       }
-
-      // 更新进度
-      setVerifyProgress({ current: i + 1, total: ids.length })
-
-      // 添加延迟防止封号（最后一个不需要延迟）
-      if (i < ids.length - 1 && !cancelVerifyRef.current) {
-        await new Promise(resolve => setTimeout(resolve, 2000))
-      }
-    }
+    }))
 
     setVerifying(false)
 
