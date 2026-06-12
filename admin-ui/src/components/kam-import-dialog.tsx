@@ -222,50 +222,56 @@ export function KamImportDialog({ open, onOpenChange }: KamImportDialogProps) {
       let failCount = 0
       let skippedCount = 0
 
-      for (let i = 0; i < validAccounts.length; i++) {
-        const account = validAccounts[i]
+      const reservedTokenHashes = new Set(existingTokenHashes)
+      let completedCount = 0
 
-        // 跳过 error 状态的账号
-        if (skipErrorAccounts && account.status === 'error') {
-          skippedCount++
-          setProgress({ current: i + 1, total: validAccounts.length })
-          continue
-        }
+      setCurrentProcessing(`正在并行处理 ${validAccounts.length} 个账号`)
 
-        const cred = account.credentials
-        const token = cred.refreshToken.trim()
-        const tokenHash = await sha256Hex(token)
-
-        setCurrentProcessing(`正在处理 ${account.email || account.nickname || `账号 ${i + 1}`}`)
-        setResults(prev => {
-          const next = [...prev]
-          next[i] = { ...next[i], status: 'checking' }
-          return next
-        })
-
-        // 检查重复
-        if (existingTokenHashes.has(tokenHash)) {
-          duplicateCount++
-          const existingCred = existingCredentials?.credentials.find(c => c.refreshTokenHash === tokenHash)
-          setResults(prev => {
-            const next = [...prev]
-            next[i] = { ...next[i], status: 'duplicate', error: '该凭据已存在', email: existingCred?.email || account.email }
-            return next
-          })
-          setProgress({ current: i + 1, total: validAccounts.length })
-          continue
-        }
-
-        // 验活中
-        setResults(prev => {
-          const next = [...prev]
-          next[i] = { ...next[i], status: 'verifying' }
-          return next
-        })
-
+      await Promise.all(validAccounts.map(async (account, i) => {
         let addedCredId: number | null = null
 
         try {
+          // 跳过 error 状态的账号
+          if (skipErrorAccounts && account.status === 'error') {
+            skippedCount++
+            return
+          }
+
+          const cred = account.credentials
+          const token = cred.refreshToken.trim()
+          const tokenHash = await sha256Hex(token)
+
+          setResults(prev => {
+            const next = [...prev]
+            next[i] = { ...next[i], status: 'checking' }
+            return next
+          })
+
+          // 检查重复
+          if (reservedTokenHashes.has(tokenHash)) {
+            duplicateCount++
+            const existingCred = existingCredentials?.credentials.find(c => c.refreshTokenHash === tokenHash)
+            setResults(prev => {
+              const next = [...prev]
+              next[i] = {
+                ...next[i],
+                status: 'duplicate',
+                error: '该凭据已存在或在本次导入中重复',
+                email: existingCred?.email || account.email,
+              }
+              return next
+            })
+            return
+          }
+          reservedTokenHashes.add(tokenHash)
+
+          // 验活中
+          setResults(prev => {
+            const next = [...prev]
+            next[i] = { ...next[i], status: 'verifying' }
+            return next
+          })
+
           const clientId = cred.clientId?.trim() || undefined
           const clientSecret = cred.clientSecret?.trim() || undefined
           const authMethod = clientId && clientSecret ? 'idc' : 'social'
@@ -285,13 +291,9 @@ export function KamImportDialog({ open, onOpenChange }: KamImportDialogProps) {
           })
 
           addedCredId = addedCred.credentialId
-
-          await new Promise(resolve => setTimeout(resolve, 1000))
-
           const balance = await getCredentialBalance(addedCred.credentialId)
 
           successCount++
-          existingTokenHashes.add(tokenHash)
           setCurrentProcessing(`验活成功: ${addedCred.email || account.email || `账号 ${i + 1}`}`)
           setResults(prev => {
             const next = [...prev]
@@ -330,10 +332,11 @@ export function KamImportDialog({ open, onOpenChange }: KamImportDialogProps) {
             }
             return next
           })
+        } finally {
+          completedCount++
+          setProgress({ current: completedCount, total: validAccounts.length })
         }
-
-        setProgress({ current: i + 1, total: validAccounts.length })
-      }
+      }))
 
       // 汇总
       const parts: string[] = []
