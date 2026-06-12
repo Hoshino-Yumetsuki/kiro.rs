@@ -1,6 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useRef, useState, useMemo } from 'react'
+import PQueue from 'p-queue'
 import { toast } from 'sonner'
 import { CheckCircle2, XCircle, AlertCircle, Loader2 } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   Dialog,
   DialogContent,
@@ -9,8 +11,8 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { useCredentials, useAddCredential, useDeleteCredential } from '@/hooks/use-credentials'
-import { getCredentialBalance, setCredentialDisabled } from '@/api/credentials'
+import { useCredentials } from '@/hooks/use-credentials'
+import { addCredential, deleteCredential, getCredentialBalance, setCredentialDisabled } from '@/api/credentials'
 import { formatKiroUsageWithUsd } from '@/lib/format'
 import { extractErrorMessage, sha256Hex } from '@/lib/utils'
 
@@ -149,10 +151,10 @@ export function KamImportDialog({ open, onOpenChange }: KamImportDialogProps) {
   const [progress, setProgress] = useState({ current: 0, total: 0 })
   const [currentProcessing, setCurrentProcessing] = useState<string>('')
   const [results, setResults] = useState<VerificationResult[]>([])
+  const cancelImportRef = useRef<(() => void) | null>(null)
 
+  const queryClient = useQueryClient()
   const { data: existingCredentials } = useCredentials()
-  const { mutateAsync: addCredential } = useAddCredential()
-  const { mutateAsync: deleteCredential } = useDeleteCredential()
 
   const rollbackCredential = async (id: number): Promise<{ success: boolean; error?: string }> => {
     try {
@@ -224,11 +226,20 @@ export function KamImportDialog({ open, onOpenChange }: KamImportDialogProps) {
 
       const reservedTokenHashes = new Set(existingTokenHashes)
       let completedCount = 0
+      const controller = new AbortController()
+      const queue = new PQueue({ concurrency: 5 })
+      cancelImportRef.current = () => {
+        queue.clear()
+        controller.abort()
+      }
 
       setCurrentProcessing(`正在并行处理 ${validAccounts.length} 个账号`)
 
-      await Promise.all(validAccounts.map(async (account, i) => {
-        let addedCredId: number | null = null
+      validAccounts.forEach((account, i) => {
+        void queue.add(async () => {
+          if (controller.signal.aborted) return
+
+          let addedCredId: number | null = null
 
         try {
           // 跳过 error 状态的账号
@@ -288,10 +299,11 @@ export function KamImportDialog({ open, onOpenChange }: KamImportDialogProps) {
             clientId,
             clientSecret,
             machineId: account.machineId?.trim() || undefined,
-          })
+          }, controller.signal)
 
           addedCredId = addedCred.credentialId
-          const balance = await getCredentialBalance(addedCred.credentialId)
+          const balance = await getCredentialBalance(addedCred.credentialId, controller.signal)
+          if (controller.signal.aborted) return
 
           successCount++
           setCurrentProcessing(`验活成功: ${addedCred.email || account.email || `账号 ${i + 1}`}`)
@@ -320,6 +332,8 @@ export function KamImportDialog({ open, onOpenChange }: KamImportDialogProps) {
             }
           }
 
+          if (controller.signal.aborted) return
+
           failCount++
           setResults(prev => {
             const next = [...prev]
@@ -336,7 +350,17 @@ export function KamImportDialog({ open, onOpenChange }: KamImportDialogProps) {
           completedCount++
           setProgress({ current: completedCount, total: validAccounts.length })
         }
-      }))
+        })
+      })
+
+      await queue.onIdle()
+      cancelImportRef.current = null
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
+
+      if (controller.signal.aborted) {
+        setCurrentProcessing('已取消导入')
+        return
+      }
 
       // 汇总
       const parts: string[] = []
@@ -353,6 +377,7 @@ export function KamImportDialog({ open, onOpenChange }: KamImportDialogProps) {
     } catch (error) {
       toast.error('导入失败: ' + extractErrorMessage(error))
     } finally {
+      cancelImportRef.current = null
       setImporting(false)
     }
   }
@@ -522,10 +547,16 @@ export function KamImportDialog({ open, onOpenChange }: KamImportDialogProps) {
           <Button
             type="button"
             variant="outline"
-            onClick={() => { onOpenChange(false); resetForm() }}
-            disabled={importing}
+            onClick={() => {
+              if (importing) {
+                cancelImportRef.current?.()
+                return
+              }
+              onOpenChange(false)
+              resetForm()
+            }}
           >
-            {importing ? '导入中…' : results.length > 0 ? '关闭' : '取消'}
+            {importing ? '取消导入' : results.length > 0 ? '关闭' : '取消'}
           </Button>
           {results.length === 0 && (
             <Button

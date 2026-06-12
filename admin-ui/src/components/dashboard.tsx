@@ -1,6 +1,8 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback, type MouseEvent } from 'react'
+import PQueue from 'p-queue'
 import { RefreshCw, LogOut, Moon, Sun, Server, Plus, Upload, Trash2, RotateCcw, CheckCircle2, ArrowUp, ArrowDown, Wallet, Eraser, Settings } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { toast } from 'sonner'
 import { storage } from '@/lib/storage'
 import { Card, CardContent } from '@/components/ui/card'
@@ -19,8 +21,8 @@ import { AddCredentialDialog } from '@/components/add-credential-dialog'
 import { ImportTokenJsonDialog } from '@/components/import-token-json-dialog'
 import { BatchVerifyDialog, type VerifyResult } from '@/components/batch-verify-dialog'
 import { GlobalConfigDialog } from '@/components/global-config-dialog'
-import { useCredentials, useCachedBalances, useDeleteCredential, useResetFailure, useForceRefreshToken, useProxyConfig, useGlobalConfig } from '@/hooks/use-credentials'
-import { getCredentialBalance } from '@/api/credentials'
+import { useCredentials, useCachedBalances, useProxyConfig, useGlobalConfig } from '@/hooks/use-credentials'
+import { deleteCredential, forceRefreshToken, getCredentialBalance, resetCredentialFailure } from '@/api/credentials'
 import { formatKiroUsageWithUsd } from '@/lib/format'
 import { extractErrorMessage } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -55,12 +57,16 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [clearAllDialogOpen, setClearAllDialogOpen] = useState(false)
   const [pendingBatchDeleteIds, setPendingBatchDeleteIds] = useState<number[]>([])
   const [pendingClearAllCount, setPendingClearAllCount] = useState(0)
-  const cancelVerifyRef = useRef(false)
+  const activeBatchCancelRef = useRef<(() => void) | null>(null)
+  const cancelVerifyRef = useRef<(() => void) | null>(null)
+  const cancelQueryInfoRef = useRef<(() => void) | null>(null)
   const autoHydratedBalanceIdsRef = useRef<Set<number>>(new Set())
-  const [currentPage, setCurrentPage] = useState(1)
+  const parentRef = useRef<HTMLDivElement>(null)
+  const lastSelectedIdRef = useRef<number | null>(null)
+  const selectAllCheckboxRef = useRef<HTMLInputElement>(null)
   const [sortField, setSortField] = useState<SortField>('default')
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc')
-  const itemsPerPage = 12
+  const [columnCount, setColumnCount] = useState(1)
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('kiro-dark-mode')
@@ -77,9 +83,6 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const queryClient = useQueryClient()
   const { data, isLoading, error, refetch } = useCredentials()
   const { data: cachedBalancesData } = useCachedBalances()
-  const { mutate: deleteCredential } = useDeleteCredential()
-  const { mutate: resetFailure } = useResetFailure()
-  const { mutate: forceRefreshToken } = useForceRefreshToken()
   useProxyConfig()
   useGlobalConfig()
 
@@ -115,21 +118,52 @@ export function Dashboard({ onLogout }: DashboardProps) {
     })
   }, [data?.credentials, sortField, sortOrder, cachedBalanceMap])
 
-  // 计算分页
-  const totalPages = Math.ceil(sortedCredentials.length / itemsPerPage)
-  const startIndex = (currentPage - 1) * itemsPerPage
-  const endIndex = startIndex + itemsPerPage
-  const currentCredentials = sortedCredentials.slice(startIndex, endIndex)
+  const credentialRows = useMemo(() => {
+    const rows: typeof sortedCredentials[] = []
+    for (let i = 0; i < sortedCredentials.length; i += columnCount) {
+      rows.push(sortedCredentials.slice(i, i + columnCount))
+    }
+    return rows
+  }, [sortedCredentials, columnCount])
+
+  const rowVirtualizer = useVirtualizer({
+    count: credentialRows.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 260,
+    overscan: 3,
+  })
+
   const disabledCredentialCount = data?.credentials.filter(credential => credential.disabled).length || 0
   const selectedDisabledCount = Array.from(selectedIds).filter(id => {
     const credential = data?.credentials.find(c => c.id === id)
     return Boolean(credential?.disabled)
   }).length
+  const allVisibleSelected = sortedCredentials.length > 0 && sortedCredentials.every(credential => selectedIds.has(credential.id))
+  const someVisibleSelected = sortedCredentials.some(credential => selectedIds.has(credential.id))
 
-  // 当凭据列表变化时重置到第一页
   useEffect(() => {
-    setCurrentPage(1)
-  }, [data?.credentials.length])
+    if (selectAllCheckboxRef.current) {
+      selectAllCheckboxRef.current.indeterminate = someVisibleSelected && !allVisibleSelected
+    }
+  }, [allVisibleSelected, someVisibleSelected])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const updateColumnCount = () => {
+      if (window.matchMedia('(min-width: 1024px)').matches) {
+        setColumnCount(3)
+      } else if (window.matchMedia('(min-width: 768px)').matches) {
+        setColumnCount(2)
+      } else {
+        setColumnCount(1)
+      }
+    }
+
+    updateColumnCount()
+    window.addEventListener('resize', updateColumnCount)
+    return () => window.removeEventListener('resize', updateColumnCount)
+  }, [])
 
   // 只保留当前仍存在的凭据缓存，避免删除后残留旧数据
   useEffect(() => {
@@ -196,44 +230,40 @@ export function Dashboard({ onLogout }: DashboardProps) {
       return next
     })
 
-    let cancelled = false
+    const controller = new AbortController()
+    const queue = new PQueue({ concurrency: 3 })
 
-    Promise.all(
-      idsToHydrate.map(async id => {
+    idsToHydrate.forEach(id => {
+      void queue.add(async () => {
+        if (controller.signal.aborted) return
+
         try {
-          return [id, await getCredentialBalance(id)] as const
+          const balance = await getCredentialBalance(id, controller.signal)
+          if (controller.signal.aborted) return
+
+          setBalanceMap(prev => {
+            const next = new Map(prev)
+            next.set(id, balance)
+            return next
+          })
         } catch (error) {
+          if (controller.signal.aborted) return
           autoHydratedBalanceIdsRef.current.delete(id)
           console.warn(`自动补全凭据 #${id} 余额失败`, error)
-          return null
+        } finally {
+          if (controller.signal.aborted) return
+          setLoadingBalanceIds(prev => {
+            const next = new Set(prev)
+            next.delete(id)
+            return next
+          })
         }
-      })
-    ).then(results => {
-      if (cancelled) {
-        return
-      }
-      setBalanceMap(prev => {
-        const next = new Map(prev)
-        for (const result of results) {
-          if (result) {
-            next.set(result[0], result[1])
-          }
-        }
-        return next
-      })
-    }).finally(() => {
-      if (cancelled) {
-        return
-      }
-      setLoadingBalanceIds(prev => {
-        const next = new Set(prev)
-        idsToHydrate.forEach(id => next.delete(id))
-        return next
       })
     })
 
     return () => {
-      cancelled = true
+      queue.clear()
+      controller.abort()
     }
   }, [cachedBalances, data?.credentials])
 
@@ -285,22 +315,60 @@ export function Dashboard({ onLogout }: DashboardProps) {
       setSortField(field)
       setSortOrder(field === 'balance' ? 'desc' : 'asc')
     }
-    setCurrentPage(1)
+    parentRef.current?.scrollTo({ top: 0 })
   }
 
   // 选择管理
-  const toggleSelect = (id: number) => {
-    const newSelected = new Set(selectedIds)
-    if (newSelected.has(id)) {
-      newSelected.delete(id)
-    } else {
-      newSelected.add(id)
+  const handleToggleSelect = useCallback((id: number, event?: MouseEvent) => {
+    if (event?.shiftKey && lastSelectedIdRef.current !== null) {
+      const allIds = sortedCredentials.map(credential => credential.id)
+      const startIndex = allIds.indexOf(lastSelectedIdRef.current)
+      const endIndex = allIds.indexOf(id)
+
+      if (startIndex !== -1 && endIndex !== -1) {
+        const [from, to] = startIndex < endIndex ? [startIndex, endIndex] : [endIndex, startIndex]
+        setSelectedIds(prev => {
+          const next = new Set(prev)
+          for (let i = from; i <= to; i++) {
+            next.add(allIds[i])
+          }
+          return next
+        })
+        lastSelectedIdRef.current = id
+        return
+      }
     }
-    setSelectedIds(newSelected)
-  }
+
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+    lastSelectedIdRef.current = id
+  }, [sortedCredentials])
+
+  const handleSelectAllVisible = useCallback(() => {
+    const visibleIds = sortedCredentials.map(credential => credential.id)
+    const allSelected = visibleIds.length > 0 && visibleIds.every(id => selectedIds.has(id))
+
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (allSelected) {
+        visibleIds.forEach(id => next.delete(id))
+      } else {
+        visibleIds.forEach(id => next.add(id))
+      }
+      return next
+    })
+  }, [selectedIds, sortedCredentials])
 
   const deselectAll = () => {
     setSelectedIds(new Set())
+    lastSelectedIdRef.current = null
   }
 
   // 批量删除（仅删除已禁用项）
@@ -331,25 +399,33 @@ export function Dashboard({ onLogout }: DashboardProps) {
 
     let successCount = 0
     let failCount = 0
-
-    for (const id of disabledIds) {
-      try {
-        await new Promise<void>((resolve, reject) => {
-          deleteCredential(id, {
-            onSuccess: () => {
-              successCount++
-              resolve()
-            },
-            onError: (err) => {
-              failCount++
-              reject(err)
-            }
-          })
-        })
-      } catch (error) {
-        // 错误已在 onError 中处理
-      }
+    const controller = new AbortController()
+    const queue = new PQueue({ concurrency: 5 })
+    activeBatchCancelRef.current = () => {
+      queue.clear()
+      controller.abort()
     }
+
+    disabledIds.forEach(id => {
+      void queue.add(async () => {
+        if (controller.signal.aborted) return
+
+        try {
+          await deleteCredential(id, controller.signal)
+          if (!controller.signal.aborted) {
+            successCount++
+          }
+        } catch (error) {
+          if (!controller.signal.aborted) {
+            failCount++
+          }
+        }
+      })
+    })
+
+    await queue.onIdle()
+    activeBatchCancelRef.current = null
+    queryClient.invalidateQueries({ queryKey: ['credentials'] })
 
     const skippedResultText = skippedCount > 0 ? `，已跳过 ${skippedCount} 个未禁用凭据` : ''
 
@@ -381,25 +457,33 @@ export function Dashboard({ onLogout }: DashboardProps) {
 
     let successCount = 0
     let failCount = 0
-
-    for (const id of failedIds) {
-      try {
-        await new Promise<void>((resolve, reject) => {
-          resetFailure(id, {
-            onSuccess: () => {
-              successCount++
-              resolve()
-            },
-            onError: (err) => {
-              failCount++
-              reject(err)
-            }
-          })
-        })
-      } catch (error) {
-        // 错误已在 onError 中处理
-      }
+    const controller = new AbortController()
+    const queue = new PQueue({ concurrency: 5 })
+    activeBatchCancelRef.current = () => {
+      queue.clear()
+      controller.abort()
     }
+
+    failedIds.forEach(id => {
+      void queue.add(async () => {
+        if (controller.signal.aborted) return
+
+        try {
+          await resetCredentialFailure(id, controller.signal)
+          if (!controller.signal.aborted) {
+            successCount++
+          }
+        } catch (error) {
+          if (!controller.signal.aborted) {
+            failCount++
+          }
+        }
+      })
+    })
+
+    await queue.onIdle()
+    activeBatchCancelRef.current = null
+    queryClient.invalidateQueries({ queryKey: ['credentials'] })
 
     if (failCount === 0) {
       toast.success(`成功恢复 ${successCount} 个凭据`)
@@ -419,25 +503,34 @@ export function Dashboard({ onLogout }: DashboardProps) {
     const ids = Array.from(selectedIds)
     let successCount = 0
     let failCount = 0
+    const controller = new AbortController()
+    const queue = new PQueue({ concurrency: 5 })
+    activeBatchCancelRef.current = () => {
+      queue.clear()
+      controller.abort()
+    }
 
-    await Promise.all(ids.map(async (id) => {
-      try {
-        await new Promise<void>((resolve, reject) => {
-          forceRefreshToken(id, {
-            onSuccess: () => {
-              successCount++
-              resolve()
-            },
-            onError: () => {
-              failCount++
-              reject(new Error('refresh failed'))
-            }
-          })
-        })
-      } catch {
-        // noop
-      }
-    }))
+    ids.forEach(id => {
+      void queue.add(async () => {
+        if (controller.signal.aborted) return
+
+        try {
+          await forceRefreshToken(id, controller.signal)
+          if (!controller.signal.aborted) {
+            successCount++
+          }
+        } catch {
+          if (!controller.signal.aborted) {
+            failCount++
+          }
+        }
+      })
+    })
+
+    await queue.onIdle()
+    activeBatchCancelRef.current = null
+    queryClient.invalidateQueries({ queryKey: ['credentials'] })
+    queryClient.invalidateQueries({ queryKey: ['cached-balances'] })
 
     if (failCount === 0) {
       toast.success(`成功刷新 ${successCount} 个凭据`)
@@ -470,25 +563,33 @@ export function Dashboard({ onLogout }: DashboardProps) {
 
     let successCount = 0
     let failCount = 0
-
-    for (const credential of disabledCredentials) {
-      try {
-        await new Promise<void>((resolve, reject) => {
-          deleteCredential(credential.id, {
-            onSuccess: () => {
-              successCount++
-              resolve()
-            },
-            onError: (err) => {
-              failCount++
-              reject(err)
-            }
-          })
-        })
-      } catch (error) {
-        // 错误已在 onError 中处理
-      }
+    const controller = new AbortController()
+    const queue = new PQueue({ concurrency: 5 })
+    activeBatchCancelRef.current = () => {
+      queue.clear()
+      controller.abort()
     }
+
+    disabledCredentials.forEach(credential => {
+      void queue.add(async () => {
+        if (controller.signal.aborted) return
+
+        try {
+          await deleteCredential(credential.id, controller.signal)
+          if (!controller.signal.aborted) {
+            successCount++
+          }
+        } catch (error) {
+          if (!controller.signal.aborted) {
+            failCount++
+          }
+        }
+      })
+    })
+
+    await queue.onIdle()
+    activeBatchCancelRef.current = null
+    queryClient.invalidateQueries({ queryKey: ['credentials'] })
 
     if (failCount === 0) {
       toast.success(`成功清除所有 ${successCount} 个已禁用凭据`)
@@ -499,19 +600,19 @@ export function Dashboard({ onLogout }: DashboardProps) {
     deselectAll()
   }
 
-  // 查询当前页凭据信息（逐个查询，避免瞬时并发）
+  // 查询当前视图凭据信息（逐个查询，避免瞬时并发）
   const handleQueryCurrentPageInfo = async () => {
-    if (currentCredentials.length === 0) {
-      toast.error('当前页没有可查询的凭据')
+    if (sortedCredentials.length === 0) {
+      toast.error('当前视图没有可查询的凭据')
       return
     }
 
-    const ids = currentCredentials
+    const ids = sortedCredentials
       .filter(credential => !credential.disabled)
       .map(credential => credential.id)
 
     if (ids.length === 0) {
-      toast.error('当前页没有可查询的启用凭据')
+      toast.error('当前视图没有可查询的启用凭据')
       return
     }
 
@@ -521,38 +622,61 @@ export function Dashboard({ onLogout }: DashboardProps) {
     let successCount = 0
     let failCount = 0
 
-    for (let i = 0; i < ids.length; i++) {
-      const id = ids[i]
+    const controller = new AbortController()
+    const queue = new PQueue({ concurrency: 3 })
+    cancelQueryInfoRef.current = () => {
+      queue.clear()
+      controller.abort()
+    }
+    let completedCount = 0
 
-      setLoadingBalanceIds(prev => {
-        const next = new Set(prev)
-        next.add(id)
-        return next
-      })
+    ids.forEach(id => {
+      void queue.add(async () => {
+        if (controller.signal.aborted) return
 
-      try {
-        const balance = await getCredentialBalance(id)
-        successCount++
-
-        setBalanceMap(prev => {
-          const next = new Map(prev)
-          next.set(id, balance)
-          return next
-        })
-      } catch (error) {
-        failCount++
-      } finally {
         setLoadingBalanceIds(prev => {
           const next = new Set(prev)
-          next.delete(id)
+          next.add(id)
           return next
         })
-      }
 
-      setQueryInfoProgress({ current: i + 1, total: ids.length })
-    }
+        try {
+          const balance = await getCredentialBalance(id, controller.signal)
+          if (controller.signal.aborted) return
+
+          successCount++
+          setBalanceMap(prev => {
+            const next = new Map(prev)
+            next.set(id, balance)
+            return next
+          })
+        } catch (error) {
+          if (!controller.signal.aborted) {
+            failCount++
+          }
+        } finally {
+          setLoadingBalanceIds(prev => {
+            const next = new Set(prev)
+            next.delete(id)
+            return next
+          })
+
+          if (!controller.signal.aborted) {
+            completedCount++
+            setQueryInfoProgress({ current: completedCount, total: ids.length })
+          }
+        }
+      })
+    })
+
+    await queue.onIdle()
+    cancelQueryInfoRef.current = null
 
     setQueryingInfo(false)
+
+    if (controller.signal.aborted) {
+      return
+    }
 
     if (failCount === 0) {
       toast.success(`查询完成：成功 ${successCount}/${ids.length}`)
@@ -570,9 +694,14 @@ export function Dashboard({ onLogout }: DashboardProps) {
 
     // 初始化状态
     setVerifying(true)
-    cancelVerifyRef.current = false
     const ids = Array.from(selectedIds)
     setVerifyProgress({ current: 0, total: ids.length })
+    const controller = new AbortController()
+    const queue = new PQueue({ concurrency: 5 })
+    cancelVerifyRef.current = () => {
+      queue.clear()
+      controller.abort()
+    }
 
     let successCount = 0
 
@@ -594,50 +723,58 @@ export function Dashboard({ onLogout }: DashboardProps) {
 
     let completedCount = 0
 
-    await Promise.all(ids.map(async (id) => {
-      try {
-        const balance = await getCredentialBalance(id)
-        if (cancelVerifyRef.current) return
+    ids.forEach(id => {
+      void queue.add(async () => {
+        if (controller.signal.aborted) return
 
-        successCount++
+        try {
+          const balance = await getCredentialBalance(id, controller.signal)
+          if (controller.signal.aborted) return
 
-        setVerifyResults(prev => {
-          const newResults = new Map(prev)
-          newResults.set(id, {
-            id,
-            status: 'success',
-            usage: formatKiroUsageWithUsd(balance.currentUsage, balance.usageLimit)
+          successCount++
+
+          setVerifyResults(prev => {
+            const newResults = new Map(prev)
+            newResults.set(id, {
+              id,
+              status: 'success',
+              usage: formatKiroUsageWithUsd(balance.currentUsage, balance.usageLimit)
+            })
+            return newResults
           })
-          return newResults
-        })
-      } catch (error) {
-        if (cancelVerifyRef.current) return
+        } catch (error) {
+          if (controller.signal.aborted) return
 
-        setVerifyResults(prev => {
-          const newResults = new Map(prev)
-          newResults.set(id, {
-            id,
-            status: 'failed',
-            error: extractErrorMessage(error)
+          setVerifyResults(prev => {
+            const newResults = new Map(prev)
+            newResults.set(id, {
+              id,
+              status: 'failed',
+              error: extractErrorMessage(error)
+            })
+            return newResults
           })
-          return newResults
-        })
-      } finally {
-        completedCount++
-        setVerifyProgress({ current: completedCount, total: ids.length })
-      }
-    }))
+        } finally {
+          completedCount++
+          setVerifyProgress({ current: completedCount, total: ids.length })
+        }
+      })
+    })
+
+    await queue.onIdle()
 
     setVerifying(false)
+    cancelVerifyRef.current = null
 
-    if (!cancelVerifyRef.current) {
+    if (!controller.signal.aborted) {
       toast.success(`验活完成：成功 ${successCount}/${ids.length}`)
     }
   }
 
   // 取消验活
   const handleCancelVerify = () => {
-    cancelVerifyRef.current = true
+    cancelVerifyRef.current?.()
+    cancelVerifyRef.current = null
     setVerifying(false)
   }
 
@@ -720,6 +857,20 @@ export function Dashboard({ onLogout }: DashboardProps) {
           {/* 工具栏：始终可见行 */}
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-2">
+              <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                <input
+                  ref={selectAllCheckboxRef}
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  onChange={handleSelectAllVisible}
+                  disabled={sortedCredentials.length === 0}
+                  className="h-4 w-4 rounded border-gray-300"
+                  aria-label="选择当前视图全部凭据"
+                />
+                <span>
+                  {selectedIds.size > 0 ? `已选 ${selectedIds.size} 项` : '全选'}
+                </span>
+              </label>
               {/* 排序控件 */}
               <div className="flex items-center gap-1">
                 {([
@@ -755,13 +906,13 @@ export function Dashboard({ onLogout }: DashboardProps) {
                 </Button>
               )}
               <Button
-                onClick={handleQueryCurrentPageInfo}
+                onClick={queryingInfo ? () => cancelQueryInfoRef.current?.() : handleQueryCurrentPageInfo}
                 size="sm"
                 variant="outline"
-                disabled={queryingInfo || !data?.credentials || data.credentials.length === 0}
+                disabled={!queryingInfo && (!data?.credentials || data.credentials.length === 0)}
               >
                 <Wallet className={`h-4 w-4 mr-2 ${queryingInfo ? 'animate-pulse' : ''}`} aria-hidden="true" />
-                {queryingInfo ? `查询中… ${queryInfoProgress.current}/${queryInfoProgress.total}` : '查询信息'}
+                {queryingInfo ? `取消查询… ${queryInfoProgress.current}/${queryInfoProgress.total}` : '查询信息'}
               </Button>
               <Button
                 onClick={handleClearAll}
@@ -831,47 +982,42 @@ export function Dashboard({ onLogout }: DashboardProps) {
               </CardContent>
             </Card>
           ) : (
-            <>
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {currentCredentials.map((credential) => (
-                  <CredentialCard
-                    key={credential.id}
-                    credential={credential}
-                    cachedBalance={cachedBalanceMap.get(credential.id)}
-                    onViewBalance={handleViewBalance}
-                    selected={selectedIds.has(credential.id)}
-                    onToggleSelect={() => toggleSelect(credential.id)}
-                    balance={balanceMap.get(credential.id) || null}
-                    loadingBalance={loadingBalanceIds.has(credential.id)}
-                  />
-                ))}
+            <div ref={parentRef} className="h-[calc(100vh-260px)] overflow-auto pr-1">
+              <div
+                style={{
+                  height: `${rowVirtualizer.getTotalSize()}px`,
+                  position: 'relative',
+                }}
+              >
+                {rowVirtualizer.getVirtualItems().map(virtualRow => {
+                  const rowCredentials = credentialRows[virtualRow.index]
+                  return (
+                    <div
+                      key={virtualRow.key}
+                      ref={rowVirtualizer.measureElement}
+                      data-index={virtualRow.index}
+                      className="absolute left-0 top-0 grid w-full gap-4 pb-4 md:grid-cols-2 lg:grid-cols-3"
+                      style={{
+                        transform: `translateY(${virtualRow.start}px)`,
+                      }}
+                    >
+                      {rowCredentials.map((credential) => (
+                        <CredentialCard
+                          key={credential.id}
+                          credential={credential}
+                          cachedBalance={cachedBalanceMap.get(credential.id)}
+                          onViewBalance={handleViewBalance}
+                          selected={selectedIds.has(credential.id)}
+                          onToggleSelect={(event) => handleToggleSelect(credential.id, event)}
+                          balance={balanceMap.get(credential.id) || null}
+                          loadingBalance={loadingBalanceIds.has(credential.id)}
+                        />
+                      ))}
+                    </div>
+                  )
+                })}
               </div>
-
-              {/* 分页控件 */}
-              {totalPages > 1 && (
-                <div className="flex justify-center items-center gap-4 mt-6">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                    disabled={currentPage === 1}
-                  >
-                    上一页
-                  </Button>
-                  <span className="text-sm text-muted-foreground">
-                    第 {currentPage} / {totalPages} 页（共 {data?.credentials.length} 个凭据）
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                    disabled={currentPage === totalPages}
-                  >
-                    下一页
-                  </Button>
-                </div>
-              )}
-            </>
+            </div>
           )}
         </div>
       </main>

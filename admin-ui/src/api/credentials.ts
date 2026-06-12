@@ -46,11 +46,13 @@ export async function getCredentials(): Promise<CredentialsStatusResponse> {
 // 设置凭据禁用状态
 export async function setCredentialDisabled(
   id: number,
-  disabled: boolean
+  disabled: boolean,
+  signal?: AbortSignal
 ): Promise<SuccessResponse> {
   const { data } = await api.post<SuccessResponse>(
     `/credentials/${id}/disabled`,
-    { disabled } as SetDisabledRequest
+    { disabled } as SetDisabledRequest,
+    { signal }
   )
   return data
 }
@@ -69,9 +71,10 @@ export async function setCredentialPriority(
 
 // 重置失败计数
 export async function resetCredentialFailure(
-  id: number
+  id: number,
+  signal?: AbortSignal
 ): Promise<SuccessResponse> {
-  const { data } = await api.post<SuccessResponse>(`/credentials/${id}/reset`)
+  const { data } = await api.post<SuccessResponse>(`/credentials/${id}/reset`, undefined, { signal })
   return data
 }
 
@@ -101,14 +104,14 @@ export async function setCredentialEndpoint(
 }
 
 // 强制刷新 Token
-export async function forceRefreshToken(id: number): Promise<SuccessResponse> {
-  const { data } = await api.post<SuccessResponse>(`/credentials/${id}/refresh`)
+export async function forceRefreshToken(id: number, signal?: AbortSignal): Promise<SuccessResponse> {
+  const { data } = await api.post<SuccessResponse>(`/credentials/${id}/refresh`, undefined, { signal })
   return data
 }
 
 // 获取凭据余额
-export async function getCredentialBalance(id: number): Promise<BalanceResponse> {
-  const { data } = await api.get<BalanceResponse>(`/credentials/${id}/balance`)
+export async function getCredentialBalance(id: number, signal?: AbortSignal): Promise<BalanceResponse> {
+  const { data } = await api.get<BalanceResponse>(`/credentials/${id}/balance`, { signal })
   return data
 }
 
@@ -128,15 +131,16 @@ export async function getCredentialAccountInfo(
 
 // 添加新凭据
 export async function addCredential(
-  req: AddCredentialRequest
+  req: AddCredentialRequest,
+  signal?: AbortSignal
 ): Promise<AddCredentialResponse> {
-  const { data } = await api.post<AddCredentialResponse>('/credentials', req)
+  const { data } = await api.post<AddCredentialResponse>('/credentials', req, { signal })
   return data
 }
 
 // 删除凭据
-export async function deleteCredential(id: number): Promise<SuccessResponse> {
-  const { data } = await api.delete<SuccessResponse>(`/credentials/${id}`)
+export async function deleteCredential(id: number, signal?: AbortSignal): Promise<SuccessResponse> {
+  const { data } = await api.delete<SuccessResponse>(`/credentials/${id}`, { signal })
   return data
 }
 
