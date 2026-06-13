@@ -177,14 +177,14 @@ pub fn default_models() -> Vec<ModelConfig> {
             display_name: "Claude Opus 4.7".to_string(),
             created_at: 1744934400, // 2026-04-16 (Experimental)
             kiro_model_id: "claude-opus-4.7".to_string(),
-            tiers: vec!["pro+".to_string()],
+            tiers: vec!["pro".to_string(), "pro+".to_string()],
         },
         ModelConfig {
             id: "claude-opus-4-8".to_string(),
             display_name: "Claude Opus 4.8".to_string(),
             created_at: 1748390400, // 2026-05-28 (Experimental)
             kiro_model_id: "claude-opus-4.8".to_string(),
-            tiers: vec!["pro+".to_string()],
+            tiers: vec!["pro".to_string(), "pro+".to_string()],
         },
         ModelConfig {
             id: "claude-haiku-4-5-20251001".to_string(),
@@ -326,6 +326,16 @@ mod tests {
                 "{input}"
             );
         }
+    }
+
+    #[test]
+    fn test_recent_opus_models_allow_pro_credentials() {
+        let mapper = ModelMapper::default();
+        let opus_4_7_tiers = mapper.tiers_for_model("claude-opus-4-7").unwrap();
+        let opus_4_8_tiers = mapper.tiers_for_model("claude-opus-4-8").unwrap();
+
+        assert!(opus_4_7_tiers.contains(&"pro".to_string()));
+        assert!(opus_4_8_tiers.contains(&"pro".to_string()));
     }
 
     #[test]

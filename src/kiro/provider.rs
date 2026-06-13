@@ -38,7 +38,7 @@ pub struct McpCallResult {
 /// 每个凭据的最大重试次数
 const MAX_RETRIES_PER_CREDENTIAL: usize = 2;
 
-/// 总重试次数硬上限（避免无限重试）
+/// 无模型等级要求时的总重试次数硬上限（避免无限重试）
 const MAX_TOTAL_RETRIES: usize = 3;
 
 /// 429 冷却默认时长（无 Retry-After 时使用 CooldownManager 的默认递增策略）
@@ -199,7 +199,7 @@ impl KiroProvider {
                     let remaining = resp.usage_limit() - resp.current_usage();
                     tm.update_balance_cache(id, remaining);
                     tracing::debug!("凭据 #{} 余额缓存已刷新: {:.2}", id, remaining);
-                    if remaining < 1.0 {
+                    if crate::kiro::token_manager::has_insufficient_balance(remaining) {
                         if tm.config().auto_disable_insufficient_balance {
                             tm.mark_insufficient_balance(id);
                             tracing::warn!("凭据 #{} 余额不足 ({:.2})，已主动禁用", id, remaining);
@@ -550,7 +550,15 @@ impl KiroProvider {
         if available == 0 {
             anyhow::bail!("没有可用的凭据");
         }
-        let max_retries = (total_credentials * MAX_RETRIES_PER_CREDENTIAL).min(MAX_TOTAL_RETRIES);
+        let max_retries = match required_tiers {
+            Some(_) => {
+                self.token_manager
+                    .available_count_for_tiers(required_tiers)
+                    .max(1)
+                    * MAX_RETRIES_PER_CREDENTIAL
+            }
+            None => (total_credentials * MAX_RETRIES_PER_CREDENTIAL).min(MAX_TOTAL_RETRIES),
+        };
         let mut last_error: Option<anyhow::Error> = None;
         let mut forced_token_refresh: HashSet<u64> = HashSet::new();
         let api_type = if is_stream { "流式" } else { "非流式" };
@@ -666,7 +674,6 @@ impl KiroProvider {
                 );
 
                 let has_available = self.token_manager.report_quota_exhausted(ctx.id);
-                self.token_manager.update_balance_cache(ctx.id, 0.0);
                 if !has_available {
                     anyhow::bail!(
                         "{} API 请求失败（所有凭据已用尽）: {} {}",

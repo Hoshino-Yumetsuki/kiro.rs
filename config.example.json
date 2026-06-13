@@ -32,14 +32,14 @@
       "displayName": "Claude Opus 4.8",
       "createdAt": 1780070400,
       "kiroModelId": "claude-opus-4.8",
-      "tiers": ["pro+"]
+      "tiers": ["pro", "pro+"]
     },
     {
       "id": "claude-opus-4-7",
       "displayName": "Claude Opus 4.7",
       "createdAt": 1776470400,
       "kiroModelId": "claude-opus-4.7",
-      "tiers": ["pro+"]
+      "tiers": ["pro", "pro+"]
     },
     {
       "id": "claude-opus-4-6",

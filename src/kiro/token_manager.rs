@@ -720,6 +720,12 @@ const HIGH_FREQ_THRESHOLD: u32 = 20;
 const USAGE_COUNT_RESET_SECS: u64 = 600;
 /// 低余额阈值
 const LOW_BALANCE_THRESHOLD: f64 = 1.0;
+/// Kiro 允许 Pro 账号透支到 -10000；低于该值才视为余额不足
+const INSUFFICIENT_BALANCE_THRESHOLD: f64 = -10000.0;
+
+pub(crate) fn has_insufficient_balance(remaining: f64) -> bool {
+    remaining <= INSUFFICIENT_BALANCE_THRESHOLD
+}
 
 /// 多凭据 Token 管理器
 ///
@@ -1094,6 +1100,15 @@ impl MultiTokenManager {
     /// 获取可用凭据数量
     pub fn available_count(&self) -> usize {
         self.entries.lock().values().filter(|e| !e.disabled).count()
+    }
+
+    /// 获取符合指定模型等级要求的可用凭据数量
+    pub fn available_count_for_tiers(&self, required_tiers: Option<&[String]>) -> usize {
+        self.entries
+            .lock()
+            .values()
+            .filter(|e| !e.disabled && tier_matches(&e.credentials, required_tiers))
+            .count()
     }
 
     /// 输出一份"为什么当前没有可用凭据"的诊断信息（用于排障）
@@ -2516,11 +2531,11 @@ impl MultiTokenManager {
                         Ok(limits) => {
                             let used = limits.current_usage();
                             let limit = limits.usage_limit();
-                            let remaining = (limit - used).max(0.0);
+                            let remaining = limit - used;
 
                             self.update_balance_cache(id, remaining);
 
-                            if remaining < 1.0 {
+                            if has_insufficient_balance(remaining) {
                                 if self.config.read().auto_disable_insufficient_balance {
                                     let mut entries = self.entries.lock();
                                     if let Some(entry) = entries.get_mut(&id) {
@@ -3300,6 +3315,33 @@ mod tests {
             ..Default::default()
         };
         assert!(tier_matches(&explicit_tier_credential, Some(&pro_plus)));
+    }
+
+    #[test]
+    fn test_available_count_for_tiers_uses_effective_tier() {
+        let config = Config::default();
+        let free = KiroCredentials {
+            subscription_title: Some("KIRO FREE".to_string()),
+            ..Default::default()
+        };
+        let pro = KiroCredentials {
+            subscription_title: Some("KIRO PRO".to_string()),
+            ..Default::default()
+        };
+
+        let manager = MultiTokenManager::new(config, vec![free, pro], None, None, false).unwrap();
+        let pro_tiers = vec!["pro".to_string(), "pro+".to_string()];
+        let pro_plus_tiers = vec!["pro+".to_string()];
+
+        assert_eq!(manager.available_count_for_tiers(Some(&pro_tiers)), 1);
+        assert_eq!(manager.available_count_for_tiers(Some(&pro_plus_tiers)), 0);
+    }
+
+    #[test]
+    fn test_has_insufficient_balance_allows_kiro_overspend() {
+        assert!(!has_insufficient_balance(-3000.0));
+        assert!(has_insufficient_balance(-10000.0));
+        assert!(has_insufficient_balance(-10000.01));
     }
 
     #[test]
