@@ -28,8 +28,8 @@ use super::stream::{
     synthetic_thinking_signature,
 };
 use super::types::{
-    CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, ModelInfo,
-    ModelsResponse, Thinking,
+    CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, ModelsResponse,
+    Thinking,
 };
 use super::websearch;
 
@@ -59,6 +59,7 @@ struct StreamRequestContext<'a> {
     user_id: Option<&'a str>,
     structured_output: bool,
     rewriter_config: Option<&'a super::rewriter::RewriterConfig>,
+    model_mapper: &'a super::model_mapper::ModelMapper,
 }
 
 struct NonStreamRequestContext<'a> {
@@ -73,6 +74,7 @@ struct NonStreamRequestContext<'a> {
     cache_mode: PromptCacheMode,
     structured_output: bool,
     rewriter_config: Option<&'a super::rewriter::RewriterConfig>,
+    model_mapper: &'a super::model_mapper::ModelMapper,
 }
 
 fn build_cache_profile(
@@ -1051,13 +1053,18 @@ fn build_local_text_response(payload: &MessagesRequest, text: &str, input_tokens
 /// GET /v1/models
 ///
 /// 返回可用的模型列表。
-pub async fn get_models(OriginalUri(uri): OriginalUri) -> impl IntoResponse {
+pub async fn get_models(
+    State(state): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+) -> impl IntoResponse {
     tracing::info!(
         path = %uri.path(),
         "Received request"
     );
 
-    let models = get_all_model_infos();
+    let model_mapper = state.model_mapper.read();
+    let models = model_mapper.model_infos().to_vec();
+    drop(model_mapper);
     let first_id = models.first().map(|m| m.id.clone());
     let last_id = models.last().map(|m| m.id.clone());
 
@@ -1073,6 +1080,7 @@ pub async fn get_models(OriginalUri(uri): OriginalUri) -> impl IntoResponse {
 ///
 /// 获取单个模型信息
 pub async fn get_model(
+    State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     axum::extract::Path(model_id): axum::extract::Path<String>,
 ) -> impl IntoResponse {
@@ -1083,14 +1091,14 @@ pub async fn get_model(
     );
 
     let request_id = format!("req_{}", uuid::Uuid::new_v4().simple());
-    let models = get_all_model_infos();
-    match models.into_iter().find(|m| m.id == model_id) {
+    let models = state.model_mapper.read().model_infos().to_vec();
+    match models.iter().find(|m| m.id == model_id) {
         Some(model) => (
             [(
                 axum::http::header::HeaderName::from_static("x-request-id"),
                 request_id,
             )],
-            Json(model),
+            Json(model.clone()),
         )
             .into_response(),
         None => {
@@ -1110,54 +1118,6 @@ pub async fn get_model(
                 .into_response()
         }
     }
-}
-
-/// 获取所有可用模型列表（Anthropic ModelInfo 格式）
-fn get_all_model_infos() -> Vec<ModelInfo> {
-    vec![
-        ModelInfo {
-            id: "claude-sonnet-4-6".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Sonnet 4.6".to_string(),
-            created_at: 1770314400,
-        },
-        ModelInfo {
-            id: "claude-sonnet-4-5-20250929".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Sonnet 4.5".to_string(),
-            created_at: 1727568000,
-        },
-        ModelInfo {
-            id: "claude-opus-4-5-20251101".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Opus 4.5".to_string(),
-            created_at: 1730419200,
-        },
-        ModelInfo {
-            id: "claude-opus-4-6".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Opus 4.6".to_string(),
-            created_at: 1770314400,
-        },
-        ModelInfo {
-            id: "claude-opus-4-7".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Opus 4.7".to_string(),
-            created_at: 1772992800,
-        },
-        ModelInfo {
-            id: "claude-opus-4-8".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Opus 4.8".to_string(),
-            created_at: 1775671200,
-        },
-        ModelInfo {
-            id: "claude-haiku-4-5-20251001".to_string(),
-            model_type: "model".to_string(),
-            display_name: "Claude Haiku 4.5".to_string(),
-            created_at: 1727740800,
-        },
-    ]
 }
 
 /// 图片 URL 下载超时（秒）
@@ -1406,7 +1366,8 @@ async fn post_messages_inner(
     );
 
     // 转换请求
-    let conversion_result = match convert_request(&payload, &compression_config) {
+    let model_mapper = state.model_mapper.read().clone();
+    let conversion_result = match convert_request(&payload, &compression_config, &model_mapper) {
         Ok(result) => result,
         Err(e) => {
             let (error_type, message) = match &e {
@@ -1584,6 +1545,7 @@ async fn post_messages_inner(
             } else {
                 None
             },
+            model_mapper: &model_mapper,
         };
         handle_stream_request(provider, stream_request).await
     } else {
@@ -1604,6 +1566,7 @@ async fn post_messages_inner(
             } else {
                 None
             },
+            model_mapper: &model_mapper,
         };
         handle_non_stream_request(provider, non_stream_request).await
     }
@@ -1672,6 +1635,7 @@ async fn handle_stream_request(
         provider,
         context.rewriter_config.cloned(),
         context.user_id.map(|s| s.to_string()),
+        context.model_mapper.clone(),
     );
 
     // 返回 SSE 响应
@@ -1703,6 +1667,7 @@ async fn flush_rewrite_buffer(
     provider: &std::sync::Arc<crate::kiro::provider::KiroProvider>,
     rewriter_config: Option<&super::rewriter::RewriterConfig>,
     user_id: Option<&str>,
+    model_mapper: &super::model_mapper::ModelMapper,
 ) -> (Vec<super::stream::SseEvent>, bool) {
     if !ctx.rewrite_enabled || ctx.rewrite_text_buffer.is_empty() {
         return (Vec::new(), false);
@@ -1736,8 +1701,16 @@ async fn flush_rewrite_buffer(
         "检测到关键词，触发模型改写"
     );
 
-    match super::rewriter::rewrite_text(provider, &buffer_text, &model_id, config, None, user_id)
-        .await
+    match super::rewriter::rewrite_text(
+        provider,
+        &buffer_text,
+        &model_id,
+        config,
+        None,
+        user_id,
+        model_mapper,
+    )
+    .await
     {
         Ok(result) => {
             // 将改写消耗的 token 合并到 usage
@@ -1762,6 +1735,7 @@ fn create_sse_stream(
     provider: std::sync::Arc<crate::kiro::provider::KiroProvider>,
     rewriter_config: Option<super::rewriter::RewriterConfig>,
     user_id: Option<String>,
+    model_mapper: super::model_mapper::ModelMapper,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
     // 先发送初始事件
     let initial_stream = stream::iter(
@@ -1777,8 +1751,8 @@ fn create_sse_stream(
 
     // dripping: 是否进入逐块输出模式（上游已结束，正在 drip 改写后的文本）
     let processing_stream = stream::unfold(
-        (body_stream, ctx, EventStreamDecoder::new(), false, false, ping_interval, provider, rewriter_config, user_id),
-        |(mut body_stream, mut ctx, mut decoder, finished, dripping, mut ping_interval, provider, rewriter_config, user_id)| async move {
+        (body_stream, ctx, EventStreamDecoder::new(), false, false, ping_interval, provider, rewriter_config, user_id, model_mapper),
+        |(mut body_stream, mut ctx, mut decoder, finished, dripping, mut ping_interval, provider, rewriter_config, user_id, model_mapper)| async move {
             if finished {
                 return None;
             }
@@ -1792,7 +1766,7 @@ fn create_sse_stream(
                         .into_iter()
                         .map(|e| Ok(Bytes::from(e.to_sse_string())))
                         .collect();
-                    return Some((stream::iter(bytes), (body_stream, ctx, decoder, false, true, ping_interval, provider, rewriter_config, user_id)));
+                    return Some((stream::iter(bytes), (body_stream, ctx, decoder, false, true, ping_interval, provider, rewriter_config, user_id, model_mapper)));
                 }
                 // Drip 队列已空，发送最终事件并结束
                 let final_events = ctx.generate_final_events();
@@ -1800,7 +1774,7 @@ fn create_sse_stream(
                     .into_iter()
                     .map(|e| Ok(Bytes::from(e.to_sse_string())))
                     .collect();
-                return Some((stream::iter(bytes), (body_stream, ctx, decoder, true, false, ping_interval, provider, rewriter_config, user_id)));
+                return Some((stream::iter(bytes), (body_stream, ctx, decoder, true, false, ping_interval, provider, rewriter_config, user_id, model_mapper)));
             }
 
             // 使用 select! 同时等待数据和 ping 定时器
@@ -1835,16 +1809,16 @@ fn create_sse_stream(
                                 .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                 .collect();
 
-                            Some((stream::iter(bytes), (body_stream, ctx, decoder, false, false, ping_interval, provider, rewriter_config, user_id)))
+                            Some((stream::iter(bytes), (body_stream, ctx, decoder, false, false, ping_interval, provider, rewriter_config, user_id, model_mapper)))
                         }
                         Some(Err(e)) => {
                             tracing::error!("读取响应流失败: {}", e);
                             // 流结束前处理改写缓冲区
-                            let (_events, entering_drip) = flush_rewrite_buffer(&mut ctx, &provider, rewriter_config.as_ref(), user_id.as_deref()).await;
+                            let (_events, entering_drip) = flush_rewrite_buffer(&mut ctx, &provider, rewriter_config.as_ref(), user_id.as_deref(), &model_mapper).await;
                             if entering_drip {
                                 // 进入 drip 模式，下次迭代开始逐块输出
                                 let bytes: Vec<Result<Bytes, Infallible>> = Vec::new();
-                                Some((stream::iter(bytes), (body_stream, ctx, decoder, false, true, ping_interval, provider, rewriter_config, user_id)))
+                                Some((stream::iter(bytes), (body_stream, ctx, decoder, false, true, ping_interval, provider, rewriter_config, user_id, model_mapper)))
                             } else {
                                 // 无需 drip，直接结束
                                 let final_events = ctx.generate_final_events();
@@ -1852,16 +1826,16 @@ fn create_sse_stream(
                                     .into_iter()
                                     .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                     .collect();
-                                Some((stream::iter(bytes), (body_stream, ctx, decoder, true, false, ping_interval, provider, rewriter_config, user_id)))
+                                Some((stream::iter(bytes), (body_stream, ctx, decoder, true, false, ping_interval, provider, rewriter_config, user_id, model_mapper)))
                             }
                         }
                         None => {
                             // 流结束，处理改写缓冲区
-                            let (_events, entering_drip) = flush_rewrite_buffer(&mut ctx, &provider, rewriter_config.as_ref(), user_id.as_deref()).await;
+                            let (_events, entering_drip) = flush_rewrite_buffer(&mut ctx, &provider, rewriter_config.as_ref(), user_id.as_deref(), &model_mapper).await;
                             if entering_drip {
                                 // 进入 drip 模式
                                 let bytes: Vec<Result<Bytes, Infallible>> = Vec::new();
-                                Some((stream::iter(bytes), (body_stream, ctx, decoder, false, true, ping_interval, provider, rewriter_config, user_id)))
+                                Some((stream::iter(bytes), (body_stream, ctx, decoder, false, true, ping_interval, provider, rewriter_config, user_id, model_mapper)))
                             } else {
                                 // 无需 drip，直接结束
                                 let final_events = ctx.generate_final_events();
@@ -1869,7 +1843,7 @@ fn create_sse_stream(
                                     .into_iter()
                                     .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                     .collect();
-                                Some((stream::iter(bytes), (body_stream, ctx, decoder, true, false, ping_interval, provider, rewriter_config, user_id)))
+                                Some((stream::iter(bytes), (body_stream, ctx, decoder, true, false, ping_interval, provider, rewriter_config, user_id, model_mapper)))
                             }
                         }
                     }
@@ -1878,7 +1852,7 @@ fn create_sse_stream(
                 _ = ping_interval.tick() => {
                     tracing::trace!("发送 ping 保活事件");
                     let bytes: Vec<Result<Bytes, Infallible>> = vec![Ok(create_ping_sse())];
-                    Some((stream::iter(bytes), (body_stream, ctx, decoder, false, false, ping_interval, provider, rewriter_config, user_id)))
+                    Some((stream::iter(bytes), (body_stream, ctx, decoder, false, false, ping_interval, provider, rewriter_config, user_id, model_mapper)))
                 }
             }
         },
@@ -2142,6 +2116,7 @@ async fn handle_non_stream_request(
                 rewriter_cfg,
                 None,
                 context.user_id,
+                context.model_mapper,
             )
             .await
             {

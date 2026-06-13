@@ -130,47 +130,6 @@ fn count_images_in_content(content: &serde_json::Value) -> usize {
     }
 }
 
-/// Kiro 上游使用的规范模型 ID
-const KIRO_MODEL_SONNET_4_5: &str = "claude-sonnet-4.5";
-const KIRO_MODEL_SONNET_4_6: &str = "claude-sonnet-4.6";
-const KIRO_MODEL_OPUS_4_5: &str = "claude-opus-4.5";
-const KIRO_MODEL_OPUS_4_6: &str = "claude-opus-4.6";
-const KIRO_MODEL_OPUS_4_7: &str = "claude-opus-4.7";
-const KIRO_MODEL_OPUS_4_8: &str = "claude-opus-4.8";
-const KIRO_MODEL_HAIKU_4_5: &str = "claude-haiku-4.5";
-
-/// 模型映射：将 Anthropic 模型名映射到 Kiro 上游模型 ID
-///
-/// 映射规则（大小写不敏感）：
-/// - sonnet 且包含 4.6/4-6 → claude-sonnet-4.6，否则 → claude-sonnet-4.5
-/// - opus 且包含 4.5/4-5 → claude-opus-4.5，4.7/4-7 → claude-opus-4.7，4.8/4-8 → claude-opus-4.8，否则 → claude-opus-4.6
-/// - 所有 haiku → claude-haiku-4.5
-pub fn map_model(model: &str) -> Option<String> {
-    let lower = model.to_lowercase();
-
-    if lower.contains("sonnet") {
-        if lower.contains("4-6") || lower.contains("4.6") {
-            Some(KIRO_MODEL_SONNET_4_6.to_string())
-        } else {
-            Some(KIRO_MODEL_SONNET_4_5.to_string())
-        }
-    } else if lower.contains("opus") {
-        if lower.contains("4-5") || lower.contains("4.5") {
-            Some(KIRO_MODEL_OPUS_4_5.to_string())
-        } else if lower.contains("4-7") || lower.contains("4.7") {
-            Some(KIRO_MODEL_OPUS_4_7.to_string())
-        } else if lower.contains("4-8") || lower.contains("4.8") {
-            Some(KIRO_MODEL_OPUS_4_8.to_string())
-        } else {
-            Some(KIRO_MODEL_OPUS_4_6.to_string())
-        }
-    } else if lower.contains("haiku") {
-        Some(KIRO_MODEL_HAIKU_4_5.to_string())
-    } else {
-        None
-    }
-}
-
 /// 转换结果
 #[derive(Debug)]
 pub struct ConversionResult {
@@ -315,9 +274,11 @@ fn create_placeholder_tool(name: &str) -> KiroTool {
 pub fn convert_request(
     req: &MessagesRequest,
     compression_config: &CompressionConfig,
+    model_mapper: &super::model_mapper::ModelMapper,
 ) -> Result<ConversionResult, ConversionError> {
     // 1. 映射模型
-    let model_id = map_model(&req.model)
+    let model_id = model_mapper
+        .map_model(&req.model)
         .ok_or_else(|| ConversionError::UnsupportedModel(req.model.clone()))?;
 
     // 2. 检查消息列表
@@ -1490,59 +1451,75 @@ mod tests {
 
     #[test]
     fn test_map_model_sonnet() {
+        let mapper = super::super::model_mapper::ModelMapper::default();
         assert_eq!(
-            map_model("claude-sonnet-4-20250514").unwrap(),
-            KIRO_MODEL_SONNET_4_5
+            mapper.map_model("claude-sonnet-4-20250514").unwrap(),
+            "claude-sonnet-4.5"
         );
         assert_eq!(
-            map_model("claude-3-5-sonnet-20241022").unwrap(),
-            KIRO_MODEL_SONNET_4_5
+            mapper.map_model("claude-3-5-sonnet-20241022").unwrap(),
+            "claude-sonnet-4.5"
         );
         assert_eq!(
-            map_model("claude-sonnet-4-6").unwrap(),
-            KIRO_MODEL_SONNET_4_6
+            mapper.map_model("claude-sonnet-4-6").unwrap(),
+            "claude-sonnet-4.6"
         );
         assert_eq!(
-            map_model("claude-sonnet-4.6").unwrap(),
-            KIRO_MODEL_SONNET_4_6
+            mapper.map_model("claude-sonnet-4.6").unwrap(),
+            "claude-sonnet-4.6"
         );
     }
 
     #[test]
     fn test_map_model_opus() {
+        let mapper = super::super::model_mapper::ModelMapper::default();
         assert_eq!(
-            map_model("claude-opus-4-20250514").unwrap(),
-            KIRO_MODEL_OPUS_4_6
+            mapper.map_model("claude-opus-4-20250514").unwrap(),
+            "claude-opus-4.6"
         );
         assert_eq!(
-            map_model("claude-opus-4-20260206").unwrap(),
-            KIRO_MODEL_OPUS_4_6
+            mapper.map_model("claude-opus-4-20260206").unwrap(),
+            "claude-opus-4.6"
         );
         assert_eq!(
-            map_model("claude-opus-4-5-20250514").unwrap(),
-            KIRO_MODEL_OPUS_4_5
+            mapper.map_model("claude-opus-4-5-20250514").unwrap(),
+            "claude-opus-4.5"
         );
-        assert_eq!(map_model("claude-opus-4.5").unwrap(), KIRO_MODEL_OPUS_4_5);
-        assert_eq!(map_model("claude-opus-4-6").unwrap(), KIRO_MODEL_OPUS_4_6);
-        assert_eq!(map_model("claude-opus-4-7").unwrap(), KIRO_MODEL_OPUS_4_7);
-        assert_eq!(map_model("claude-opus-4.7").unwrap(), KIRO_MODEL_OPUS_4_7);
+        assert_eq!(
+            mapper.map_model("claude-opus-4.5").unwrap(),
+            "claude-opus-4.5"
+        );
+        assert_eq!(
+            mapper.map_model("claude-opus-4-6").unwrap(),
+            "claude-opus-4.6"
+        );
+        assert_eq!(
+            mapper.map_model("claude-opus-4-7").unwrap(),
+            "claude-opus-4.7"
+        );
+        assert_eq!(
+            mapper.map_model("claude-opus-4.7").unwrap(),
+            "claude-opus-4.7"
+        );
     }
 
     #[test]
     fn test_map_model_haiku() {
+        let mapper = super::super::model_mapper::ModelMapper::default();
         assert_eq!(
-            map_model("claude-haiku-4-20250514").unwrap(),
-            KIRO_MODEL_HAIKU_4_5
+            mapper.map_model("claude-haiku-4-20250514").unwrap(),
+            "claude-haiku-4.5"
         );
         assert_eq!(
-            map_model("claude-haiku-4-5-20251001").unwrap(),
-            KIRO_MODEL_HAIKU_4_5
+            mapper.map_model("claude-haiku-4-5-20251001").unwrap(),
+            "claude-haiku-4.5"
         );
     }
 
     #[test]
     fn test_map_model_unsupported() {
-        assert!(map_model("gpt-4").is_none());
+        let mapper = super::super::model_mapper::ModelMapper::default();
+        assert!(mapper.map_model("gpt-4").is_none());
     }
 
     #[test]
@@ -1575,7 +1552,12 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req, &CompressionConfig::default()).unwrap();
+        let result = convert_request(
+            &req,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap();
         let content = &result
             .conversation_state
             .current_message
@@ -1621,7 +1603,12 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req, &CompressionConfig::default()).unwrap();
+        let result = convert_request(
+            &req,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap();
         let content = &result
             .conversation_state
             .current_message
@@ -1636,18 +1623,23 @@ mod tests {
 
     #[test]
     fn test_map_model_versioned_entries_from_models_endpoint() {
+        let mapper = super::super::model_mapper::ModelMapper::default();
         let supported_models = [
-            ("claude-sonnet-4-6", KIRO_MODEL_SONNET_4_6),
-            ("claude-sonnet-4-5-20250929", KIRO_MODEL_SONNET_4_5),
-            ("claude-opus-4-5-20251101", KIRO_MODEL_OPUS_4_5),
-            ("claude-opus-4-6", KIRO_MODEL_OPUS_4_6),
-            ("claude-opus-4-7", KIRO_MODEL_OPUS_4_7),
-            ("claude-opus-4-8", KIRO_MODEL_OPUS_4_8),
-            ("claude-haiku-4-5-20251001", KIRO_MODEL_HAIKU_4_5),
+            ("claude-sonnet-4-6", "claude-sonnet-4.6"),
+            ("claude-sonnet-4-5-20250929", "claude-sonnet-4.5"),
+            ("claude-opus-4-5-20251101", "claude-opus-4.5"),
+            ("claude-opus-4-6", "claude-opus-4.6"),
+            ("claude-opus-4-7", "claude-opus-4.7"),
+            ("claude-opus-4-8", "claude-opus-4.8"),
+            ("claude-haiku-4-5-20251001", "claude-haiku-4.5"),
         ];
 
         for (input, expected) in supported_models {
-            assert_eq!(map_model(input), Some(expected.to_string()), "{input}");
+            assert_eq!(
+                mapper.map_model(input),
+                Some(expected.to_string()),
+                "{input}"
+            );
         }
     }
 
@@ -1746,7 +1738,12 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req, &CompressionConfig::default()).unwrap();
+        let result = convert_request(
+            &req,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap();
 
         // 验证 tools 列表中包含了历史中使用的工具的占位符定义
         let tools = &result
@@ -1834,7 +1831,12 @@ mod tests {
             }),
         };
 
-        let result = convert_request(&req, &CompressionConfig::default()).unwrap();
+        let result = convert_request(
+            &req,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap();
         assert_eq!(
             result.conversation_state.conversation_id,
             "a0662283-7fd3-4399-a7eb-52b9a717ae88"
@@ -1862,7 +1864,12 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req, &CompressionConfig::default()).unwrap();
+        let result = convert_request(
+            &req,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap();
         // 验证生成的是有效的 UUID 格式
         assert_eq!(result.conversation_state.conversation_id.len(), 36);
         assert_eq!(
@@ -2344,7 +2351,12 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req, &CompressionConfig::default()).unwrap();
+        let result = convert_request(
+            &req,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap();
         let tools = &result
             .conversation_state
             .current_message
@@ -2403,7 +2415,12 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req, &CompressionConfig::default()).unwrap();
+        let result = convert_request(
+            &req,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap();
         let content = &result
             .conversation_state
             .current_message
@@ -2459,7 +2476,12 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req, &CompressionConfig::default()).unwrap();
+        let result = convert_request(
+            &req,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap();
 
         let mut found = false;
         for msg in &result.conversation_state.history {
@@ -2523,7 +2545,12 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req, &CompressionConfig::default()).unwrap();
+        let result = convert_request(
+            &req,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap();
 
         // 孤立 tool_result 会被过滤
         assert!(
@@ -2592,7 +2619,12 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req, &CompressionConfig::default()).unwrap();
+        let result = convert_request(
+            &req,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap();
         let current = &result.conversation_state.current_message.user_input_message;
 
         assert_eq!(
@@ -2767,7 +2799,12 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req_no_tools, &CompressionConfig::default()).unwrap();
+        let result = convert_request(
+            &req_no_tools,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap();
         let first_user = &result.conversation_state.history[0];
         match first_user {
             Message::User(u) => {
@@ -2803,7 +2840,12 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req_with_write, &CompressionConfig::default()).unwrap();
+        let result = convert_request(
+            &req_with_write,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap();
         let first_user = &result.conversation_state.history[0];
         match first_user {
             Message::User(u) => {
@@ -2839,8 +2881,12 @@ mod tests {
             metadata: None,
         };
 
-        let result =
-            convert_request(&req_no_system_with_edit, &CompressionConfig::default()).unwrap();
+        let result = convert_request(
+            &req_no_system_with_edit,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap();
         let first_user = &result.conversation_state.history[0];
         match first_user {
             Message::User(u) => {
@@ -2917,7 +2963,11 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req, &CompressionConfig::default());
+        let result = convert_request(
+            &req,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        );
         assert!(result.is_ok(), "prefill 场景不应报错: {:?}", result.err());
         let state = result.unwrap().conversation_state;
         assert_eq!(
@@ -2947,7 +2997,12 @@ mod tests {
             metadata: None,
         };
 
-        let err = convert_request(&req, &CompressionConfig::default()).unwrap_err();
+        let err = convert_request(
+            &req,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap_err();
         assert!(
             matches!(err, ConversionError::EmptyMessages),
             "只有 assistant 消息时应返回 EmptyMessages，实际: {:?}",
@@ -2976,7 +3031,12 @@ mod tests {
             metadata: None,
         };
 
-        let err = convert_request(&req, &CompressionConfig::default()).unwrap_err();
+        let err = convert_request(
+            &req,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap_err();
         assert!(
             matches!(err, ConversionError::EmptyMessageContent),
             "空消息内容应返回 EmptyMessageContent，实际: {:?}",
@@ -3008,7 +3068,12 @@ mod tests {
             metadata: None,
         };
 
-        let err = convert_request(&req, &CompressionConfig::default()).unwrap_err();
+        let err = convert_request(
+            &req,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap_err();
         assert!(
             matches!(err, ConversionError::EmptyMessageContent),
             "仅包含空白文本的消息应返回 EmptyMessageContent，实际: {:?}",
@@ -3043,7 +3108,12 @@ mod tests {
             metadata: None,
         };
 
-        let err = convert_request(&req, &CompressionConfig::default()).unwrap_err();
+        let err = convert_request(
+            &req,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap_err();
         assert!(
             matches!(err, ConversionError::EmptyMessageContent),
             "prefill 回退后的空 user 消息应返回 EmptyMessageContent，实际: {:?}",
@@ -3150,7 +3220,11 @@ mod tests {
         };
 
         // 转换应成功，不应因 tool_use/tool_result 配对失败而报错
-        let result = convert_request(&req, &CompressionConfig::default());
+        let result = convert_request(
+            &req,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        );
         assert!(
             result.is_ok(),
             "连续 assistant 消息场景不应报错: {:?}",

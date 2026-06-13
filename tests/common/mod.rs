@@ -33,6 +33,7 @@ use http::Response;
 use parking_lot::RwLock;
 
 use kiro_rs::anthropic;
+use kiro_rs::anthropic::model_mapper::ModelMapper;
 use kiro_rs::kiro;
 use kiro_rs::model::config::{CompressionConfig, PromptCacheMode};
 
@@ -48,6 +49,7 @@ pub fn build_test_app() -> Router {
         PromptCacheMode::Simulated,
     )));
     let rewriter_config = Arc::new(RwLock::new(anthropic::rewriter::RewriterConfig::default()));
+    let model_mapper = Arc::new(RwLock::new(ModelMapper::default()));
 
     anthropic::create_router_with_provider(
         TEST_API_KEY,
@@ -56,6 +58,7 @@ pub fn build_test_app() -> Router {
         compression_config,
         prompt_cache_runtime,
         rewriter_config,
+        model_mapper,
     )
 }
 

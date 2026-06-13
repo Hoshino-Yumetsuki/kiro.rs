@@ -139,19 +139,21 @@ pub fn rewrite_obvious_self_identity(text: &str) -> Option<String> {
 
 /// 构建改写请求体
 ///
-/// 使用与原始请求相同的模型（经过 map_model 转换为 Kiro model_id）
+/// 使用与原始请求相同的模型（经过 ModelMapper 转换为 Kiro model_id）
 fn build_rewrite_request(
     original_text: &str,
     model_id: &str,
     config: &RewriterConfig,
     profile_arn: Option<&str>,
+    model_mapper: &super::model_mapper::ModelMapper,
 ) -> Result<String, serde_json::Error> {
     // 构建用户消息：将原始文本嵌入到改写 prompt 中
     let prompt = config.rewrite_prompt.replace("{text}", original_text);
 
     // 模型映射：Anthropic 模型名 → Kiro 模型 ID
-    let kiro_model_id =
-        super::converter::map_model(model_id).unwrap_or_else(|| model_id.to_string());
+    let kiro_model_id = model_mapper
+        .map_model(model_id)
+        .unwrap_or_else(|| model_id.to_string());
 
     let user_input_message = UserInputMessage {
         user_input_message_context: UserInputMessageContext::default(),
@@ -190,9 +192,11 @@ pub async fn rewrite_text(
     config: &RewriterConfig,
     profile_arn: Option<&str>,
     user_id: Option<&str>,
+    model_mapper: &super::model_mapper::ModelMapper,
 ) -> Result<RewriteResult, anyhow::Error> {
-    let request_body = build_rewrite_request(original_text, model_id, config, profile_arn)
-        .map_err(|e| anyhow::anyhow!("改写请求序列化失败: {}", e))?;
+    let request_body =
+        build_rewrite_request(original_text, model_id, config, profile_arn, model_mapper)
+            .map_err(|e| anyhow::anyhow!("改写请求序列化失败: {}", e))?;
 
     tracing::info!(
         request_body_bytes = request_body.len(),

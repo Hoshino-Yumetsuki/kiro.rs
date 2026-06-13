@@ -84,6 +84,16 @@ where
     deserializer.deserialize_any(PromptCacheModeVisitor)
 }
 
+/// 模型配置条目（用于 config.json 中的 models 数组）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelConfig {
+    pub id: String,
+    pub display_name: String,
+    pub created_at: i64,
+    pub kiro_model_id: String,
+}
+
 /// KNA 应用配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -232,6 +242,9 @@ pub struct Config {
     /// 上游返回 403 时是否自动禁用凭据
     #[serde(default = "default_true")]
     pub auto_disable_on_forbidden: bool,
+
+    #[serde(default = "crate::anthropic::model_mapper::default_models")]
+    pub models: Vec<ModelConfig>,
 
     /// 端点特定的配置
     ///
@@ -409,6 +422,7 @@ impl Default for Config {
             auto_disable_refresh_failure: default_true(),
             auto_disable_on_forbidden: default_true(),
             default_endpoint: default_endpoint(),
+            models: crate::anthropic::model_mapper::default_models(),
             endpoints: HashMap::new(),
             config_path: None,
         }

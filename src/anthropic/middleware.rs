@@ -63,6 +63,8 @@ impl PromptCacheRuntime {
     }
 }
 
+use super::model_mapper::ModelMapper;
+
 /// 应用共享状态
 #[derive(Clone)]
 pub struct AppState {
@@ -79,6 +81,8 @@ pub struct AppState {
     pub prompt_cache_runtime: Arc<RwLock<PromptCacheRuntime>>,
     /// 响应关键词改写配置（共享引用，支持热更新）
     pub rewriter_config: Arc<RwLock<super::rewriter::RewriterConfig>>,
+    /// 模型映射配置（共享引用，支持热更新）
+    pub model_mapper: Arc<RwLock<ModelMapper>>,
 }
 
 impl AppState {
@@ -94,6 +98,7 @@ impl AppState {
             compression_config: Arc::new(RwLock::new(CompressionConfig::default())),
             prompt_cache_runtime,
             rewriter_config: Arc::new(RwLock::new(super::rewriter::RewriterConfig::default())),
+            model_mapper: Arc::new(RwLock::new(ModelMapper::default())),
         }
     }
 

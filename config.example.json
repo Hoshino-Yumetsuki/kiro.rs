@@ -25,5 +25,85 @@
     "maxRequestBodyBytes": 4718592,
     "adaptiveCompression": true,
     "adaptiveCompressionMaxIters": 32
-  }
+  },
+  "models": [
+    {
+      "id": "claude-opus-4-8",
+      "displayName": "Claude Opus 4.8",
+      "createdAt": 1780070400,
+      "kiroModelId": "claude-opus-4.8"
+    },
+    {
+      "id": "claude-opus-4-7",
+      "displayName": "Claude Opus 4.7",
+      "createdAt": 1776470400,
+      "kiroModelId": "claude-opus-4.7"
+    },
+    {
+      "id": "claude-opus-4-6",
+      "displayName": "Claude Opus 4.6",
+      "createdAt": 1770307200,
+      "kiroModelId": "claude-opus-4.6"
+    },
+    {
+      "id": "claude-opus-4-5-20251101",
+      "displayName": "Claude Opus 4.5",
+      "createdAt": 1730419200,
+      "kiroModelId": "claude-opus-4.5"
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "displayName": "Claude Sonnet 4.6",
+      "createdAt": 1771344000,
+      "kiroModelId": "claude-sonnet-4.6"
+    },
+    {
+      "id": "claude-sonnet-4-5-20250929",
+      "displayName": "Claude Sonnet 4.5",
+      "createdAt": 1727568000,
+      "kiroModelId": "claude-sonnet-4.5"
+    },
+    {
+      "id": "claude-sonnet-4-0-20250904",
+      "displayName": "Claude Sonnet 4.0",
+      "createdAt": 1725408000,
+      "kiroModelId": "claude-sonnet-4.0"
+    },
+    {
+      "id": "claude-haiku-4-5-20251001",
+      "displayName": "Claude Haiku 4.5",
+      "createdAt": 1727740800,
+      "kiroModelId": "claude-haiku-4.5"
+    },
+    {
+      "id": "deepseek-3-2",
+      "displayName": "DeepSeek 3.2",
+      "createdAt": 1739145600,
+      "kiroModelId": "deepseek-3.2"
+    },
+    {
+      "id": "minimax-m2-5",
+      "displayName": "MiniMax M2.5",
+      "createdAt": 1742256000,
+      "kiroModelId": "minimax-m2.5"
+    },
+    {
+      "id": "glm-5",
+      "displayName": "GLM-5",
+      "createdAt": 1743379200,
+      "kiroModelId": "glm-5"
+    },
+    {
+      "id": "minimax-m2-1",
+      "displayName": "MiniMax M2.1",
+      "createdAt": 1739145600,
+      "kiroModelId": "minimax-m2.1"
+    },
+    {
+      "id": "qwen3-coder-next",
+      "displayName": "Qwen3 Coder Next",
+      "createdAt": 1739145600,
+      "kiroModelId": "qwen3-coder-next"
+    }
+  ]
 }

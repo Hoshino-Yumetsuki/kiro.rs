@@ -16,6 +16,7 @@ use crate::model::config::CompressionConfig;
 use super::{
     handlers::{count_tokens, get_model, get_models, post_messages},
     middleware::{AppState, PromptCacheRuntime, auth_middleware, cors_layer},
+    model_mapper::ModelMapper,
 };
 
 /// 请求体最大大小限制 (50MB)
@@ -45,6 +46,7 @@ pub fn create_router_with_provider(
     compression_config: Arc<RwLock<CompressionConfig>>,
     prompt_cache_runtime: Arc<RwLock<PromptCacheRuntime>>,
     rewriter_config: Arc<RwLock<super::rewriter::RewriterConfig>>,
+    model_mapper: Arc<RwLock<ModelMapper>>,
 ) -> Router {
     let mut state = AppState::new(api_key, prompt_cache_runtime);
     if let Some(provider) = kiro_provider {
@@ -55,6 +57,7 @@ pub fn create_router_with_provider(
     }
     state = state.with_compression_config(compression_config);
     state.rewriter_config = rewriter_config;
+    state.model_mapper = model_mapper;
 
     // 需要认证的 /v1 路由
     let v1_routes = Router::new()
