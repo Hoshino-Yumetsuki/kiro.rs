@@ -10,8 +10,7 @@ import type {
   SetEndpointRequest,
   AddCredentialRequest,
   AddCredentialResponse,
-  CredentialStatsResponse,
-  CredentialAccountInfoResponse,
+
   ImportTokenJsonRequest,
   ImportTokenJsonResponse,
   ProxyConfigResponse,
@@ -121,14 +120,6 @@ export async function getCachedBalances(): Promise<CachedBalancesResponse> {
   return data
 }
 
-// 获取凭据账号信息（套餐/用量/邮箱等）
-export async function getCredentialAccountInfo(
-  id: number
-): Promise<CredentialAccountInfoResponse> {
-  const { data } = await api.get<CredentialAccountInfoResponse>(`/credentials/${id}/account`)
-  return data
-}
-
 // 添加新凭据
 export async function addCredential(
   req: AddCredentialRequest,
@@ -141,24 +132,6 @@ export async function addCredential(
 // 删除凭据
 export async function deleteCredential(id: number, signal?: AbortSignal): Promise<SuccessResponse> {
   const { data } = await api.delete<SuccessResponse>(`/credentials/${id}`, { signal })
-  return data
-}
-
-// 获取指定凭据统计
-export async function getCredentialStats(id: number): Promise<CredentialStatsResponse> {
-  const { data } = await api.get<CredentialStatsResponse>(`/credentials/${id}/stats`)
-  return data
-}
-
-// 清空指定凭据统计
-export async function resetCredentialStats(id: number): Promise<SuccessResponse> {
-  const { data } = await api.post<SuccessResponse>(`/credentials/${id}/stats/reset`)
-  return data
-}
-
-// 清空全部统计
-export async function resetAllStats(): Promise<SuccessResponse> {
-  const { data } = await api.post<SuccessResponse>('/stats/reset')
   return data
 }
 
