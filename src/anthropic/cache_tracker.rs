@@ -13,7 +13,6 @@ use super::types::{CacheControl, Message, MessagesRequest};
 const DEFAULT_CACHE_TTL: Duration = Duration::from_secs(300);
 const ONE_HOUR_CACHE_TTL: Duration = Duration::from_secs(3600);
 
-
 /// Prompt cache 分桶键：按 user_id 隔离，无 user_id 时落入 Global 共享桶。
 ///
 /// 与凭据 ID 解耦后，缓存命中不再受凭据故障转移影响。
@@ -147,7 +146,8 @@ impl CacheTracker {
 
         let Some(user_entries) = entries.by_user.get_mut(key) else {
             tracing::debug!(?key, "首次请求，无缓存条目");
-            let (cache_5m, cache_1h) = compute_ttl_breakdown_absolute(cacheable_total, last_breakpoint.ttl);
+            let (cache_5m, cache_1h) =
+                compute_ttl_breakdown_absolute(cacheable_total, last_breakpoint.ttl);
             return CacheResult {
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: cacheable_total,
@@ -156,11 +156,7 @@ impl CacheTracker {
             };
         };
 
-        tracing::debug!(
-            ?key,
-            entry_count = user_entries.len(),
-            "查找缓存匹配"
-        );
+        tracing::debug!(?key, entry_count = user_entries.len(), "查找缓存匹配");
 
         // 策略：从最后一个 breakpoint 所在 block 开始倒序搜索所有 blocks 的 fingerprint，
         // 找到最深的缓存命中点（不限于当前请求的 breakpoints）。
@@ -185,7 +181,8 @@ impl CacheTracker {
         // cache_creation = cacheable_total - cache_read
         let cache_read = matched_tokens.min(cacheable_total).max(0);
         let cache_creation = cacheable_total.saturating_sub(cache_read).max(0);
-        let (cache_5m, cache_1h) = compute_ttl_breakdown_absolute(cache_creation, last_breakpoint.ttl);
+        let (cache_5m, cache_1h) =
+            compute_ttl_breakdown_absolute(cache_creation, last_breakpoint.ttl);
 
         tracing::debug!(
             ?key,
@@ -766,7 +763,10 @@ mod tests {
             .unwrap_or(0);
 
         // 完全相同的请求：breakpoint block 匹配
-        assert_eq!(result.cache_read_input_tokens, breakpoint_tokens.min(cacheable_total));
+        assert_eq!(
+            result.cache_read_input_tokens,
+            breakpoint_tokens.min(cacheable_total)
+        );
         // cache_creation 只覆盖 token 估算开销（很小）
         assert_eq!(
             result.cache_read_input_tokens + result.cache_creation_input_tokens,

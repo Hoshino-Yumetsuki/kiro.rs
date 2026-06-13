@@ -1536,9 +1536,7 @@ impl MultiTokenManager {
                 } else {
                     let credentials = {
                         let entries = self.entries.lock();
-                        entries
-                            .get(&bound_id)
-                            .map(|e| e.credentials.clone())
+                        entries.get(&bound_id).map(|e| e.credentials.clone())
                     };
 
                     match credentials {
@@ -2500,11 +2498,7 @@ impl MultiTokenManager {
             .await;
 
         let count = success_count.load(std::sync::atomic::Ordering::Relaxed);
-        tracing::info!(
-            "余额初始化完成: {}/{} 成功",
-            count,
-            credential_ids.len()
-        );
+        tracing::info!("余额初始化完成: {}/{} 成功", count, credential_ids.len());
 
         count
     }
@@ -2895,19 +2889,22 @@ impl MultiTokenManager {
 
             let entry_secret_hash = credential_secret_hash(&validated_cred);
             let entry_lookup_hashes = credential_lookup_hashes(&validated_cred);
-            entries.insert(new_id, CredentialEntry {
-                id: new_id,
-                credentials: validated_cred,
-                failure_count: 0,
-                refresh_failure_count: 0,
-                disabled: false,
-                auto_heal_reason: None,
-                disable_reason: None,
-                fingerprint,
-                success_count: 0,
-                last_used_at: None,
-                refresh_token_hash: entry_secret_hash,
-            });
+            entries.insert(
+                new_id,
+                CredentialEntry {
+                    id: new_id,
+                    credentials: validated_cred,
+                    failure_count: 0,
+                    refresh_failure_count: 0,
+                    disabled: false,
+                    auto_heal_reason: None,
+                    disable_reason: None,
+                    fingerprint,
+                    success_count: 0,
+                    last_used_at: None,
+                    refresh_token_hash: entry_secret_hash,
+                },
+            );
             self.refresh_token_hashes.lock().extend(entry_lookup_hashes);
             new_id
         };
@@ -2982,9 +2979,7 @@ impl MultiTokenManager {
     /// 获取凭据的设备指纹
     pub fn get_fingerprint(&self, id: u64) -> Option<Fingerprint> {
         let entries = self.entries.lock();
-        entries
-            .get(&id)
-            .map(|e| e.fingerprint.clone())
+        entries.get(&id).map(|e| e.fingerprint.clone())
     }
 
     #[allow(dead_code)]
@@ -3005,10 +3000,7 @@ impl MultiTokenManager {
         // 检查是否禁用
         let is_disabled = {
             let entries = self.entries.lock();
-            entries
-                .get(&id)
-                .map(|e| e.disabled)
-                .unwrap_or(true)
+            entries.get(&id).map(|e| e.disabled).unwrap_or(true)
         };
         if is_disabled {
             return false;

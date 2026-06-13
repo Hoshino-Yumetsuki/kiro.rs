@@ -30,7 +30,6 @@ pub enum PromptCacheMode {
     Off,
 }
 
-
 /// 自定义反序列化：兼容老版本 `promptCacheAccountingEnabled: bool` 字段
 ///
 /// - `bool` true → `Simulated`，false → `Off`

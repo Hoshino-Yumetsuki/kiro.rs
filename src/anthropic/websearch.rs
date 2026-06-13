@@ -661,10 +661,13 @@ pub async fn handle_websearch_request(
         Ok(api_result) => {
             let resolved_cache_context = match (cache_tracker, cache_profile) {
                 (Some(cache_tracker), Some(cache_profile)) => {
-                    let cache_key = match payload.metadata.as_ref().and_then(|m| m.user_id.as_deref()) {
-                        Some(uid) => crate::anthropic::cache_tracker::CacheKey::User(uid.to_string()),
-                        None => crate::anthropic::cache_tracker::CacheKey::Global,
-                    };
+                    let cache_key =
+                        match payload.metadata.as_ref().and_then(|m| m.user_id.as_deref()) {
+                            Some(uid) => {
+                                crate::anthropic::cache_tracker::CacheKey::User(uid.to_string())
+                            }
+                            None => crate::anthropic::cache_tracker::CacheKey::Global,
+                        };
                     let resolved_cache_context =
                         resolve_cache_usage(cache_tracker, &cache_key, cache_profile);
                     tracing::info!(

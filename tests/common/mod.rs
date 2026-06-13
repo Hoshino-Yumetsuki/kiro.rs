@@ -43,7 +43,10 @@ pub const TEST_API_KEY: &str = "test-api-key";
 /// but without a real `KiroProvider` (no live upstream calls).
 pub fn build_test_app() -> Router {
     let compression_config = Arc::new(RwLock::new(CompressionConfig::default()));
-    let prompt_cache_runtime = Arc::new(RwLock::new(anthropic::PromptCacheRuntime::new(300, PromptCacheMode::Simulated)));
+    let prompt_cache_runtime = Arc::new(RwLock::new(anthropic::PromptCacheRuntime::new(
+        300,
+        PromptCacheMode::Simulated,
+    )));
     let rewriter_config = Arc::new(RwLock::new(anthropic::rewriter::RewriterConfig::default()));
 
     anthropic::create_router_with_provider(
