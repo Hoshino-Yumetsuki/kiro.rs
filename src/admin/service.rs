@@ -180,7 +180,7 @@ impl AdminService {
 
         let total = items.len();
         let page = params.page.unwrap_or(1).max(1);
-        let per_page = params.per_page.unwrap_or(total as u32).max(1).min(100);
+        let per_page = params.per_page.unwrap_or(total as u32).clamp(1, 100);
         let start = ((page - 1) as usize).saturating_mul(per_page as usize);
         let items = items
             .into_iter()
