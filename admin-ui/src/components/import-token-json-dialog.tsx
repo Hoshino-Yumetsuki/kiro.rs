@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from 'react'
+import PQueue from 'p-queue'
 import { toast } from 'sonner'
 import { Upload, FileJson, CheckCircle2, XCircle, AlertCircle, Loader2 } from 'lucide-react'
 import {
@@ -48,6 +49,7 @@ export function ImportTokenJsonDialog({ open, onOpenChange }: ImportTokenJsonDia
   const [verifyProgress, setVerifyProgress] = useState({ current: 0, total: 0 })
   const [isVerifying, setIsVerifying] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const cancelVerifyRef = useRef<(() => void) | null>(null)
 
   const { mutate: importMutate, isPending } = useImportTokenJson()
   const { mutateAsync: deleteCredential } = useDeleteCredential()
@@ -293,48 +295,70 @@ export function ImportTokenJsonDialog({ open, onOpenChange }: ImportTokenJsonDia
     }))
     setVerifyResults(initialVerifyResults)
 
+    const controller = new AbortController()
+    const queue = new PQueue({ concurrency: 5 })
+    let completedCount = 0
     let successCount = 0
     let failCount = 0
 
-    for (let i = 0; i < addedItems.length; i++) {
-      const item = addedItems[i]
-      const credId = item.credentialId!
-
-      // 更新为验活中
-      setVerifyResults(prev => prev.map((r, idx) =>
-        idx === i ? { ...r, status: 'verifying' } : r
-      ))
-
-      try {
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        const balance = await getCredentialBalance(credId)
-        successCount++
-        setVerifyResults(prev => prev.map((r, idx) =>
-          idx === i ? { ...r, status: 'verified', usage: formatKiroUsageWithUsd(balance.currentUsage, balance.usageLimit) } : r
-        ))
-      } catch (error) {
-        failCount++
-        // 验活失败，回滚
-        const rollback = await rollbackCredential(credId)
-        setVerifyResults(prev => prev.map((r, idx) =>
-          idx === i ? {
-            ...r,
-            status: rollback.success ? 'rolled_back' : 'rollback_failed',
-            error: extractErrorMessage(error),
-            rollbackError: rollback.error,
-          } : r
-        ))
-      }
-
-      setVerifyProgress({ current: i + 1, total: addedItems.length })
+    cancelVerifyRef.current = () => {
+      queue.clear()
+      controller.abort()
     }
 
+    const indexMap = new Map(addedItems.map((item, i) => [item.index, i]))
+
+    for (const item of addedItems) {
+      const credId = item.credentialId!
+      const resultIdx = indexMap.get(item.index)!
+
+      void queue.add(async () => {
+        if (controller.signal.aborted) return
+
+        // 更新为验活中
+        setVerifyResults(prev => prev.map((r, idx) =>
+          idx === resultIdx ? { ...r, status: 'verifying' } : r
+        ))
+
+        try {
+          const balance = await getCredentialBalance(credId)
+          if (controller.signal.aborted) return
+          successCount++
+          setVerifyResults(prev => prev.map((r, idx) =>
+            idx === resultIdx ? { ...r, status: 'verified', usage: formatKiroUsageWithUsd(balance.currentUsage, balance.usageLimit) } : r
+          ))
+        } catch (error) {
+          if (controller.signal.aborted) return
+          failCount++
+          // 验活失败，回滚
+          const rollback = await rollbackCredential(credId)
+          if (controller.signal.aborted) return
+          setVerifyResults(prev => prev.map((r, idx) =>
+            idx === resultIdx ? {
+              ...r,
+              status: rollback.success ? 'rolled_back' : 'rollback_failed',
+              error: extractErrorMessage(error),
+              rollbackError: rollback.error,
+            } : r
+          ))
+        }
+
+        completedCount++
+        setVerifyProgress({ current: completedCount, total: addedItems.length })
+      })
+    }
+
+    await queue.onIdle()
+
+    cancelVerifyRef.current = null
     setIsVerifying(false)
 
-    if (failCount === 0) {
-      toast.success(`全部 ${successCount} 个凭据验活成功`)
-    } else {
-      toast.info(`验活完成：成功 ${successCount}，失败 ${failCount}`)
+    if (!controller.signal.aborted) {
+      if (failCount === 0) {
+        toast.success(`全部 ${successCount} 个凭据验活成功`)
+      } else {
+        toast.info(`验活完成：成功 ${successCount}，失败 ${failCount}`)
+      }
     }
   }, [deleteCredential])
 
@@ -550,7 +574,7 @@ export function ImportTokenJsonDialog({ open, onOpenChange }: ImportTokenJsonDia
                   <div>
                     <div className="text-sm font-medium">导入后自动验活</div>
                     <div className="text-xs text-muted-foreground">
-                      逐个检查凭据有效性，失败的自动排除
+                      并发检查凭据有效性，失败的自动排除
                     </div>
                   </div>
                   <Switch checked={enableVerify} onCheckedChange={setEnableVerify} />

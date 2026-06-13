@@ -686,25 +686,37 @@ impl AdminService {
     pub async fn import_token_json(&self, req: ImportTokenJsonRequest) -> ImportTokenJsonResponse {
         let items = req.items.into_vec();
         let dry_run = req.dry_run;
+        let total = items.len();
 
-        let mut results = Vec::with_capacity(items.len());
+        use futures::stream::{self, StreamExt};
+
+        let results: Vec<ImportItemResult> = stream::iter(items.into_iter().enumerate())
+            .map(|(index, item)| async move {
+                self.process_token_json_item(index, item, dry_run).await
+            })
+            .buffer_unordered(10)
+            .collect()
+            .await;
+
+        // buffer_unordered returns items as they complete; restore request order.
+        let mut results = results;
+        results.sort_by_key(|result| result.index);
+
         let mut added = 0usize;
         let mut skipped = 0usize;
         let mut invalid = 0usize;
 
-        for (index, item) in items.into_iter().enumerate() {
-            let result = self.process_token_json_item(index, item, dry_run).await;
+        for result in &results {
             match result.action {
                 ImportAction::Added => added += 1,
                 ImportAction::Skipped => skipped += 1,
                 ImportAction::Invalid => invalid += 1,
             }
-            results.push(result);
         }
 
         ImportTokenJsonResponse {
             summary: ImportSummary {
-                parsed: results.len(),
+                parsed: total,
                 added,
                 skipped,
                 invalid,
