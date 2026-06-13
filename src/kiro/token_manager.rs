@@ -58,8 +58,30 @@ fn mask_user_id(user_id: Option<&str>) -> String {
     }
 }
 
-fn tier_matches(credential_tier: &Option<String>, required_tiers: Option<&[String]>) -> bool {
-    match (credential_tier, required_tiers) {
+fn tier_from_subscription_title(title: &str) -> Option<&'static str> {
+    let title_upper = title.to_uppercase();
+    if title_upper.contains("PRO+") || title_upper.contains("POWER") {
+        Some("pro+")
+    } else if title_upper.contains("PRO") {
+        Some("pro")
+    } else if title_upper.contains("FREE") {
+        Some("free")
+    } else {
+        None
+    }
+}
+
+fn credential_tier(credentials: &KiroCredentials) -> Option<&str> {
+    credentials.tier.as_deref().or_else(|| {
+        credentials
+            .subscription_title
+            .as_deref()
+            .and_then(tier_from_subscription_title)
+    })
+}
+
+fn tier_matches(credentials: &KiroCredentials, required_tiers: Option<&[String]>) -> bool {
+    match (credential_tier(credentials), required_tiers) {
         (_, None) => true,
         (_, Some(tiers)) if tiers.is_empty() => true,
         (None, Some(_)) => true,
@@ -1363,7 +1385,7 @@ impl MultiTokenManager {
                     .filter(|e| {
                         !e.disabled
                             && !tried_ids.contains(&e.id)
-                            && tier_matches(&e.credentials.tier, required_tiers)
+                            && tier_matches(&e.credentials, required_tiers)
                     })
                     .map(|e| (e.id, e.credentials.priority, e.credentials.runtime_only))
                     .collect();
@@ -1391,7 +1413,7 @@ impl MultiTokenManager {
                         .filter(|e| {
                             !e.disabled
                                 && !tried_ids.contains(&e.id)
-                                && tier_matches(&e.credentials.tier, required_tiers)
+                                && tier_matches(&e.credentials, required_tiers)
                         })
                         .map(|e| (e.id, e.credentials.priority, e.credentials.runtime_only))
                         .collect();
@@ -1401,7 +1423,7 @@ impl MultiTokenManager {
                     let tier_excluded = entries.values().any(|e| {
                         !e.disabled
                             && !tried_ids.contains(&e.id)
-                            && !tier_matches(&e.credentials.tier, required_tiers)
+                            && !tier_matches(&e.credentials, required_tiers)
                     });
                     if tier_excluded {
                         anyhow::bail!("tier_mismatch: 没有匹配所需等级的可用凭据");
@@ -1526,9 +1548,9 @@ impl MultiTokenManager {
         if let Some(bound_id) = self.affinity.get(user_id) {
             let is_enabled = {
                 let entries = self.entries.lock();
-                entries.get(&bound_id).is_some_and(|e| {
-                    !e.disabled && tier_matches(&e.credentials.tier, required_tiers)
-                })
+                entries
+                    .get(&bound_id)
+                    .is_some_and(|e| !e.disabled && tier_matches(&e.credentials, required_tiers))
             };
 
             if is_enabled {
@@ -3255,6 +3277,32 @@ mod tests {
     }
 
     #[test]
+    fn test_tier_matches_infers_subscription_title() {
+        let pro_plus = vec!["pro+".to_string()];
+        let pro_or_free = vec!["free".to_string(), "pro".to_string()];
+
+        let free_credential = KiroCredentials {
+            subscription_title: Some("KIRO FREE".to_string()),
+            ..Default::default()
+        };
+        assert!(tier_matches(&free_credential, Some(&pro_or_free)));
+        assert!(!tier_matches(&free_credential, Some(&pro_plus)));
+
+        let pro_plus_credential = KiroCredentials {
+            subscription_title: Some("KIRO PRO+".to_string()),
+            ..Default::default()
+        };
+        assert!(tier_matches(&pro_plus_credential, Some(&pro_plus)));
+
+        let explicit_tier_credential = KiroCredentials {
+            tier: Some("pro+".to_string()),
+            subscription_title: Some("KIRO FREE".to_string()),
+            ..Default::default()
+        };
+        assert!(tier_matches(&explicit_tier_credential, Some(&pro_plus)));
+    }
+
+    #[test]
     fn test_is_token_expired_with_expired_token() {
         let mut credentials = KiroCredentials::default();
         credentials.expires_at = Some("2020-01-01T00:00:00Z".to_string());
@@ -3499,6 +3547,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_acquire_context_excludes_free_subscription_from_pro_plus_model() {
+        let config = Config::default();
+        let cred = KiroCredentials {
+            access_token: Some("t1".to_string()),
+            expires_at: Some((Utc::now() + Duration::hours(1)).to_rfc3339()),
+            subscription_title: Some("KIRO FREE".to_string()),
+            ..Default::default()
+        };
+
+        let manager = MultiTokenManager::new(config, vec![cred], None, None, false).unwrap();
+        let required_tiers = vec!["pro+".to_string()];
+
+        let err = manager
+            .acquire_context(Some(&required_tiers))
+            .await
+            .err()
+            .unwrap();
+
+        assert!(err.to_string().contains("tier_mismatch"));
+    }
+
+    #[tokio::test]
     async fn test_multi_token_manager_acquire_context_round_robin_when_balance_and_usage_equal() {
         let config = Config::default();
         let mut cred1 = KiroCredentials::default();
@@ -3551,7 +3621,12 @@ mod tests {
         manager.report_quota_exhausted(2);
         assert_eq!(manager.available_count(), 0);
 
-        let err = manager.acquire_context(None).await.err().unwrap().to_string();
+        let err = manager
+            .acquire_context(None)
+            .await
+            .err()
+            .unwrap()
+            .to_string();
         assert!(
             err.contains("所有凭据均已禁用"),
             "错误应提示所有凭据禁用，实际: {}",
@@ -3805,7 +3880,9 @@ mod tests {
         let manager =
             MultiTokenManager::new(config, vec![cred1, cred2], None, None, false).unwrap();
 
-        let first = manager.acquire_context_for_user(Some("user-a"), None).await
+        let first = manager
+            .acquire_context_for_user(Some("user-a"), None)
+            .await
             .unwrap();
         assert_eq!(first.id, 1);
 
@@ -3815,17 +3892,23 @@ mod tests {
             Some(std::time::Duration::from_millis(200)),
         );
 
-        let diverted = manager.acquire_context_for_user(Some("user-a"), None).await
+        let diverted = manager
+            .acquire_context_for_user(Some("user-a"), None)
+            .await
             .unwrap();
         assert_eq!(diverted.id, 2);
 
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        let while_cooling = manager.acquire_context_for_user(Some("user-a"), None).await
+        let while_cooling = manager
+            .acquire_context_for_user(Some("user-a"), None)
+            .await
             .unwrap();
         assert_eq!(while_cooling.id, 2);
 
         tokio::time::sleep(std::time::Duration::from_millis(220)).await;
-        let rebound = manager.acquire_context_for_user(Some("user-a"), None).await
+        let rebound = manager
+            .acquire_context_for_user(Some("user-a"), None)
+            .await
             .unwrap();
         assert_eq!(rebound.id, 1);
     }
