@@ -205,7 +205,7 @@ pub async fn rewrite_text(
     );
 
     // 使用非流式调用（改写请求不需要流式）
-    let api_result = provider.call_api(&request_body, user_id).await?;
+    let api_result = provider.call_api(&request_body, user_id, None).await?;
 
     // 读取完整响应体
     let body_bytes = api_result

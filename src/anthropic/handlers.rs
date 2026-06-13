@@ -57,6 +57,7 @@ struct StreamRequestContext<'a> {
     thinking_enabled: bool,
     tool_name_map: std::collections::HashMap<String, String>,
     user_id: Option<&'a str>,
+    required_tiers: Option<&'a [String]>,
     structured_output: bool,
     rewriter_config: Option<&'a super::rewriter::RewriterConfig>,
     model_mapper: &'a super::model_mapper::ModelMapper,
@@ -68,6 +69,7 @@ struct NonStreamRequestContext<'a> {
     input_tokens: i32,
     tool_name_map: std::collections::HashMap<String, String>,
     user_id: Option<&'a str>,
+    required_tiers: Option<&'a [String]>,
     cache_tracker: Option<&'a std::sync::Arc<crate::anthropic::cache_tracker::CacheTracker>>,
     cache_profile: Option<&'a crate::anthropic::cache_tracker::CacheProfile>,
     cache_key: crate::anthropic::cache_tracker::CacheKey,
@@ -500,6 +502,18 @@ fn adaptive_shrink_request_body(
 }
 
 fn map_kiro_provider_error_to_response(request_body: &str, err: Error) -> Response {
+    if err.to_string().contains("tier_mismatch") {
+        tracing::warn!(error = %err, "没有匹配请求模型等级的可用凭据");
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse::without_request_id(
+                "forbidden",
+                "No credentials available for this model's required tier",
+            )),
+        )
+            .into_response();
+    }
+
     if is_input_too_long_error(&err) {
         tracing::warn!(
             kiro_request_body_bytes = request_body.len(),
@@ -1389,6 +1403,7 @@ async fn post_messages_inner(
                 .into_response();
         }
     };
+    let model_tiers = model_mapper.tiers_for_model(&payload.model);
 
     // 输出压缩统计（以字节为单位；用于排查上游请求体大小限制，实测约 5MiB 左右会触发 400）
     if let Some(ref stats) = conversion_result.compression_stats {
@@ -1539,6 +1554,7 @@ async fn post_messages_inner(
             thinking_enabled,
             tool_name_map: tool_name_map.clone(),
             user_id: user_id.as_deref(),
+            required_tiers: model_tiers,
             structured_output,
             rewriter_config: if rewriter_config.enabled {
                 Some(&rewriter_config)
@@ -1556,6 +1572,7 @@ async fn post_messages_inner(
             input_tokens: estimated_input_tokens,
             tool_name_map,
             user_id: user_id.as_deref(),
+            required_tiers: model_tiers,
             cache_tracker: cache_enabled.then_some(&prompt_cache.tracker),
             cache_profile: cache_profile.as_ref(),
             cache_key: cache_key.clone(),
@@ -1577,7 +1594,11 @@ async fn handle_stream_request(
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let api_result = match provider
-        .call_api_stream(context.request_body, context.user_id)
+        .call_api_stream(
+            context.request_body,
+            context.user_id,
+            context.required_tiers,
+        )
         .await
     {
         Ok(resp) => resp,
@@ -1869,7 +1890,11 @@ async fn handle_non_stream_request(
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let api_result = match provider
-        .call_api(context.request_body, context.user_id)
+        .call_api(
+            context.request_body,
+            context.user_id,
+            context.required_tiers,
+        )
         .await
     {
         Ok(resp) => resp,

@@ -104,6 +104,12 @@ pub struct KiroCredentials {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
 
+    /// 凭据所属的订阅等级（如 "free" / "pro" / "pro+"）
+    /// 用于模型级别的凭据路由：仅当凭据 tier 在模型的 tiers 列表中时才允许使用
+    /// 未配置时视为通配（可访问任何模型）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+
     /// 凭据是否被禁用（默认为 false）
     #[serde(default)]
     pub disabled: bool,
@@ -380,6 +386,7 @@ mod tests {
             proxy_url: None,
             proxy_username: None,
             proxy_password: None,
+            tier: None,
             disabled: false,
             runtime_only: false,
         };
@@ -500,6 +507,7 @@ mod tests {
             proxy_url: None,
             proxy_username: None,
             proxy_password: None,
+            tier: None,
             disabled: false,
             runtime_only: false,
         };
@@ -532,6 +540,7 @@ mod tests {
             proxy_url: None,
             proxy_username: None,
             proxy_password: None,
+            tier: None,
             disabled: false,
             runtime_only: false,
         };
@@ -650,6 +659,7 @@ mod tests {
             proxy_url: None,
             proxy_username: None,
             proxy_password: None,
+            tier: None,
             disabled: false,
             runtime_only: false,
         };

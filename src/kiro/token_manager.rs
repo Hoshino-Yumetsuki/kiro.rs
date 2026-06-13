@@ -58,6 +58,15 @@ fn mask_user_id(user_id: Option<&str>) -> String {
     }
 }
 
+fn tier_matches(credential_tier: &Option<String>, required_tiers: Option<&[String]>) -> bool {
+    match (credential_tier, required_tiers) {
+        (_, None) => true,
+        (_, Some(tiers)) if tiers.is_empty() => true,
+        (None, Some(_)) => true,
+        (Some(ct), Some(tiers)) => tiers.iter().any(|t| t == ct),
+    }
+}
+
 /// Token 管理器
 ///
 /// 负责管理凭据和 Token 的自动刷新
@@ -1223,7 +1232,10 @@ impl MultiTokenManager {
     /// 选择策略：按优先级选择可用凭据
     /// 如果 Token 过期或即将过期，会自动刷新
     /// Token 刷新失败时会尝试下一个可用凭据（不计入失败次数）
-    pub async fn acquire_context(&self) -> anyhow::Result<CallContext> {
+    pub async fn acquire_context(
+        &self,
+        required_tiers: Option<&[String]>,
+    ) -> anyhow::Result<CallContext> {
         // 检查是否需要自动恢复
         self.check_and_recover();
 
@@ -1348,7 +1360,11 @@ impl MultiTokenManager {
 
                 let mut candidates: Vec<(u64, u32, bool)> = entries
                     .values()
-                    .filter(|e| !e.disabled && !tried_ids.contains(&e.id))
+                    .filter(|e| {
+                        !e.disabled
+                            && !tried_ids.contains(&e.id)
+                            && tier_matches(&e.credentials.tier, required_tiers)
+                    })
                     .map(|e| (e.id, e.credentials.priority, e.credentials.runtime_only))
                     .collect();
 
@@ -1372,9 +1388,24 @@ impl MultiTokenManager {
 
                     candidates = entries
                         .values()
-                        .filter(|e| !e.disabled && !tried_ids.contains(&e.id))
+                        .filter(|e| {
+                            !e.disabled
+                                && !tried_ids.contains(&e.id)
+                                && tier_matches(&e.credentials.tier, required_tiers)
+                        })
                         .map(|e| (e.id, e.credentials.priority, e.credentials.runtime_only))
                         .collect();
+                }
+
+                if candidates.is_empty() && required_tiers.is_some() {
+                    let tier_excluded = entries.values().any(|e| {
+                        !e.disabled
+                            && !tried_ids.contains(&e.id)
+                            && !tier_matches(&e.credentials.tier, required_tiers)
+                    });
+                    if tier_excluded {
+                        anyhow::bail!("tier_mismatch: 没有匹配所需等级的可用凭据");
+                    }
                 }
 
                 if candidates.is_empty() {
@@ -1475,16 +1506,17 @@ impl MultiTokenManager {
     pub async fn acquire_context_for_user(
         &self,
         user_id: Option<&str>,
+        required_tiers: Option<&[String]>,
     ) -> anyhow::Result<CallContext> {
         // 无 user_id 时走默认逻辑
         let user_id = match user_id {
             Some(id) if !id.is_empty() => id,
-            _ => return self.acquire_context().await,
+            _ => return self.acquire_context(required_tiers).await,
         };
 
         // 粘性路由关闭时，跳过亲和性，直接走负载均衡
         if !self.config.read().enable_sticky_routing {
-            return self.acquire_context().await;
+            return self.acquire_context(required_tiers).await;
         }
 
         // 默认保持用户绑定（用于连续对话）。当绑定凭据“临时不可用”（速率限制/短冷却）时，
@@ -1494,7 +1526,9 @@ impl MultiTokenManager {
         if let Some(bound_id) = self.affinity.get(user_id) {
             let is_enabled = {
                 let entries = self.entries.lock();
-                entries.get(&bound_id).is_some_and(|e| !e.disabled)
+                entries.get(&bound_id).is_some_and(|e| {
+                    !e.disabled && tier_matches(&e.credentials.tier, required_tiers)
+                })
             };
 
             if is_enabled {
@@ -1566,7 +1600,7 @@ impl MultiTokenManager {
             }
         }
 
-        let ctx = self.acquire_context().await?;
+        let ctx = self.acquire_context(required_tiers).await?;
         if !keep_affinity_binding {
             self.affinity.set(user_id, ctx.id);
         }
@@ -3438,7 +3472,7 @@ mod tests {
         assert_eq!(manager.available_count(), 0);
 
         // 应触发自愈：重置失败计数并重新启用，避免必须重启进程
-        let ctx = manager.acquire_context().await.unwrap();
+        let ctx = manager.acquire_context(None).await.unwrap();
         assert!(ctx.token == "t1" || ctx.token == "t2");
         assert_eq!(manager.available_count(), 2);
     }
@@ -3460,7 +3494,7 @@ mod tests {
         manager.update_balance_cache(1, 100.0);
         manager.update_balance_cache(2, 200.0);
 
-        let ctx = manager.acquire_context().await.unwrap();
+        let ctx = manager.acquire_context(None).await.unwrap();
         assert_eq!(ctx.id, 2);
     }
 
@@ -3480,8 +3514,8 @@ mod tests {
         manager.update_balance_cache(1, 100.0);
         manager.update_balance_cache(2, 100.0);
 
-        let ctx1 = manager.acquire_context().await.unwrap();
-        let ctx2 = manager.acquire_context().await.unwrap();
+        let ctx1 = manager.acquire_context(None).await.unwrap();
+        let ctx2 = manager.acquire_context(None).await.unwrap();
         assert_ne!(ctx1.id, ctx2.id);
     }
 
@@ -3517,7 +3551,7 @@ mod tests {
         manager.report_quota_exhausted(2);
         assert_eq!(manager.available_count(), 0);
 
-        let err = manager.acquire_context().await.err().unwrap().to_string();
+        let err = manager.acquire_context(None).await.err().unwrap().to_string();
         assert!(
             err.contains("所有凭据均已禁用"),
             "错误应提示所有凭据禁用，实际: {}",
@@ -3560,7 +3594,7 @@ mod tests {
         assert!(manager.rate_limiter().try_acquire(1).is_ok());
 
         // 关键断言：不会抛出“所有凭据均已禁用（1/2）”，而是等待后成功返回。
-        let ctx = manager.acquire_context().await.unwrap();
+        let ctx = manager.acquire_context(None).await.unwrap();
         assert_eq!(ctx.id, 1);
     }
 
@@ -3612,7 +3646,7 @@ mod tests {
             Some(std::time::Duration::from_millis(200)),
         );
 
-        let ctx = manager.acquire_context().await.unwrap();
+        let ctx = manager.acquire_context(None).await.unwrap();
         assert_eq!(ctx.id, 2);
     }
 
@@ -3632,7 +3666,7 @@ mod tests {
         );
 
         let started = std::time::Instant::now();
-        let ctx = manager.acquire_context().await.unwrap();
+        let ctx = manager.acquire_context(None).await.unwrap();
         let elapsed = started.elapsed();
 
         assert_eq!(ctx.id, 1);
@@ -3656,7 +3690,7 @@ mod tests {
         );
 
         let started = std::time::Instant::now();
-        let err = manager.acquire_context().await.err().unwrap();
+        let err = manager.acquire_context(None).await.err().unwrap();
         let elapsed = started.elapsed();
 
         // 应立即返回错误，不会长睡
@@ -3694,7 +3728,7 @@ mod tests {
         );
 
         let started = std::time::Instant::now();
-        let err = manager.acquire_context().await.err().unwrap();
+        let err = manager.acquire_context(None).await.err().unwrap();
         let elapsed = started.elapsed();
 
         assert!(elapsed < std::time::Duration::from_secs(2));
@@ -3733,7 +3767,7 @@ mod tests {
 
         let result = tokio::time::timeout(
             std::time::Duration::from_millis(300),
-            manager.acquire_context(),
+            manager.acquire_context(None),
         )
         .await;
 
@@ -3771,9 +3805,7 @@ mod tests {
         let manager =
             MultiTokenManager::new(config, vec![cred1, cred2], None, None, false).unwrap();
 
-        let first = manager
-            .acquire_context_for_user(Some("user-a"))
-            .await
+        let first = manager.acquire_context_for_user(Some("user-a"), None).await
             .unwrap();
         assert_eq!(first.id, 1);
 
@@ -3783,23 +3815,17 @@ mod tests {
             Some(std::time::Duration::from_millis(200)),
         );
 
-        let diverted = manager
-            .acquire_context_for_user(Some("user-a"))
-            .await
+        let diverted = manager.acquire_context_for_user(Some("user-a"), None).await
             .unwrap();
         assert_eq!(diverted.id, 2);
 
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        let while_cooling = manager
-            .acquire_context_for_user(Some("user-a"))
-            .await
+        let while_cooling = manager.acquire_context_for_user(Some("user-a"), None).await
             .unwrap();
         assert_eq!(while_cooling.id, 2);
 
         tokio::time::sleep(std::time::Duration::from_millis(220)).await;
-        let rebound = manager
-            .acquire_context_for_user(Some("user-a"))
-            .await
+        let rebound = manager.acquire_context_for_user(Some("user-a"), None).await
             .unwrap();
         assert_eq!(rebound.id, 1);
     }

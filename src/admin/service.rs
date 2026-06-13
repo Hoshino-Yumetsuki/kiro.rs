@@ -476,6 +476,7 @@ impl AdminService {
             proxy_url: req.proxy_url,
             proxy_username: req.proxy_username,
             proxy_password: req.proxy_password,
+            tier: None,
             disabled: false, // 新添加的凭据默认启用
             runtime_only: false,
         };
@@ -804,6 +805,7 @@ impl AdminService {
             proxy_url: None,
             proxy_username: None,
             proxy_password: None,
+            tier: None,
             disabled: false,
             runtime_only: false,
         };

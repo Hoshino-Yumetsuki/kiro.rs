@@ -12,36 +12,73 @@ use crate::model::config::ModelConfig;
 ///
 /// 包含两个数据结构：
 /// - `mappings`: Anthropic 模型 ID（小写）→ Kiro 上游模型 ID
+/// - `tier_map`: Anthropic 模型 ID（小写）→ 可用凭据等级
 /// - `model_infos`: 对外暴露的模型列表（Anthropic API 格式）
 #[derive(Debug, Clone)]
 pub struct ModelMapper {
     /// 小写 Anthropic ID → Kiro 上游 ID
     mappings: HashMap<String, String>,
+    /// 小写 Anthropic ID → 可用凭据等级
+    tier_map: HashMap<String, Vec<String>>,
     /// 对外暴露的模型列表
     model_infos: Vec<ModelInfo>,
 }
 
 impl ModelMapper {
     /// 从配置模型列表构建映射器
-    pub fn from_config(models: &[ModelConfig]) -> Self {
+    pub fn from_config(models: &[ModelConfig], supported_tiers: &[String]) -> Self {
         let mut mappings = HashMap::new();
+        let mut tier_map = HashMap::new();
         let mut model_infos = Vec::new();
 
         for m in models {
             // 精确匹配条目：小写 ID → kiro_model_id
-            mappings.insert(m.id.to_lowercase(), m.kiro_model_id.clone());
+            let lower_id = m.id.to_lowercase();
+            mappings.insert(lower_id.clone(), m.kiro_model_id.clone());
+            tier_map.insert(lower_id, m.tiers.clone());
 
-            model_infos.push(ModelInfo {
-                id: m.id.clone(),
-                model_type: "model".to_string(),
-                display_name: m.display_name.clone(),
-                created_at: m.created_at,
-            });
+            if supported_tiers.is_empty()
+                || m.tiers.iter().any(|tier| supported_tiers.contains(tier))
+            {
+                model_infos.push(ModelInfo {
+                    id: m.id.clone(),
+                    model_type: "model".to_string(),
+                    display_name: m.display_name.clone(),
+                    created_at: m.created_at,
+                });
+            }
         }
 
         Self {
             mappings,
+            tier_map,
             model_infos,
+        }
+    }
+
+    fn claude_fallback_key(lower: &str) -> Option<&'static str> {
+        if lower.contains("sonnet") {
+            if lower.contains("4-6") || lower.contains("4.6") {
+                Some("claude-sonnet-4-6")
+            } else if lower.contains("4-0") || lower.contains("4.0") {
+                Some("claude-sonnet-4-0-20250904")
+            } else {
+                Some("claude-sonnet-4-5-20250929")
+            }
+        } else if lower.contains("opus") {
+            if lower.contains("4-5") || lower.contains("4.5") {
+                Some("claude-opus-4-5-20251101")
+            } else if lower.contains("4-7") || lower.contains("4.7") {
+                Some("claude-opus-4-7")
+            } else if lower.contains("4-8") || lower.contains("4.8") {
+                Some("claude-opus-4-8")
+            } else {
+                Some("claude-opus-4-6")
+            }
+        } else if lower.contains("haiku") {
+            Some("claude-haiku-4-5-20251001")
+        } else {
+            None
         }
     }
 
@@ -59,29 +96,26 @@ impl ModelMapper {
         }
 
         // 2. Claude 子串回退（兼容 claude-sonnet-4-20250514 等旧格式）
-        if lower.contains("sonnet") {
-            if lower.contains("4-6") || lower.contains("4.6") {
-                return self.mappings.get("claude-sonnet-4-6").cloned();
-            } else if lower.contains("4-0") || lower.contains("4.0") {
-                return self.mappings.get("claude-sonnet-4-0-20250904").cloned();
-            } else {
-                return self.mappings.get("claude-sonnet-4-5-20250929").cloned();
-            }
-        } else if lower.contains("opus") {
-            if lower.contains("4-5") || lower.contains("4.5") {
-                return self.mappings.get("claude-opus-4-5-20251101").cloned();
-            } else if lower.contains("4-7") || lower.contains("4.7") {
-                return self.mappings.get("claude-opus-4-7").cloned();
-            } else if lower.contains("4-8") || lower.contains("4.8") {
-                return self.mappings.get("claude-opus-4-8").cloned();
-            } else {
-                return self.mappings.get("claude-opus-4-6").cloned();
-            }
-        } else if lower.contains("haiku") {
-            return self.mappings.get("claude-haiku-4-5-20251001").cloned();
+        if let Some(fallback_key) = Self::claude_fallback_key(&lower) {
+            return self.mappings.get(fallback_key).cloned();
         }
 
         None
+    }
+
+    /// 获取模型可用的凭据等级
+    ///
+    /// 查找策略与 `map_model` 一致：精确匹配优先，其次 Claude 子串回退。
+    pub fn tiers_for_model(&self, model: &str) -> Option<&[String]> {
+        let lower = model.to_lowercase();
+
+        if let Some(tiers) = self.tier_map.get(&lower) {
+            return Some(tiers.as_slice());
+        }
+
+        Self::claude_fallback_key(&lower)
+            .and_then(|fallback_key| self.tier_map.get(fallback_key))
+            .map(Vec::as_slice)
     }
 
     /// 获取对外暴露的模型列表
@@ -92,7 +126,7 @@ impl ModelMapper {
 
 impl Default for ModelMapper {
     fn default() -> Self {
-        Self::from_config(&default_models())
+        Self::from_config(&default_models(), &[])
     }
 }
 
@@ -108,48 +142,56 @@ pub fn default_models() -> Vec<ModelConfig> {
             display_name: "Claude Sonnet 4.6".to_string(),
             created_at: 1739836800, // 2025-02-17
             kiro_model_id: "claude-sonnet-4.6".to_string(),
+            tiers: vec!["pro".to_string(), "pro+".to_string()],
         },
         ModelConfig {
             id: "claude-sonnet-4-5-20250929".to_string(),
             display_name: "Claude Sonnet 4.5".to_string(),
             created_at: 1727568000, // 2025-09-29
             kiro_model_id: "claude-sonnet-4.5".to_string(),
+            tiers: vec!["free".to_string(), "pro".to_string(), "pro+".to_string()],
         },
         ModelConfig {
             id: "claude-sonnet-4-0-20250904".to_string(),
             display_name: "Claude Sonnet 4.0".to_string(),
             created_at: 1725408000, // 2025-09-04
             kiro_model_id: "claude-sonnet-4.0".to_string(),
+            tiers: vec!["free".to_string(), "pro".to_string(), "pro+".to_string()],
         },
         ModelConfig {
             id: "claude-opus-4-5-20251101".to_string(),
             display_name: "Claude Opus 4.5".to_string(),
             created_at: 1730419200, // 2025-11-01
             kiro_model_id: "claude-opus-4.5".to_string(),
+            tiers: vec!["pro".to_string(), "pro+".to_string()],
         },
         ModelConfig {
             id: "claude-opus-4-6".to_string(),
             display_name: "Claude Opus 4.6".to_string(),
             created_at: 1738713600, // 2026-02-05
             kiro_model_id: "claude-opus-4.6".to_string(),
+            tiers: vec!["pro".to_string(), "pro+".to_string()],
         },
         ModelConfig {
             id: "claude-opus-4-7".to_string(),
             display_name: "Claude Opus 4.7".to_string(),
             created_at: 1744934400, // 2026-04-16 (Experimental)
             kiro_model_id: "claude-opus-4.7".to_string(),
+            tiers: vec!["pro+".to_string()],
         },
         ModelConfig {
             id: "claude-opus-4-8".to_string(),
             display_name: "Claude Opus 4.8".to_string(),
             created_at: 1748390400, // 2026-05-28 (Experimental)
             kiro_model_id: "claude-opus-4.8".to_string(),
+            tiers: vec!["pro+".to_string()],
         },
         ModelConfig {
             id: "claude-haiku-4-5-20251001".to_string(),
             display_name: "Claude Haiku 4.5".to_string(),
             created_at: 1727740800, // 2025-10-01
             kiro_model_id: "claude-haiku-4.5".to_string(),
+            tiers: vec!["pro".to_string(), "pro+".to_string()],
         },
         // === 非 Claude 模型 ===
         ModelConfig {
@@ -157,30 +199,35 @@ pub fn default_models() -> Vec<ModelConfig> {
             display_name: "DeepSeek 3.2".to_string(),
             created_at: 1739145600, // 2026-02-10 (Experimental)
             kiro_model_id: "deepseek-3.2".to_string(),
+            tiers: vec!["free".to_string(), "pro".to_string(), "pro+".to_string()],
         },
         ModelConfig {
             id: "minimax-m2-5".to_string(),
             display_name: "MiniMax M2.5".to_string(),
             created_at: 1742256000, // 2026-03-18 (Experimental)
             kiro_model_id: "minimax-m2.5".to_string(),
+            tiers: vec!["free".to_string(), "pro".to_string(), "pro+".to_string()],
         },
         ModelConfig {
             id: "glm-5".to_string(),
             display_name: "GLM-5".to_string(),
             created_at: 1743379200, // 2026-03-31 (Experimental)
             kiro_model_id: "glm-5".to_string(),
+            tiers: vec!["free".to_string(), "pro".to_string(), "pro+".to_string()],
         },
         ModelConfig {
             id: "minimax-m2-1".to_string(),
             display_name: "MiniMax M2.1".to_string(),
             created_at: 1739145600, // 2026-02-10 (Experimental)
             kiro_model_id: "minimax-m2.1".to_string(),
+            tiers: vec!["free".to_string(), "pro".to_string(), "pro+".to_string()],
         },
         ModelConfig {
             id: "qwen3-coder-next".to_string(),
             display_name: "Qwen3 Coder Next".to_string(),
             created_at: 1739145600, // 2026-02-10 (Experimental)
             kiro_model_id: "qwen3-coder-next".to_string(),
+            tiers: vec!["free".to_string(), "pro".to_string(), "pro+".to_string()],
         },
     ]
 }
@@ -317,8 +364,9 @@ mod tests {
             display_name: "Custom Model".to_string(),
             created_at: 1700000000,
             kiro_model_id: "custom-upstream-id".to_string(),
+            tiers: vec!["free".to_string()],
         }];
-        let mapper = ModelMapper::from_config(&custom);
+        let mapper = ModelMapper::from_config(&custom, &[]);
         assert_eq!(
             mapper.map_model("my-custom-model"),
             Some("custom-upstream-id".to_string())

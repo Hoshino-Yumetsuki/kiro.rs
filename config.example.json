@@ -31,79 +31,93 @@
       "id": "claude-opus-4-8",
       "displayName": "Claude Opus 4.8",
       "createdAt": 1780070400,
-      "kiroModelId": "claude-opus-4.8"
+      "kiroModelId": "claude-opus-4.8",
+      "tiers": ["pro+"]
     },
     {
       "id": "claude-opus-4-7",
       "displayName": "Claude Opus 4.7",
       "createdAt": 1776470400,
-      "kiroModelId": "claude-opus-4.7"
+      "kiroModelId": "claude-opus-4.7",
+      "tiers": ["pro+"]
     },
     {
       "id": "claude-opus-4-6",
       "displayName": "Claude Opus 4.6",
       "createdAt": 1770307200,
-      "kiroModelId": "claude-opus-4.6"
+      "kiroModelId": "claude-opus-4.6",
+      "tiers": ["pro", "pro+"]
     },
     {
       "id": "claude-opus-4-5-20251101",
       "displayName": "Claude Opus 4.5",
       "createdAt": 1730419200,
-      "kiroModelId": "claude-opus-4.5"
+      "kiroModelId": "claude-opus-4.5",
+      "tiers": ["pro", "pro+"]
     },
     {
       "id": "claude-sonnet-4-6",
       "displayName": "Claude Sonnet 4.6",
       "createdAt": 1771344000,
-      "kiroModelId": "claude-sonnet-4.6"
+      "kiroModelId": "claude-sonnet-4.6",
+      "tiers": ["pro", "pro+"]
     },
     {
       "id": "claude-sonnet-4-5-20250929",
       "displayName": "Claude Sonnet 4.5",
       "createdAt": 1727568000,
-      "kiroModelId": "claude-sonnet-4.5"
+      "kiroModelId": "claude-sonnet-4.5",
+      "tiers": ["free", "pro", "pro+"]
     },
     {
       "id": "claude-sonnet-4-0-20250904",
       "displayName": "Claude Sonnet 4.0",
       "createdAt": 1725408000,
-      "kiroModelId": "claude-sonnet-4.0"
+      "kiroModelId": "claude-sonnet-4.0",
+      "tiers": ["free", "pro", "pro+"]
     },
     {
       "id": "claude-haiku-4-5-20251001",
       "displayName": "Claude Haiku 4.5",
       "createdAt": 1727740800,
-      "kiroModelId": "claude-haiku-4.5"
+      "kiroModelId": "claude-haiku-4.5",
+      "tiers": ["pro", "pro+"]
     },
     {
       "id": "deepseek-3-2",
       "displayName": "DeepSeek 3.2",
       "createdAt": 1739145600,
-      "kiroModelId": "deepseek-3.2"
+      "kiroModelId": "deepseek-3.2",
+      "tiers": ["free", "pro", "pro+"]
     },
     {
       "id": "minimax-m2-5",
       "displayName": "MiniMax M2.5",
       "createdAt": 1742256000,
-      "kiroModelId": "minimax-m2.5"
+      "kiroModelId": "minimax-m2.5",
+      "tiers": ["free", "pro", "pro+"]
     },
     {
       "id": "glm-5",
       "displayName": "GLM-5",
       "createdAt": 1743379200,
-      "kiroModelId": "glm-5"
+      "kiroModelId": "glm-5",
+      "tiers": ["free", "pro", "pro+"]
     },
     {
       "id": "minimax-m2-1",
       "displayName": "MiniMax M2.1",
       "createdAt": 1739145600,
-      "kiroModelId": "minimax-m2.1"
+      "kiroModelId": "minimax-m2.1",
+      "tiers": ["free", "pro", "pro+"]
     },
     {
       "id": "qwen3-coder-next",
       "displayName": "Qwen3 Coder Next",
       "createdAt": 1739145600,
-      "kiroModelId": "qwen3-coder-next"
+      "kiroModelId": "qwen3-coder-next",
+      "tiers": ["free", "pro", "pro+"]
     }
-  ]
+  ],
+  "supportedTiers": ["free", "pro", "pro+"]
 }

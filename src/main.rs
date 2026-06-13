@@ -206,9 +206,13 @@ async fn main() {
     // 构建 Anthropic API 路由（profile_arn 由 provider 层根据实际凭据动态注入）
     let rewriter_config =
         std::sync::Arc::new(parking_lot::RwLock::new(config.read().rewriter.clone()));
-    let model_mapper = std::sync::Arc::new(parking_lot::RwLock::new(
-        anthropic::model_mapper::ModelMapper::from_config(&config.read().models),
-    ));
+    let model_mapper = std::sync::Arc::new(parking_lot::RwLock::new({
+        let config = config.read();
+        anthropic::model_mapper::ModelMapper::from_config(
+            &config.models,
+            &config.supported_tiers,
+        )
+    }));
     let anthropic_app = anthropic::create_router_with_provider(
         &api_key,
         Some(kiro_provider.clone()),

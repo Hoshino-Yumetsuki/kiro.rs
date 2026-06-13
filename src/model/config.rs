@@ -92,6 +92,10 @@ pub struct ModelConfig {
     pub display_name: String,
     pub created_at: i64,
     pub kiro_model_id: String,
+    /// 允许使用此模型的订阅等级列表（如 ["free", "pro", "pro+"]）
+    /// 空列表表示不限制（任何 tier 均可使用）
+    #[serde(default)]
+    pub tiers: Vec<String>,
 }
 
 /// KNA 应用配置
@@ -245,6 +249,12 @@ pub struct Config {
 
     #[serde(default = "crate::anthropic::model_mapper::default_models")]
     pub models: Vec<ModelConfig>,
+
+    /// 当前部署支持的订阅等级列表
+    /// 用于过滤 /v1/models 端点返回的可用模型
+    /// 空列表表示不过滤（所有模型均可见）
+    #[serde(default)]
+    pub supported_tiers: Vec<String>,
 
     /// 端点特定的配置
     ///
@@ -423,6 +433,7 @@ impl Default for Config {
             auto_disable_on_forbidden: default_true(),
             default_endpoint: default_endpoint(),
             models: crate::anthropic::model_mapper::default_models(),
+            supported_tiers: Vec::new(),
             endpoints: HashMap::new(),
             config_path: None,
         }

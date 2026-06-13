@@ -236,8 +236,10 @@ impl KiroProvider {
         &self,
         request_body: &str,
         user_id: Option<&str>,
+        required_tiers: Option<&[String]>,
     ) -> anyhow::Result<ApiCallResult> {
-        self.call_api_with_retry(request_body, false, user_id).await
+        self.call_api_with_retry(request_body, false, user_id, required_tiers)
+            .await
     }
 
     /// 发送流式 API 请求
@@ -257,8 +259,10 @@ impl KiroProvider {
         &self,
         request_body: &str,
         user_id: Option<&str>,
+        required_tiers: Option<&[String]>,
     ) -> anyhow::Result<ApiCallResult> {
-        self.call_api_with_retry(request_body, true, user_id).await
+        self.call_api_with_retry(request_body, true, user_id, required_tiers)
+            .await
     }
 
     /// 发送 MCP API 请求
@@ -287,7 +291,7 @@ impl KiroProvider {
 
         for attempt in 0..max_retries {
             // 获取调用上下文
-            let ctx = match self.token_manager.acquire_context().await {
+            let ctx = match self.token_manager.acquire_context(None).await {
                 Ok(c) => c,
                 Err(e) => {
                     last_error = Some(e);
@@ -539,6 +543,7 @@ impl KiroProvider {
         request_body: &str,
         is_stream: bool,
         user_id: Option<&str>,
+        required_tiers: Option<&[String]>,
     ) -> anyhow::Result<ApiCallResult> {
         let total_credentials = self.token_manager.total_count();
         let available = self.token_manager.available_count();
@@ -552,7 +557,11 @@ impl KiroProvider {
 
         for attempt in 0..max_retries {
             // 获取调用上下文（绑定 index、credentials、token），支持用户亲和性
-            let ctx = match self.token_manager.acquire_context_for_user(user_id).await {
+            let ctx = match self
+                .token_manager
+                .acquire_context_for_user(user_id, required_tiers)
+                .await
+            {
                 Ok(c) => c,
                 Err(e) => {
                     last_error = Some(e);
