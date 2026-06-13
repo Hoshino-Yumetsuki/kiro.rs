@@ -5,6 +5,7 @@ WORKDIR /app
 
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock* ./
+COPY build.rs ./
 COPY src ./src
 RUN cargo chef prepare --recipe-path recipe.json
 
@@ -29,6 +30,7 @@ RUN if [ "$ENABLE_SENSITIVE_LOGS" = "true" ]; then \
     fi
 
 COPY Cargo.toml Cargo.lock* ./
+COPY build.rs ./
 COPY src ./src
 COPY --from=frontend-builder /app/admin-ui/dist /app/admin-ui/dist
 
