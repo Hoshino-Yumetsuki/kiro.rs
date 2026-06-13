@@ -44,6 +44,22 @@ where
     }
 }
 
+fn trim_optional_string(s: Option<String>) -> Option<String> {
+    s.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+/// 凭据操作类型（用于错误分类）
+enum CredentialOp {
+    /// 简单操作：set_disabled, set_priority, reset_and_enable 等
+    Simple,
+    /// 余额查询（涉及上游 API 调用）
+    Balance,
+    /// 添加凭据（涉及验证 + Token 刷新）
+    Add,
+    /// 删除凭据
+    Delete,
+}
+
 /// 缓存的余额条目（含时间戳）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedBalance {
@@ -220,14 +236,14 @@ impl AdminService {
     pub fn set_disabled(&self, id: u64, disabled: bool) -> Result<(), AdminServiceError> {
         self.token_manager
             .set_disabled(id, disabled)
-            .map_err(|e| self.classify_error(e, id))
+            .map_err(|e| self.classify_credential_error(e, Some(id), CredentialOp::Simple))
     }
 
     /// 设置凭据优先级
     pub fn set_priority(&self, id: u64, priority: u32) -> Result<(), AdminServiceError> {
         self.token_manager
             .set_priority(id, priority)
-            .map_err(|e| self.classify_error(e, id))
+            .map_err(|e| self.classify_credential_error(e, Some(id), CredentialOp::Simple))
     }
 
     /// 设置凭据 Region
@@ -237,16 +253,11 @@ impl AdminService {
         region: Option<String>,
         api_region: Option<String>,
     ) -> Result<(), AdminServiceError> {
-        // trim 后空字符串转 None
-        let region = region
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-        let api_region = api_region
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+        let region = trim_optional_string(region);
+        let api_region = trim_optional_string(api_region);
         self.token_manager
             .set_region(id, region, api_region)
-            .map_err(|e| self.classify_error(e, id))
+            .map_err(|e| self.classify_credential_error(e, Some(id), CredentialOp::Simple))
     }
 
     /// 设置凭据 endpoint
@@ -255,27 +266,20 @@ impl AdminService {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
-        if let Some(name) = endpoint.as_deref()
-            && !self.known_endpoints.contains(name)
-        {
-            let mut known: Vec<&str> = self.known_endpoints.iter().map(|s| s.as_str()).collect();
-            known.sort_unstable();
-            return Err(AdminServiceError::InvalidCredential(format!(
-                "endpoint 必须是已注册值，已注册: {:?}，收到: {}",
-                known, name
-            )));
+        if let Some(name) = endpoint.as_deref() {
+            self.validate_endpoint(name)?;
         }
 
         self.token_manager
             .set_endpoint(id, endpoint)
-            .map_err(|e| self.classify_error(e, id))
+            .map_err(|e| self.classify_credential_error(e, Some(id), CredentialOp::Simple))
     }
 
     /// 重置失败计数并重新启用
     pub fn reset_and_enable(&self, id: u64) -> Result<(), AdminServiceError> {
         self.token_manager
             .reset_and_enable(id)
-            .map_err(|e| self.classify_error(e, id))
+            .map_err(|e| self.classify_credential_error(e, Some(id), CredentialOp::Simple))
     }
 
     /// 强制刷新指定凭据 Token
@@ -283,7 +287,7 @@ impl AdminService {
         self.token_manager
             .force_refresh_token_for(id)
             .await
-            .map_err(|e| self.classify_error(e, id))
+            .map_err(|e| self.classify_credential_error(e, Some(id), CredentialOp::Simple))
     }
 
     /// 获取凭据余额（带缓存）
@@ -325,7 +329,7 @@ impl AdminService {
             .token_manager
             .get_usage_limits_for(id)
             .await
-            .map_err(|e| self.classify_balance_error(e, id))?;
+            .map_err(|e| self.classify_credential_error(e, Some(id), CredentialOp::Balance))?;
 
         let current_usage = usage.current_usage();
         let usage_limit = usage.usage_limit();
@@ -449,15 +453,8 @@ impl AdminService {
             .endpoint
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
-        if let Some(name) = endpoint.as_deref()
-            && !self.known_endpoints.contains(name)
-        {
-            let mut known: Vec<&str> = self.known_endpoints.iter().map(|s| s.as_str()).collect();
-            known.sort_unstable();
-            return Err(AdminServiceError::InvalidCredential(format!(
-                "endpoint 必须是已注册值，已注册: {:?}，收到: {}",
-                known, name
-            )));
+        if let Some(name) = endpoint.as_deref() {
+            self.validate_endpoint(name)?;
         }
         let new_cred = KiroCredentials {
             id: None,
@@ -488,7 +485,7 @@ impl AdminService {
             .token_manager
             .add_credential(new_cred)
             .await
-            .map_err(|e| self.classify_add_error(e))?;
+            .map_err(|e| self.classify_credential_error(e, None, CredentialOp::Add))?;
 
         if let Err(e) = self.token_manager.get_usage_limits_for(credential_id).await {
             tracing::warn!("添加凭据后获取订阅等级失败（不影响凭据添加）: {}", e);
@@ -506,7 +503,7 @@ impl AdminService {
     pub fn delete_credential(&self, id: u64) -> Result<(), AdminServiceError> {
         self.token_manager
             .delete_credential(id)
-            .map_err(|e| self.classify_delete_error(e, id))?;
+            .map_err(|e| self.classify_credential_error(e, Some(id), CredentialOp::Delete))?;
 
         // 清理已删除凭据的余额缓存
         {
@@ -588,94 +585,92 @@ impl AdminService {
         }
     }
 
-    // ============ 错误分类 ============
-
-    /// 分类简单操作错误（set_disabled, set_priority, reset_and_enable）
-    fn classify_error(&self, e: anyhow::Error, id: u64) -> AdminServiceError {
-        let msg = e.to_string();
-        if msg.contains("API Key 凭据无需刷新 Token") {
-            AdminServiceError::InvalidCredential(msg)
-        } else if msg.contains("不存在") {
-            AdminServiceError::NotFound { id }
-        } else {
-            AdminServiceError::InternalError(msg)
+    fn validate_endpoint(&self, endpoint: &str) -> Result<(), AdminServiceError> {
+        if !self.known_endpoints.contains(endpoint) {
+            let mut known: Vec<&str> = self.known_endpoints.iter().map(|s| s.as_str()).collect();
+            known.sort_unstable();
+            return Err(AdminServiceError::InvalidCredential(format!(
+                "endpoint 必须是已注册值，已注册: {:?}，收到: {}",
+                known, endpoint
+            )));
         }
+        Ok(())
     }
 
-    /// 分类余额查询错误（可能涉及上游 API 调用）
-    fn classify_balance_error(&self, e: anyhow::Error, id: u64) -> AdminServiceError {
+    // ============ 错误分类 ============
+
+    fn classify_credential_error(
+        &self,
+        e: anyhow::Error,
+        id: Option<u64>,
+        op: CredentialOp,
+    ) -> AdminServiceError {
         let msg = e.to_string();
 
-        // 1. 凭据不存在
-        if msg.contains("不存在") {
+        if let Some(id) = id
+            && msg.contains("不存在")
+        {
             return AdminServiceError::NotFound { id };
         }
 
-        // 2. 上游服务错误特征：HTTP 响应错误或网络错误
-        let is_upstream_error =
-            // HTTP 响应错误（来自 refresh_*_token 的错误消息）
-            msg.contains("凭证已过期或无效") ||
-            msg.contains("权限不足") ||
-            msg.contains("已被限流") ||
-            msg.contains("服务器错误") ||
-            msg.contains("Token 刷新失败") ||
-            msg.contains("暂时不可用") ||
-            // 网络错误（reqwest 错误）
-            msg.contains("error trying to connect") ||
-            msg.contains("connection") ||
-            msg.contains("timeout") ||
-            msg.contains("timed out");
-
-        if is_upstream_error {
-            AdminServiceError::UpstreamError(msg)
-        } else {
-            // 3. 默认归类为内部错误（本地验证失败、配置错误等）
-            // 包括：缺少 refreshToken、refreshToken 已被截断、无法生成 machineId 等
-            AdminServiceError::InternalError(msg)
+        match op {
+            CredentialOp::Simple => {
+                if msg.contains("API Key 凭据无需刷新 Token") {
+                    return AdminServiceError::InvalidCredential(msg);
+                }
+            }
+            CredentialOp::Add => {
+                let is_invalid = msg.contains("缺少 refreshToken")
+                    || msg.contains("refreshToken 为空")
+                    || msg.contains("refreshToken 已被截断")
+                    || msg.contains("缺少 kiroApiKey")
+                    || msg.contains("kiroApiKey 为空")
+                    || msg.contains("API Key 凭据无需刷新 Token")
+                    || msg.contains("凭据已存在")
+                    || msg.contains("refreshToken 或 kiroApiKey 重复")
+                    || msg.contains("凭证已过期或无效")
+                    || msg.contains("认证失败")
+                    || msg.contains("权限不足")
+                    || msg.contains("已被限流");
+                if is_invalid {
+                    return AdminServiceError::InvalidCredential(msg);
+                }
+            }
+            CredentialOp::Delete => {
+                if msg.contains("只能删除已禁用的凭据") || msg.contains("请先禁用凭据")
+                {
+                    return AdminServiceError::InvalidCredential(msg);
+                }
+            }
+            CredentialOp::Balance => {}
         }
-    }
 
-    /// 分类添加凭据错误
-    fn classify_add_error(&self, e: anyhow::Error) -> AdminServiceError {
-        let msg = e.to_string();
+        let is_upstream = match op {
+            CredentialOp::Balance => {
+                msg.contains("凭证已过期或无效")
+                    || msg.contains("权限不足")
+                    || msg.contains("已被限流")
+                    || msg.contains("服务器错误")
+                    || msg.contains("Token 刷新失败")
+                    || msg.contains("暂时不可用")
+                    || msg.contains("error trying to connect")
+                    || msg.contains("connection")
+                    || msg.contains("timeout")
+                    || msg.contains("timed out")
+            }
+            CredentialOp::Add => {
+                msg.contains("error trying to connect")
+                    || msg.contains("connection")
+                    || msg.contains("timeout")
+            }
+            CredentialOp::Simple | CredentialOp::Delete => false,
+        };
 
-        // 凭据验证失败（refreshToken 无效、格式错误等）
-        let is_invalid_credential = msg.contains("缺少 refreshToken")
-            || msg.contains("refreshToken 为空")
-            || msg.contains("refreshToken 已被截断")
-            || msg.contains("缺少 kiroApiKey")
-            || msg.contains("kiroApiKey 为空")
-            || msg.contains("API Key 凭据无需刷新 Token")
-            || msg.contains("凭据已存在")
-            || msg.contains("refreshToken 或 kiroApiKey 重复")
-            || msg.contains("凭证已过期或无效")
-            || msg.contains("认证失败")
-            || msg.contains("权限不足")
-            || msg.contains("已被限流");
-
-        if is_invalid_credential {
-            AdminServiceError::InvalidCredential(msg)
-        } else if msg.contains("error trying to connect")
-            || msg.contains("connection")
-            || msg.contains("timeout")
-        {
-            AdminServiceError::UpstreamError(msg)
-        } else {
-            AdminServiceError::InternalError(msg)
+        if is_upstream {
+            return AdminServiceError::UpstreamError(msg);
         }
-    }
 
-    /// 分类删除凭据错误
-    fn classify_delete_error(&self, e: anyhow::Error, id: u64) -> AdminServiceError {
-        let msg = e.to_string();
-        if msg.contains("不存在") {
-            AdminServiceError::NotFound { id }
-        } else if msg.contains("只能删除已禁用的凭据") || msg.contains("请先禁用凭据")
-        {
-            AdminServiceError::InvalidCredential(msg)
-        } else {
-            AdminServiceError::InternalError(msg)
-        }
+        AdminServiceError::InternalError(msg)
     }
 
     /// 批量导入 token.json
@@ -690,13 +685,14 @@ impl AdminService {
 
         use futures::stream::{self, StreamExt};
 
-        let results: Vec<ImportItemResult> = stream::iter(items.into_iter().enumerate())
-            .map(|(index, item)| async move {
-                self.process_token_json_item(index, item, dry_run).await
-            })
-            .buffer_unordered(10)
-            .collect()
-            .await;
+        let results: Vec<ImportItemResult> =
+            stream::iter(items.into_iter().enumerate())
+                .map(|(index, item)| async move {
+                    self.process_token_json_item(index, item, dry_run).await
+                })
+                .buffer_unordered(10)
+                .collect()
+                .await;
 
         // buffer_unordered returns items as they complete; restore request order.
         let mut results = results;
@@ -786,14 +782,8 @@ impl AdminService {
         }
 
         // 实际添加凭据（trim + 空字符串转 None，与 set_region 逻辑一致）
-        let region = item
-            .region
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-        let api_region = item
-            .api_region
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+        let region = trim_optional_string(item.region);
+        let api_region = trim_optional_string(item.api_region);
         let new_cred = KiroCredentials {
             id: None,
             access_token: None,
@@ -1113,10 +1103,9 @@ impl AdminService {
 
         // 热更新 Prompt Cache 运行时配置
         if req.prompt_cache_ttl_seconds.is_some() || req.prompt_cache_mode.is_some() {
-            self.prompt_cache_runtime.write().update(
-                req.prompt_cache_ttl_seconds,
-                req.prompt_cache_mode,
-            );
+            self.prompt_cache_runtime
+                .write()
+                .update(req.prompt_cache_ttl_seconds, req.prompt_cache_mode);
         }
 
         // 热更新压缩配置到运行时 Arc<RwLock<CompressionConfig>>
@@ -1199,7 +1188,10 @@ mod tests {
 
         let config = Arc::new(RwLock::new(Config::load(&config_path).unwrap()));
         let compression_config = Arc::new(RwLock::new(CompressionConfig::default()));
-        let prompt_cache_runtime = Arc::new(RwLock::new(PromptCacheRuntime::new(300, PromptCacheMode::Simulated)));
+        let prompt_cache_runtime = Arc::new(RwLock::new(PromptCacheRuntime::new(
+            300,
+            PromptCacheMode::Simulated,
+        )));
 
         let credentials = KiroCredentials::default();
         let tm = Arc::new(
