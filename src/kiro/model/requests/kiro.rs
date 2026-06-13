@@ -13,19 +13,27 @@ use super::conversation::ConversationState;
 /// # 示例
 ///
 /// ```rust
-/// use kiro_rs::kiro::model::requests::{
-///     KiroRequest, ConversationState, CurrentMessage, UserInputMessage, Tool
+/// use kiro_rs::kiro::model::requests::kiro::KiroRequest;
+/// use kiro_rs::kiro::model::requests::conversation::ConversationState;
+///
+/// let state: ConversationState = serde_json::from_str(r#"{
+///     "conversationId": "conv-123",
+///     "agentTaskType": "vibe",
+///     "chatTriggerType": "MANUAL",
+///     "currentMessage": {"userInputMessage": {
+///         "content": "Hello",
+///         "modelId": "claude-sonnet-4.5",
+///         "images": [],
+///         "userInputMessageContext": {}
+///     }},
+///     "history": []
+/// }"#).unwrap();
+/// let request = KiroRequest {
+///     conversation_state: state,
+///     profile_arn: None,
+///     additional_model_request_fields: None,
 /// };
-///
-/// // 创建简单请求
-/// let state = ConversationState::new("conv-123")
-///     .with_agent_task_type("vibe")
-///     .with_current_message(CurrentMessage::new(
-///         UserInputMessage::new("Hello", "claude-3-5-sonnet")
-///     ));
-///
-/// let request = KiroRequest::new(state);
-/// let json = request.to_json().unwrap();
+/// let json = serde_json::to_string(&request).unwrap();
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
