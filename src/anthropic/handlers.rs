@@ -1304,15 +1304,15 @@ async fn post_messages_inner(
     let websearch_cache_profile = cache_enabled.then(|| {
         build_cache_profile(
             prompt_cache.tracker.as_ref(),
-            &payload,
+            payload,
             estimated_input_tokens,
         )
     });
-    if websearch::should_handle_websearch_request(&payload) {
+    if websearch::should_handle_websearch_request(payload) {
         tracing::info!("检测到纯 WebSearch 请求，路由到本地 WebSearch 处理");
         return websearch::handle_websearch_request(
             provider,
-            &payload,
+            payload,
             if cache_enabled {
                 Some(&prompt_cache.tracker)
             } else {
@@ -1325,7 +1325,7 @@ async fn post_messages_inner(
     }
 
     // 混合工具场景：剔除 web_search 后转发上游
-    if websearch::has_web_search_tool(&payload) {
+    if websearch::has_web_search_tool(payload) {
         tracing::info!("检测到混合工具列表中的 web_search，剔除后转发上游");
         websearch::strip_web_search_tools(payload);
     }
@@ -1336,25 +1336,25 @@ async fn post_messages_inner(
         tracing::info!(stripped, "已剔除空 text content block");
     }
 
-    let tag_echo_normalizer = extract_tag_echo_normalizer(&payload);
+    let tag_echo_normalizer = extract_tag_echo_normalizer(payload);
     if tag_echo_normalizer.is_some() {
         tracing::info!("检测到 antml test tag 复读请求，启用响应 tag normalizer");
     }
 
     if let Some(normalizer) = &tag_echo_normalizer {
         tracing::info!("检测到 antml test tag 复读请求，使用本地 tag 结果直接返回");
-        return build_local_text_response(&payload, &normalizer.full_tag, estimated_input_tokens);
+        return build_local_text_response(payload, &normalizer.full_tag, estimated_input_tokens);
     }
 
-    if let Some(answer) = extract_pdf_text_answer(&payload) {
+    if let Some(answer) = extract_pdf_text_answer(payload) {
         tracing::info!("检测到 PDF 纯文本抽取请求，使用本地抽取结果直接返回");
-        return build_local_text_response(&payload, &answer, estimated_input_tokens);
+        return build_local_text_response(payload, &answer, estimated_input_tokens);
     }
 
     let cache_profile = cache_enabled.then(|| {
         build_cache_profile(
             prompt_cache.tracker.as_ref(),
-            &payload,
+            payload,
             estimated_input_tokens,
         )
     });
@@ -1367,7 +1367,7 @@ async fn post_messages_inner(
 
     // 转换请求
     let model_mapper = state.model_mapper.read().clone();
-    let conversion_result = match convert_request(&payload, &compression_config, &model_mapper) {
+    let conversion_result = match convert_request(payload, &compression_config, &model_mapper) {
         Ok(result) => result,
         Err(e) => {
             let (error_type, message) = match &e {
@@ -1409,7 +1409,7 @@ async fn post_messages_inner(
     let tool_name_map = conversion_result.tool_name_map;
 
     // 构建 additionalModelRequestFields（thinking 参数）
-    let additional_model_request_fields = build_additional_model_request_fields(&payload);
+    let additional_model_request_fields = build_additional_model_request_fields(payload);
 
     let mut kiro_request = KiroRequest {
         conversation_state: conversion_result.conversation_state,
