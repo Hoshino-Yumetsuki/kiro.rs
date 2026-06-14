@@ -1,12 +1,10 @@
 //! Token 计算模块
 //!
-//! 提供本地 token 数量估算与远程 count_tokens 回退逻辑。
+//! 提供本地 Claude BPE token 计数与远程 count_tokens 回退逻辑。
 //!
-//! # 本地估算规则
-//! - CJK 字符：约 1.5 字符/token
-//! - 其他非空白字符：约 3.5 字符/token
-//! - 忽略空白字符
-//! - 最终四舍五入
+//! # 本地计数规则
+//! - 优先使用嵌入式 Claude tokenizer 数据进行 BPE 计数
+//! - tokenizer 失败时回退到字符启发式估算
 
 use crate::anthropic::types::{
     CountTokensRequest, CountTokensResponse, Message, SystemMessage, Tool,
@@ -15,6 +13,8 @@ use crate::http_client::{ProxyConfig, build_client};
 use crate::model::config::TlsBackend;
 use parking_lot::RwLock;
 use std::sync::OnceLock;
+use tokenizers::InputSequence;
+use tokenizers::tokenizer::{EncodeInput, Tokenizer};
 
 const TOKENS_PER_TOOL: u64 = 150;
 const TOKENS_PER_MESSAGE: u64 = 0;
@@ -39,6 +39,8 @@ static COUNT_TOKENS_CONFIG: OnceLock<CountTokensConfig> = OnceLock::new();
 
 /// 代理配置的运行时可变存储（热更新时同步刷新）
 static COUNT_TOKENS_PROXY: OnceLock<RwLock<Option<ProxyConfig>>> = OnceLock::new();
+
+static CLAUDE_TOKENIZER: OnceLock<Tokenizer> = OnceLock::new();
 
 /// 初始化 count_tokens 配置
 ///
@@ -84,6 +86,20 @@ fn is_cjk(c: char) -> bool {
 
 /// 计算文本的 token 数量
 pub fn count_tokens(text: &str) -> u64 {
+    if text.is_empty() {
+        return 0;
+    }
+
+    let tokenizer = CLAUDE_TOKENIZER.get_or_init(claude_tokenizer::get_tokenizer);
+    let input = EncodeInput::Single(InputSequence::Raw(text.into()));
+    if let Ok(encoded) = tokenizer.encode(input, false) {
+        return encoded.len() as u64;
+    }
+
+    count_tokens_heuristic(text)
+}
+
+fn count_tokens_heuristic(text: &str) -> u64 {
     if text.is_empty() {
         return 0;
     }

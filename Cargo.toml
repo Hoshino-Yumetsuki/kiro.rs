@@ -23,10 +23,12 @@ serde_json = "1.0.150"
 serde_cbor = "0.11.2"   # CBOR 编解码（Web Portal API）
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tokenizers = "0.20.4"
 anyhow = "1.0.102"
 http = "1.4.1"
 futures = "0.3.32"
 chrono = { version = "0.4.44", features = ["serde"] }
+claude-tokenizer = "0.3.0"
 uuid = { version = "1.23.1", features = ["v1", "v4", "fast-rng"] }
 fastrand = "2.4.1"
 hex = "0.4.3"
