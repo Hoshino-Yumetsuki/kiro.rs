@@ -12,6 +12,7 @@ use crate::anthropic::PromptCacheRuntime;
 use crate::common::utf8::floor_char_boundary;
 use crate::http_client::ProxyConfig;
 use crate::kiro::model::credentials::KiroCredentials;
+use crate::kiro::model::usage_limits::UsageLimitsResponse;
 use crate::kiro::provider::KiroProvider;
 use crate::kiro::token_manager::{CachedBalanceInfo, MultiTokenManager};
 use crate::model::config::{CompressionConfig, Config};
@@ -22,7 +23,8 @@ use super::types::{
     AddCredentialRequest, AddCredentialResponse, BalanceResponse, CachedBalanceItem,
     CachedBalancesResponse, CredentialQueryParams, CredentialStatusItem, CredentialsStatusResponse,
     ImportAction, ImportItemResult, ImportSummary, ImportTokenJsonRequest, ImportTokenJsonResponse,
-    PaginatedCredentialsResponse, ProxyConfigResponse, TokenJsonItem, UpdateProxyConfigRequest,
+    OverageResponse, PaginatedCredentialsResponse, ProxyConfigResponse, TokenJsonItem,
+    UpdateProxyConfigRequest,
 };
 
 /// 余额缓存过期时间（秒），5 分钟
@@ -46,6 +48,29 @@ where
 
 fn trim_optional_string(s: Option<String>) -> Option<String> {
     s.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+fn balance_response_from_usage(id: u64, usage: &UsageLimitsResponse) -> BalanceResponse {
+    let current_usage = usage.current_usage();
+    let usage_limit = usage.usage_limit();
+    let remaining = usage_limit - current_usage;
+    let usage_percentage = if usage_limit > 0.0 {
+        current_usage / usage_limit * 100.0
+    } else {
+        0.0
+    };
+
+    BalanceResponse {
+        id,
+        subscription_title: usage.subscription_title().map(|s| s.to_string()),
+        current_usage,
+        usage_limit,
+        remaining,
+        usage_percentage,
+        next_reset_at: usage.next_date_reset,
+        overage_enabled: usage.overage_enabled(),
+        overage_status: usage.overage_status().map(|status| status.to_string()),
+    }
 }
 
 /// 凭据操作类型（用于错误分类）
@@ -290,6 +315,44 @@ impl AdminService {
             .map_err(|e| self.classify_credential_error(e, Some(id), CredentialOp::Simple))
     }
 
+    /// 设置指定凭据的 Kiro overage 偏好
+    pub async fn set_overage(
+        &self,
+        id: u64,
+        overage_enabled: bool,
+    ) -> Result<OverageResponse, AdminServiceError> {
+        let usage = self
+            .token_manager
+            .set_overage_for(id, overage_enabled)
+            .await
+            .map_err(|e| self.classify_credential_error(e, Some(id), CredentialOp::Balance))?;
+
+        let balance = balance_response_from_usage(id, &usage);
+        {
+            let mut cache = self.balance_cache.lock();
+            cache.insert(
+                id,
+                CachedBalance {
+                    cached_at: Utc::now().timestamp() as f64,
+                    data: balance,
+                },
+            );
+        }
+        self.save_balance_cache();
+
+        Ok(OverageResponse {
+            success: true,
+            message: format!(
+                "凭据 #{} overage 已{}",
+                id,
+                if overage_enabled { "启用" } else { "禁用" }
+            ),
+            id,
+            overage_enabled,
+            overage_status: usage.overage_status().map(|status| status.to_string()),
+        })
+    }
+
     /// 获取凭据余额（带缓存）
     pub async fn get_balance(&self, id: u64) -> Result<BalanceResponse, AdminServiceError> {
         // 先查缓存
@@ -297,7 +360,9 @@ impl AdminService {
             let cache = self.balance_cache.lock();
             if let Some(cached) = cache.get(&id) {
                 let now = Utc::now().timestamp() as f64;
-                if (now - cached.cached_at) < BALANCE_CACHE_TTL_SECS as f64 {
+                if (now - cached.cached_at) < BALANCE_CACHE_TTL_SECS as f64
+                    && cached.data.overage_status.is_some()
+                {
                     tracing::debug!("凭据 #{} 余额命中缓存", id);
                     return Ok(cached.data.clone());
                 }
@@ -331,27 +396,13 @@ impl AdminService {
             .await
             .map_err(|e| self.classify_credential_error(e, Some(id), CredentialOp::Balance))?;
 
-        let current_usage = usage.current_usage();
-        let usage_limit = usage.usage_limit();
-        let remaining = usage_limit - current_usage;
-        let usage_percentage = if usage_limit > 0.0 {
-            current_usage / usage_limit * 100.0
-        } else {
-            0.0
-        };
+        let balance = balance_response_from_usage(id, &usage);
 
         // 更新缓存，使列表页面能显示最新余额
-        self.token_manager.update_balance_cache(id, remaining);
+        self.token_manager
+            .update_balance_cache(id, balance.remaining);
 
-        Ok(BalanceResponse {
-            id,
-            subscription_title: usage.subscription_title().map(|s| s.to_string()),
-            current_usage,
-            usage_limit,
-            remaining,
-            usage_percentage,
-            next_reset_at: usage.next_date_reset,
-        })
+        Ok(balance)
     }
 
     /// 获取所有凭据的缓存余额
@@ -408,6 +459,8 @@ impl AdminService {
                         usage_limit: cached.data.usage_limit,
                         usage_percentage,
                         subscription_title: cached.data.subscription_title.clone(),
+                        overage_enabled: cached.data.overage_enabled,
+                        overage_status: cached.data.overage_status.clone(),
                         cached_at: info.cached_at,
                         ttl_secs: info.ttl_secs,
                     }
@@ -423,6 +476,8 @@ impl AdminService {
                         usage_limit: 0.0,
                         usage_percentage: 0.0,
                         subscription_title: None,
+                        overage_enabled: None,
+                        overage_status: None,
                         cached_at: info.cached_at,
                         ttl_secs: info.ttl_secs,
                     }
@@ -607,6 +662,10 @@ impl AdminService {
         op: CredentialOp,
     ) -> AdminServiceError {
         let msg = e.to_string();
+
+        if msg.contains("profileArn") {
+            return AdminServiceError::InvalidRequest(msg);
+        }
 
         if let Some(id) = id
             && msg.contains("不存在")

@@ -12,7 +12,8 @@ use super::{
         add_credential, delete_credential, force_refresh_token, get_all_credentials,
         get_cached_balances, get_credential_balance, get_global_config, get_proxy_config,
         import_token_json, reset_failure_count, set_credential_disabled, set_credential_endpoint,
-        set_credential_priority, set_credential_region, update_global_config, update_proxy_config,
+        set_credential_overage, set_credential_priority, set_credential_region,
+        update_global_config, update_proxy_config,
     },
     middleware::{AdminState, admin_auth_middleware},
 };
@@ -27,6 +28,7 @@ use super::{
 /// - `POST /credentials/:id/disabled` - 设置凭据禁用状态
 /// - `POST /credentials/:id/priority` - 设置凭据优先级
 /// - `POST /credentials/:id/reset` - 重置失败计数
+/// - `POST /credentials/:id/overage` - 设置凭据 overage 偏好
 /// - `GET /credentials/:id/balance` - 获取凭据余额
 /// - `GET /credentials/balances/cached` - 获取所有凭据的缓存余额
 ///
@@ -49,6 +51,7 @@ pub fn create_admin_router(state: AdminState) -> Router {
         .route("/credentials/{id}/endpoint", post(set_credential_endpoint))
         .route("/credentials/{id}/reset", post(reset_failure_count))
         .route("/credentials/{id}/refresh", post(force_refresh_token))
+        .route("/credentials/{id}/overage", post(set_credential_overage))
         .route("/credentials/{id}/balance", get(get_credential_balance))
         .route("/proxy", get(get_proxy_config).post(update_proxy_config))
         .route(

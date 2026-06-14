@@ -43,6 +43,20 @@ use crate::kiro::model::usage_limits::UsageLimitsResponse;
 use crate::kiro::rate_limiter::{RateLimitConfig, RateLimiter};
 use crate::model::config::Config;
 
+const OVERAGE_STATUS_ENABLED: &str = "ENABLED";
+const OVERAGE_STATUS_DISABLED: &str = "DISABLED";
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListAvailableProfilesResponse {
+    profiles: Vec<AvailableProfile>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AvailableProfile {
+    arn: String,
+}
+
 /// 对 user_id 进行掩码处理，保护隐私
 fn mask_user_id(user_id: Option<&str>) -> String {
     match user_id {
@@ -83,7 +97,7 @@ fn credential_tier(credentials: &KiroCredentials) -> Option<&str> {
 fn tier_matches(credentials: &KiroCredentials, required_tiers: Option<&[String]>) -> bool {
     match (credential_tier(credentials), required_tiers) {
         (_, None) => true,
-        (_, Some(tiers)) if tiers.is_empty() => true,
+        (_, Some([])) => true,
         (None, Some(_)) => true,
         (Some(ct), Some(tiers)) => tiers.iter().any(|t| t == ct),
     }
@@ -547,6 +561,127 @@ pub(crate) async fn get_usage_limits(
         anyhow::anyhow!("JSON 解析失败: {}", e)
     })?;
     Ok(data)
+}
+
+/// Set the upstream Kiro overage preference for a credential.
+pub(crate) async fn set_user_preference_overage(
+    credentials: &KiroCredentials,
+    config: &Config,
+    token: &str,
+    proxy: Option<&ProxyConfig>,
+    enabled: bool,
+) -> anyhow::Result<()> {
+    let machine_id = machine_id::generate_from_credentials(credentials, config);
+    let endpoint = endpoint_for_credentials(credentials, config)?;
+    let ctx = RequestContext {
+        credentials,
+        token,
+        machine_id: &machine_id,
+        config,
+    };
+    let parts = endpoint.set_user_preference_parts(&ctx)?;
+
+    let overage_status = if enabled {
+        OVERAGE_STATUS_ENABLED
+    } else {
+        OVERAGE_STATUS_DISABLED
+    };
+
+    let mut body = serde_json::json!({
+        "overageConfiguration": {
+            "overageStatus": overage_status,
+        },
+    });
+    if let Some(profile_arn) = credentials.profile_arn.as_deref() {
+        body["profileArn"] = serde_json::Value::String(profile_arn.to_string());
+    }
+
+    let client = build_client(proxy, 60, config.tls_backend)?;
+    let mut request = client.post(&parts.url).json(&body);
+    for (name, value) in parts.headers {
+        request = request.header(name, value);
+    }
+
+    let response = request.send().await?;
+    let status = response.status();
+    if !status.is_success() {
+        let body_text = response.text().await.unwrap_or_default();
+        let error_msg = match status.as_u16() {
+            401 => "认证失败，Token 无效或已过期",
+            403 => "权限不足，无法设置 overage",
+            429 => "请求过于频繁，已被限流",
+            500..=599 => "服务器错误，AWS 服务暂时不可用",
+            _ => "设置 overage 失败",
+        };
+        bail!("{}: {} {}", error_msg, status, body_text);
+    }
+
+    Ok(())
+}
+
+async fn fetch_available_profile_arn(
+    credentials: &KiroCredentials,
+    config: &Config,
+    token: &str,
+    proxy: Option<&ProxyConfig>,
+) -> anyhow::Result<Option<String>> {
+    let region = credentials.effective_api_region(config);
+    let host = format!("codewhisperer.{}.amazonaws.com", region);
+    let url = format!("https://{}/ListAvailableProfiles", host);
+    let machine_id = machine_id::generate_from_credentials(credentials, config);
+
+    let client = build_client(proxy, 60, config.tls_backend)?;
+    let response = client
+        .post(url)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header(
+            "x-amz-user-agent",
+            format!(
+                "aws-sdk-js/1.0.0 KiroIDE-{}-{}",
+                config.kiro_version, machine_id
+            ),
+        )
+        .header(
+            "user-agent",
+            format!(
+                "aws-sdk-js/1.0.0 ua/2.1 os/{} lang/js md/nodejs#{} api/codewhisperer#1.0.0 m/N,E KiroIDE-{}-{}",
+                config.system_version, config.node_version, config.kiro_version, machine_id
+            ),
+        )
+        .header("host", host)
+        .header("amz-sdk-invocation-id", uuid::Uuid::new_v4().to_string())
+        .header("amz-sdk-request", "attempt=1; max=1")
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Connection", "close")
+        .json(&serde_json::json!({ "maxResults": 10 }))
+        .send()
+        .await?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body_text = response.text().await.unwrap_or_default();
+        let error_msg = match status.as_u16() {
+            401 => "认证失败，Token 无效或已过期",
+            403 => "权限不足，无法获取 profileArn",
+            429 => "请求过于频繁，已被限流",
+            500..=599 => "服务器错误，AWS 服务暂时不可用",
+            _ => "获取 profileArn 失败",
+        };
+        bail!("{}: {} {}", error_msg, status, body_text);
+    }
+
+    let body_text = response.text().await?;
+    let data: ListAvailableProfilesResponse = serde_json::from_str(&body_text).map_err(|e| {
+        tracing::error!(
+            "ListAvailableProfiles JSON 解析失败: {}，原始响应: {}",
+            e,
+            body_text
+        );
+        anyhow::anyhow!("JSON 解析失败: {}", e)
+    })?;
+
+    Ok(data.profiles.into_iter().next().map(|profile| profile.arn))
 }
 
 // ============================================================================
@@ -2762,6 +2897,141 @@ impl MultiTokenManager {
 
         self.mark_persist_dirty();
         Ok(())
+    }
+
+    /// 设置指定凭据的 Kiro overage 偏好（Admin API）
+    pub async fn set_overage_for(
+        &self,
+        id: u64,
+        enabled: bool,
+    ) -> anyhow::Result<UsageLimitsResponse> {
+        let config = self.config.read().clone();
+        let credentials = {
+            let entries = self.entries.lock();
+            entries
+                .get(&id)
+                .map(|e| e.credentials.clone())
+                .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?
+        };
+
+        let needs_refresh = is_token_expired(&credentials) || is_token_expiring_soon(&credentials);
+        let token =
+            if credentials.is_api_key_credential() {
+                credentials
+                    .kiro_api_key
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("凭据无 kiroApiKey"))?
+            } else if needs_refresh {
+                let refresh_lock = self.refresh_lock_for(id);
+                let _guard = refresh_lock.lock().await;
+                let current_creds = {
+                    let entries = self.entries.lock();
+                    entries
+                        .get(&id)
+                        .map(|e| e.credentials.clone())
+                        .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?
+                };
+
+                if is_token_expired(&current_creds) || is_token_expiring_soon(&current_creds) {
+                    let proxy = self.proxy.read().clone();
+                    let new_creds =
+                        match refresh_token_with_id(&current_creds, &config, proxy.as_ref(), id)
+                            .await
+                        {
+                            Ok(creds) => creds,
+                            Err(err) => {
+                                if is_invalid_grant_error(&err) {
+                                    self.mark_authentication_failed(id);
+                                }
+                                return Err(err);
+                            }
+                        };
+                    {
+                        let mut entries = self.entries.lock();
+                        if let Some(entry) = entries.get_mut(&id) {
+                            let old_credentials = entry.credentials.clone();
+                            entry.credentials = new_creds.clone();
+                            entry.refresh_token_hash = credential_secret_hash(&new_creds);
+                            let mut refresh_token_hashes = self.refresh_token_hashes.lock();
+                            for hash in credential_lookup_hashes(&old_credentials) {
+                                refresh_token_hashes.remove(&hash);
+                            }
+                            refresh_token_hashes.extend(credential_lookup_hashes(&new_creds));
+                        }
+                    }
+                    self.mark_persist_dirty();
+                    new_creds
+                        .access_token
+                        .ok_or_else(|| anyhow::anyhow!("刷新后无 access_token"))?
+                } else {
+                    current_creds
+                        .access_token
+                        .ok_or_else(|| anyhow::anyhow!("凭据无 access_token"))?
+                }
+            } else {
+                credentials
+                    .access_token
+                    .ok_or_else(|| anyhow::anyhow!("凭据无 access_token"))?
+            };
+
+        let credentials = {
+            let entries = self.entries.lock();
+            entries
+                .get(&id)
+                .map(|e| e.credentials.clone())
+                .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?
+        };
+        let proxy = self.proxy.read().clone();
+
+        let credentials = if credentials.profile_arn.is_none() {
+            match fetch_available_profile_arn(&credentials, &config, &token, proxy.as_ref()).await?
+            {
+                Some(profile_arn) => {
+                    let mut updated_credentials = credentials.clone();
+                    updated_credentials.profile_arn = Some(profile_arn);
+                    {
+                        let mut entries = self.entries.lock();
+                        if let Some(entry) = entries.get_mut(&id) {
+                            entry.credentials.profile_arn = updated_credentials.profile_arn.clone();
+                        }
+                    }
+                    self.mark_persist_dirty();
+                    updated_credentials
+                }
+                None => credentials,
+            }
+        } else {
+            credentials
+        };
+
+        set_user_preference_overage(&credentials, &config, &token, proxy.as_ref(), enabled).await?;
+
+        let mut last_usage = None;
+        for attempt in 0..4 {
+            let usage = get_usage_limits(&credentials, &config, &token, proxy.as_ref()).await?;
+            if usage.overage_enabled() == Some(enabled) {
+                self.update_balance_cache(id, usage.usage_limit() - usage.current_usage());
+                return Ok(usage);
+            }
+            last_usage = Some(usage);
+            if attempt < 3 {
+                tokio::time::sleep(StdDuration::from_secs(3)).await;
+            }
+        }
+
+        let observed = last_usage
+            .as_ref()
+            .and_then(UsageLimitsResponse::overage_status)
+            .unwrap_or("unknown");
+        bail!(
+            "overage 设置已提交，但确认失败：期望 {}，实际 {}",
+            if enabled {
+                OVERAGE_STATUS_ENABLED
+            } else {
+                OVERAGE_STATUS_DISABLED
+            },
+            observed
+        );
     }
 
     /// 获取指定凭据的使用额度（Admin API）

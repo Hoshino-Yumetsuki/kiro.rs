@@ -10,8 +10,8 @@ use super::{
     middleware::AdminState,
     types::{
         AddCredentialRequest, CredentialQueryParams, ImportTokenJsonRequest, SetDisabledRequest,
-        SetEndpointRequest, SetPriorityRequest, SetRegionRequest, SuccessResponse,
-        UpdateProxyConfigRequest,
+        SetEndpointRequest, SetOverageRequest, SetPriorityRequest, SetRegionRequest,
+        SuccessResponse, UpdateProxyConfigRequest,
     },
 };
 
@@ -122,6 +122,19 @@ pub async fn force_refresh_token(
             id
         )))
         .into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// POST /api/admin/credentials/:id/overage
+/// 设置指定凭据的 overage 偏好
+pub async fn set_credential_overage(
+    State(state): State<AdminState>,
+    Path(id): Path<u64>,
+    Json(payload): Json<SetOverageRequest>,
+) -> impl IntoResponse {
+    match state.service.set_overage(id, payload.overage_enabled).await {
+        Ok(response) => Json(response).into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
 }

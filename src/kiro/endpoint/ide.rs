@@ -186,4 +186,49 @@ impl KiroEndpoint for IdeEndpoint {
 
         Ok(UsageRequestParts { url, headers })
     }
+
+    fn set_user_preference_parts(
+        &self,
+        ctx: &RequestContext<'_>,
+    ) -> anyhow::Result<UsageRequestParts> {
+        let host = self.host(ctx);
+        let url = format!("https://{}/setUserPreference", host);
+
+        let mut headers = vec![
+            ("Accept", "application/json".to_string()),
+            ("Content-Type", "application/json".to_string()),
+            (
+                "x-amz-target",
+                "AmazonCodeWhispererService.SetUserPreference".to_string(),
+            ),
+            (
+                "x-amz-user-agent",
+                format!(
+                    "aws-sdk-js/1.0.0 KiroIDE-{}-{}",
+                    ctx.config.kiro_version, ctx.machine_id
+                ),
+            ),
+            (
+                "user-agent",
+                format!(
+                    "aws-sdk-js/1.0.0 ua/2.1 os/{} lang/js md/nodejs#{} api/codewhispererruntime#1.0.0 m/N,E KiroIDE-{}-{}",
+                    ctx.config.system_version,
+                    ctx.config.node_version,
+                    ctx.config.kiro_version,
+                    ctx.machine_id
+                ),
+            ),
+            ("host", host),
+            ("amz-sdk-invocation-id", Uuid::new_v4().to_string()),
+            ("amz-sdk-request", "attempt=1; max=1".to_string()),
+            ("Authorization", format!("Bearer {}", ctx.token)),
+            ("Connection", "close".to_string()),
+        ];
+
+        if ctx.credentials.is_api_key_credential() {
+            headers.push(("tokentype", "API_KEY".to_string()));
+        }
+
+        Ok(UsageRequestParts { url, headers })
+    }
 }

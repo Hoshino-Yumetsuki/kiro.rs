@@ -187,4 +187,34 @@ impl KiroEndpoint for CliEndpoint {
 
         Ok(UsageRequestParts { url, headers })
     }
+
+    fn set_user_preference_parts(
+        &self,
+        ctx: &RequestContext<'_>,
+    ) -> anyhow::Result<UsageRequestParts> {
+        let host = self.host(ctx);
+        let url = format!("https://{}/setUserPreference", host);
+
+        let mut headers = vec![
+            ("Accept", "application/json".to_string()),
+            ("Content-Type", "application/json".to_string()),
+            (
+                "x-amz-target",
+                "AmazonCodeWhispererService.SetUserPreference".to_string(),
+            ),
+            ("x-amz-user-agent", self.runtime_x_amz_user_agent()),
+            ("user-agent", self.runtime_user_agent()),
+            ("host", host),
+            ("amz-sdk-invocation-id", Uuid::new_v4().to_string()),
+            ("amz-sdk-request", "attempt=1; max=1".to_string()),
+            ("Authorization", format!("Bearer {}", ctx.token)),
+            ("Connection", "close".to_string()),
+        ];
+
+        if ctx.credentials.is_api_key_credential() {
+            headers.push(("tokentype", "API_KEY".to_string()));
+        }
+
+        Ok(UsageRequestParts { url, headers })
+    }
 }

@@ -9,6 +9,7 @@ import {
   setCredentialEndpoint,
   resetCredentialFailure,
   forceRefreshToken,
+  setCredentialOverage,
   getCredentialBalance,
   getCachedBalances,
   addCredential,
@@ -18,7 +19,7 @@ import {
   getGlobalConfig,
   updateGlobalConfig,
 } from '@/api/credentials'
-import type { AddCredentialRequest, ImportTokenJsonRequest, UpdateGlobalConfigRequest } from '@/types/api'
+import type { AddCredentialRequest, BalanceResponse, ImportTokenJsonRequest, UpdateGlobalConfigRequest } from '@/types/api'
 
 // 查询凭据列表
 export function useCredentials() {
@@ -37,6 +38,29 @@ export function useForceRefreshToken() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['credentials'] })
       queryClient.invalidateQueries({ queryKey: ['cached-balances'] })
+    },
+  })
+}
+
+// 设置凭据 overage 状态
+export function useSetOverage() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, overageEnabled }: { id: number; overageEnabled: boolean }) =>
+      setCredentialOverage(id, overageEnabled),
+    onSuccess: (res, { id }) => {
+      queryClient.setQueryData<BalanceResponse>(['credential-balance', id], (previous) => (
+        previous
+          ? {
+              ...previous,
+              overageEnabled: res.overageEnabled,
+              overageStatus: res.overageStatus,
+            }
+          : previous
+      ))
+      queryClient.invalidateQueries({ queryKey: ['credential-balance', id] })
+      queryClient.invalidateQueries({ queryKey: ['cached-balances'] })
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
     },
   })
 }

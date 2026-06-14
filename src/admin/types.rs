@@ -139,6 +139,14 @@ pub struct SetEndpointRequest {
     pub endpoint: Option<String>,
 }
 
+/// 修改 overage 偏好请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetOverageRequest {
+    /// 是否启用 overage
+    pub overage_enabled: bool,
+}
+
 /// 添加凭据请求
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -227,6 +235,23 @@ pub struct BalanceResponse {
     pub usage_percentage: f64,
     /// 下次重置时间（Unix 时间戳）
     pub next_reset_at: Option<f64>,
+    /// Overage 是否启用
+    #[serde(default)]
+    pub overage_enabled: Option<bool>,
+    /// 原始 overage 状态（ENABLED / DISABLED）
+    #[serde(default)]
+    pub overage_status: Option<String>,
+}
+
+/// Overage 设置响应
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverageResponse {
+    pub success: bool,
+    pub message: String,
+    pub id: u64,
+    pub overage_enabled: bool,
+    pub overage_status: Option<String>,
 }
 
 /// 缓存余额信息
@@ -246,6 +271,12 @@ pub struct CachedBalanceItem {
     pub usage_percentage: f64,
     /// 订阅类型
     pub subscription_title: Option<String>,
+    /// Overage 是否启用
+    #[serde(default)]
+    pub overage_enabled: Option<bool>,
+    /// 原始 overage 状态（ENABLED / DISABLED）
+    #[serde(default)]
+    pub overage_status: Option<String>,
     /// 缓存时间（Unix 毫秒时间戳）
     pub cached_at: u64,
     /// 缓存存活时间（秒），缓存过期时间 = cached_at + ttl_secs * 1000

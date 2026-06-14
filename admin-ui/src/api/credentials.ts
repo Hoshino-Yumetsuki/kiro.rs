@@ -5,7 +5,9 @@ import type {
   BalanceResponse,
   CachedBalancesResponse,
   SuccessResponse,
+  OverageResponse,
   SetDisabledRequest,
+  SetOverageRequest,
   SetPriorityRequest,
   SetEndpointRequest,
   AddCredentialRequest,
@@ -105,6 +107,20 @@ export async function setCredentialEndpoint(
 // 强制刷新 Token
 export async function forceRefreshToken(id: number, signal?: AbortSignal): Promise<SuccessResponse> {
   const { data } = await api.post<SuccessResponse>(`/credentials/${id}/refresh`, undefined, { signal })
+  return data
+}
+
+// 设置凭据 overage 状态
+export async function setCredentialOverage(
+  id: number,
+  overageEnabled: boolean,
+  signal?: AbortSignal
+): Promise<OverageResponse> {
+  const { data } = await api.post<OverageResponse>(
+    `/credentials/${id}/overage`,
+    { overageEnabled } as SetOverageRequest,
+    { signal }
+  )
   return data
 }
 

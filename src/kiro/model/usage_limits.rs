@@ -2,7 +2,7 @@
 //!
 //! 包含 getUsageLimits API 的响应类型定义
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// 使用额度查询响应
 #[derive(Debug, Clone, Deserialize)]
@@ -20,6 +20,18 @@ pub struct UsageLimitsResponse {
     /// 使用量明细列表
     #[serde(default)]
     pub usage_breakdown_list: Vec<UsageBreakdown>,
+
+    /// Overage billing configuration
+    #[serde(default)]
+    pub overage_configuration: Option<OverageConfiguration>,
+}
+
+/// Overage billing configuration from getUsageLimits.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverageConfiguration {
+    #[serde(default)]
+    pub overage_status: Option<String>,
 }
 
 /// 订阅信息
@@ -211,5 +223,16 @@ impl UsageLimitsResponse {
         }
 
         total
+    }
+
+    pub fn overage_status(&self) -> Option<&str> {
+        self.overage_configuration
+            .as_ref()
+            .and_then(|config| config.overage_status.as_deref())
+    }
+
+    pub fn overage_enabled(&self) -> Option<bool> {
+        self.overage_status()
+            .map(|status| status.eq_ignore_ascii_case("ENABLED"))
     }
 }

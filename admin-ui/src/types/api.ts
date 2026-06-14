@@ -58,6 +58,20 @@ export interface BalanceResponse {
   remaining: number
   usagePercentage: number
   nextResetAt: number | null
+  overageEnabled?: boolean | null
+  overageStatus?: string | null
+}
+
+export interface SetOverageRequest {
+  overageEnabled: boolean
+}
+
+export interface OverageResponse {
+  success: boolean
+  message: string
+  id: number
+  overageEnabled: boolean
+  overageStatus?: string | null
 }
 
 // 缓存余额信息
@@ -68,6 +82,8 @@ export interface CachedBalanceInfo {
   usageLimit: number
   usagePercentage: number
   subscriptionTitle: string | null
+  overageEnabled?: boolean | null
+  overageStatus?: string | null
   cachedAt: number // Unix 毫秒时间戳
   ttlSecs: number
 }
