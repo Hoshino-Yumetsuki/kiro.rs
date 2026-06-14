@@ -425,18 +425,77 @@ pub struct CountTokensResponse {
     pub input_tokens: i32,
 }
 
-/// 根据模型名称获取上下文窗口大小
-///
-/// - Opus 4.6 和 Sonnet 4.6 系列: 1,000,000 tokens
-/// - 其他模型: 200,000 tokens
+/// 根据模型名称获取 Kiro 文档中的上下文窗口大小。
 pub fn get_context_window_size(model: &str) -> i32 {
     let model_lower = model.to_lowercase();
-    if (model_lower.contains("opus") || model_lower.contains("sonnet"))
+
+    if model_lower.contains("deepseek-3-2") || model_lower.contains("deepseek-3.2") {
+        return 128_000;
+    }
+    if model_lower.contains("qwen3-coder-next") {
+        return 256_000;
+    }
+
+    if model_lower.contains("opus") {
+        if model_lower.contains("3-")
+            || model_lower.contains("3.")
+            || model_lower.contains("4-5")
+            || model_lower.contains("4.5")
+        {
+            return 200_000;
+        }
+        return 1_000_000;
+    }
+
+    if model_lower.contains("sonnet")
         && (model_lower.contains("4-6") || model_lower.contains("4.6"))
     {
-        1_000_000
+        return 1_000_000;
+    }
+
+    200_000
+}
+
+/// 从 Kiro `contextUsageEvent.contextUsagePercentage` 推断输入 token。
+///
+/// 该事件只给百分比，不给真实 token 数；优先使用本地请求估算值，避免将上游的
+/// 上下文窗口占比当成精确 usage 而向下游报告过高或过低的输入量。只有本地估算
+/// 不可用时，才按文档窗口把百分比转换为 fallback 值，并扣除 Kiro 注入的固定上下文、
+/// 归一化 Kiro context 口径与本地 usage 口径之间的比例差异。
+pub fn infer_context_input_tokens(
+    model: &str,
+    context_usage_percentage: f64,
+    local_estimate: i32,
+) -> i32 {
+    if local_estimate > 0 {
+        return local_estimate;
+    }
+
+    let context_window = get_context_window_size(model) as f64;
+    let bounded_percentage = if context_usage_percentage.is_finite() {
+        context_usage_percentage.clamp(0.0, 100.0)
     } else {
-        200_000
+        0.0
+    };
+
+    let inferred = (bounded_percentage * context_window / 100.0).round() as i32;
+    let adjusted = inferred.saturating_sub(kiro_context_overhead_tokens(model)) as f64;
+    ((adjusted / kiro_context_scale_factor(model)).round() as i32).max(0)
+}
+
+fn kiro_context_overhead_tokens(model: &str) -> i32 {
+    match get_context_window_size(model) {
+        1_000_000 => 6_363,
+        256_000 | 200_000 => 1_300,
+        128_000 => 800,
+        window => ((window as f64) * 0.0064).round() as i32,
+    }
+}
+
+fn kiro_context_scale_factor(model: &str) -> f64 {
+    match get_context_window_size(model) {
+        1_000_000 => 2.2,
+        _ => 1.0,
     }
 }
 
@@ -500,5 +559,87 @@ mod tests {
         assert!(!body["request_id"].as_str().unwrap().is_empty());
         assert_eq!(body["error"]["type"], "invalid_request_error");
         assert_eq!(body["error"]["message"], "test message");
+    }
+
+    #[test]
+    fn context_window_size_matches_kiro_models_docs() {
+        assert_eq!(get_context_window_size("claude-opus-4-8"), 1_000_000);
+        assert_eq!(get_context_window_size("claude-opus-4.8"), 1_000_000);
+        assert_eq!(
+            get_context_window_size("claude-opus-4-8-20260612"),
+            1_000_000
+        );
+        assert_eq!(get_context_window_size("claude-opus-4-7"), 1_000_000);
+        assert_eq!(get_context_window_size("claude-opus-4.7"), 1_000_000);
+        assert_eq!(get_context_window_size("claude-opus-4-6"), 1_000_000);
+        assert_eq!(get_context_window_size("claude-opus-4.6"), 1_000_000);
+        assert_eq!(get_context_window_size("claude-opus-4-20250514"), 1_000_000);
+        assert_eq!(get_context_window_size("claude-opus-4-5-20251101"), 200_000);
+        assert_eq!(get_context_window_size("claude-3-opus-20240229"), 200_000);
+        assert_eq!(get_context_window_size("claude-sonnet-4-6"), 1_000_000);
+        assert_eq!(
+            get_context_window_size("claude-sonnet-4-5-20250929"),
+            200_000
+        );
+        assert_eq!(get_context_window_size("deepseek-3-2"), 128_000);
+        assert_eq!(get_context_window_size("qwen3-coder-next"), 256_000);
+    }
+
+    #[test]
+    fn context_usage_inference_prefers_local_estimate_when_available() {
+        assert_eq!(
+            infer_context_input_tokens("claude-opus-4-8", 50.0, 180_000),
+            180_000
+        );
+        assert_eq!(
+            infer_context_input_tokens("claude-opus-4-8", 5.0, 180_000),
+            180_000
+        );
+        assert_eq!(
+            infer_context_input_tokens("claude-opus-4-8", 300.0, 180_000),
+            180_000
+        );
+        assert_eq!(
+            infer_context_input_tokens("claude-opus-4-8", -10.0, 180_000),
+            180_000
+        );
+        assert_eq!(
+            infer_context_input_tokens("claude-opus-4-8", f64::NAN, 180_000),
+            180_000
+        );
+    }
+
+    #[test]
+    fn context_usage_inference_falls_back_to_bounded_percentage_without_local_estimate() {
+        assert_eq!(
+            infer_context_input_tokens("claude-opus-4-8", 5.0, 0),
+            19_835
+        );
+        assert_eq!(
+            infer_context_input_tokens("claude-opus-4-8", 300.0, 0),
+            451_653
+        );
+        assert_eq!(infer_context_input_tokens("claude-opus-4-8", -10.0, 0), 0);
+        assert_eq!(
+            infer_context_input_tokens("claude-opus-4-8", f64::NAN, 0),
+            0
+        );
+    }
+
+    #[test]
+    fn context_usage_inference_removes_observed_kiro_prelude_without_local_estimate() {
+        assert_eq!(infer_context_input_tokens("claude-opus-4-8", 0.6392, 0), 13);
+        assert_eq!(
+            infer_context_input_tokens("claude-opus-4-8", 0.7496, 0),
+            515
+        );
+        assert_eq!(
+            infer_context_input_tokens("claude-opus-4-8", 1.1896, 0),
+            2_515
+        );
+        assert_eq!(
+            infer_context_input_tokens("claude-opus-4-8", 7.2396, 0),
+            30_015
+        );
     }
 }

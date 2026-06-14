@@ -16,9 +16,9 @@ pub enum TlsBackend {
 
 /// Prompt Cache 记账模式
 ///
-/// - `Upstream`: 直接采用上游（contextUsageEvent / 未来的 messageMetadataEvent.tokenUsage）
-///   计算的 input_tokens，不输出 cache_creation/cache_read 字段。
-/// - `Simulated`: 在 `Upstream` 总量基础上叠加本地 `CacheTracker` 的 cache 记账，
+/// - `Upstream`: 不输出 cache_creation/cache_read 字段；input_tokens 优先使用本地估算，
+///   本地估算不可用时才使用上游 contextUsageEvent 百分比推断。
+/// - `Simulated`: 在同一 input_tokens 总量基础上叠加本地 `CacheTracker` 的 cache 记账，
 ///   输出 cache_creation/cache_read 以及 5m/1h 拆分。
 /// - `Off`: 不进行 cache 记账；input_tokens 使用本地估算。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]

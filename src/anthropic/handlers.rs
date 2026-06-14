@@ -2040,9 +2040,11 @@ async fn handle_non_stream_request(
                             // 从上下文使用百分比计算实际的 input_tokens
                             let context_window =
                                 super::types::get_context_window_size(context.model) as f64;
-                            let actual_input_tokens =
-                                (context_usage.context_usage_percentage * context_window / 100.0)
-                                    as i32;
+                            let actual_input_tokens = super::types::infer_context_input_tokens(
+                                context.model,
+                                context_usage.context_usage_percentage,
+                                context.input_tokens,
+                            );
                             context_input_tokens = Some(actual_input_tokens);
                             // 上下文使用量达到 100% 时，设置 stop_reason 为 max_tokens
                             if context_usage.context_usage_percentage >= 100.0 {
@@ -2171,7 +2173,8 @@ async fn handle_non_stream_request(
 
     // 按 PromptCacheMode 决定 total input_tokens 的来源：
     // - Off:       仅使用本地估算
-    // - Simulated/Upstream: 优先使用上游 contextUsageEvent (~ 实际值)，无则回退到本地估算
+    // - Simulated/Upstream: 使用已解析的 context_input_tokens；该值优先采用本地估算，
+    //                       本地估算不可用时才回退到上游 contextUsageEvent 百分比推断
     //
     // TODO: 当上游开始发送 messageMetadataEvent.tokenUsage 时，优先使用其计算结果。
     let local_estimate = context.input_tokens;

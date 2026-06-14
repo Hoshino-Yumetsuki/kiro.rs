@@ -1019,8 +1019,11 @@ impl StreamContext {
             Event::ContextUsage(context_usage) => {
                 // 从上下文使用百分比计算实际的 input_tokens
                 let context_window = super::types::get_context_window_size(&self.model) as f64;
-                let actual_input_tokens =
-                    (context_usage.context_usage_percentage * context_window / 100.0) as i32;
+                let actual_input_tokens = super::types::infer_context_input_tokens(
+                    &self.model,
+                    context_usage.context_usage_percentage,
+                    self.input_tokens,
+                );
                 self.context_input_tokens = Some(actual_input_tokens);
                 // 上下文使用量达到 100% 时，设置 stop_reason 为 max_tokens
                 if context_usage.context_usage_percentage >= 100.0 {
@@ -1688,8 +1691,8 @@ impl StreamContext {
             events.extend(self.create_text_delta_events(" "));
         }
 
-        // 始终基于本地估算输入与 cache 统计来生成 usage，
-        // 避免因服务端压缩导致上游 token 统计偏低，使客户端误判上下文大小。
+        // context_input_tokens 由 infer_context_input_tokens 生成：优先采用本地估算，
+        // 本地估算不可用时才回退到上游 contextUsageEvent 百分比推断。
         let upstream_total = self.context_input_tokens.unwrap_or(self.input_tokens);
         let out = self.output_tokens + self.rewrite_extra_output_tokens;
 
