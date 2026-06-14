@@ -812,6 +812,55 @@ mod tests {
     }
 
     #[test]
+    fn context_edit_only_reads_longest_unchanged_prefix() {
+        let tracker = CacheTracker::new(Duration::from_secs(3600));
+        let first_cacheable = long_cacheable_text();
+        let later_cacheable = format!("later-prefix {}", long_cacheable_text());
+
+        let req1 = build_request(vec![
+            msg("user", cache_text(&first_cacheable)),
+            msg(
+                "assistant",
+                serde_json::json!(medium_turn_text("original-middle")),
+            ),
+            msg("user", cache_text(&later_cacheable)),
+            msg("assistant", serde_json::json!("R2")),
+        ]);
+        let total1 = estimate_input_tokens(&req1);
+        let profile1 = tracker.build_profile(&req1, total1);
+        tracker.update(&CacheKey::User("test_user".into()), &profile1);
+
+        let req2 = build_request(vec![
+            msg("user", cache_text(&first_cacheable)),
+            msg(
+                "assistant",
+                serde_json::json!(medium_turn_text("edited-middle")),
+            ),
+            msg("user", cache_text(&later_cacheable)),
+            msg("assistant", serde_json::json!("R2")),
+        ]);
+        let total2 = estimate_input_tokens(&req2);
+        let profile2 = tracker.build_profile(&req2, total2);
+        let result = tracker.compute(&CacheKey::User("test_user".into()), &profile2);
+
+        let cacheable_total = (total2 - 1).max(0);
+        let first_breakpoint_tokens = profile2.blocks[profile2.breakpoints[0].block_index]
+            .cumulative_tokens
+            .min(cacheable_total);
+        let edited_later_breakpoint_tokens = profile2.blocks[profile2.breakpoints[1].block_index]
+            .cumulative_tokens
+            .min(cacheable_total);
+
+        assert_eq!(result.cache_read_input_tokens, first_breakpoint_tokens);
+        assert!(result.cache_read_input_tokens < edited_later_breakpoint_tokens);
+        assert_eq!(
+            result.cache_read_input_tokens + result.cache_creation_input_tokens,
+            cacheable_total
+        );
+        assert!(result.cache_creation_input_tokens > result.cache_read_input_tokens);
+    }
+
+    #[test]
     fn prefix_lookback_limits_to_recent_ten_breakpoints() {
         let tracker = CacheTracker::new(Duration::from_secs(3600));
         let mut messages = Vec::new();
