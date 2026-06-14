@@ -110,6 +110,7 @@ impl CurrentMessage {
 #[serde(rename_all = "camelCase")]
 pub struct UserInputMessage {
     /// 用户输入消息上下文
+    #[serde(default, skip_serializing_if = "is_default_context")]
     pub user_input_message_context: UserInputMessageContext,
     /// 消息内容
     pub content: String,
@@ -359,6 +360,14 @@ mod tests {
         assert_eq!(msg.content, "Hello");
         assert_eq!(msg.model_id, "claude-3-5-sonnet");
         assert_eq!(msg.origin, Some("AI_EDITOR".to_string()));
+    }
+
+    #[test]
+    fn test_user_input_message_omits_empty_context() {
+        let msg = UserInputMessage::new("Hello", "claude-sonnet-4.6");
+        let json = serde_json::to_value(&msg).unwrap();
+
+        assert!(json.get("userInputMessageContext").is_none());
     }
 
     #[test]

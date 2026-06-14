@@ -644,7 +644,14 @@ fn process_message_content(
 
 /// 从 media_type 获取图片格式
 fn get_image_format(media_type: &str) -> Option<String> {
-    match media_type {
+    let media_type = media_type
+        .split(';')
+        .next()
+        .unwrap_or(media_type)
+        .trim()
+        .to_ascii_lowercase();
+
+    match media_type.as_str() {
         "image/jpg" => Some("jpeg".to_string()),
         "image/jpeg" => Some("jpeg".to_string()),
         "image/png" => Some("png".to_string()),
@@ -654,6 +661,50 @@ fn get_image_format(media_type: &str) -> Option<String> {
     }
 }
 
+fn split_base64_data_url(data: &str) -> Option<(&str, &str)> {
+    let (metadata, payload) = data.trim().strip_prefix("data:")?.split_once(',')?;
+    if !metadata
+        .split(';')
+        .any(|part| part.eq_ignore_ascii_case("base64"))
+    {
+        return None;
+    }
+
+    let media_type = metadata.split(';').next().unwrap_or_default().trim();
+    if media_type.is_empty() {
+        return None;
+    }
+
+    Some((media_type, payload.trim()))
+}
+
+fn normalize_image_source(mut source: ImageSource) -> Option<(String, String)> {
+    let data = source.data.trim();
+    let data = if let Some((media_type, payload)) = split_base64_data_url(data) {
+        if source.media_type.trim().is_empty() {
+            source.media_type = media_type.to_string();
+        }
+        payload
+    } else {
+        data
+    };
+
+    let Some(format) = get_image_format(&source.media_type) else {
+        tracing::warn!(
+            media_type = source.media_type,
+            "不支持的图片 media_type，已跳过"
+        );
+        return None;
+    };
+
+    if data.is_empty() {
+        tracing::warn!(media_type = source.media_type, "图片 data 为空，已跳过");
+        return None;
+    }
+
+    Some((format, data.to_string()))
+}
+
 fn append_image_from_source(
     source: ImageSource,
     images: &mut Vec<KiroImage>,
@@ -661,11 +712,7 @@ fn append_image_from_source(
     total_image_count: usize,
     remaining_image_budget: &mut usize,
 ) {
-    let Some(format) = get_image_format(&source.media_type) else {
-        tracing::warn!(
-            media_type = source.media_type,
-            "不支持的图片 media_type，已跳过"
-        );
+    let Some((format, data)) = normalize_image_source(source) else {
         return;
     };
 
@@ -676,7 +723,7 @@ fn append_image_from_source(
             return;
         }
         match process_gif_frames(
-            &source.data,
+            &data,
             compression_config,
             total_image_count,
             *remaining_image_budget,
@@ -706,31 +753,22 @@ fn append_image_from_source(
                     tracing::warn!("图片配额已用尽，跳过 GIF 回退");
                     return;
                 }
-                match process_image_to_format(
-                    &source.data,
-                    "jpeg",
-                    compression_config,
-                    total_image_count,
-                ) {
+                match process_image_to_format(&data, "jpeg", compression_config, total_image_count)
+                {
                     Ok(result) => {
                         images.push(KiroImage::from_base64("jpeg", result.data));
                         *remaining_image_budget -= 1;
                     }
                     Err(e2) => {
                         tracing::warn!("GIF 回退重编码失败，尝试静态 GIF: {}", e2);
-                        match process_image(
-                            &source.data,
-                            &format,
-                            compression_config,
-                            total_image_count,
-                        ) {
+                        match process_image(&data, &format, compression_config, total_image_count) {
                             Ok(result) => {
                                 images.push(KiroImage::from_base64(format, result.data));
                                 *remaining_image_budget -= 1;
                             }
                             Err(e3) => {
                                 tracing::warn!("图片处理失败，使用原始数据: {}", e3);
-                                images.push(KiroImage::from_base64(format, source.data));
+                                images.push(KiroImage::from_base64(format, data));
                                 *remaining_image_budget -= 1;
                             }
                         }
@@ -746,7 +784,7 @@ fn append_image_from_source(
         tracing::warn!("图片配额已用尽，跳过静态图片");
         return;
     }
-    match process_image(&source.data, &format, compression_config, total_image_count) {
+    match process_image(&data, &format, compression_config, total_image_count) {
         Ok(result) => {
             if result.was_resized {
                 tracing::info!(
@@ -761,7 +799,7 @@ fn append_image_from_source(
         }
         Err(e) => {
             tracing::warn!("图片处理失败，使用原始数据: {}", e);
-            images.push(KiroImage::from_base64(format, source.data));
+            images.push(KiroImage::from_base64(format, data));
             *remaining_image_budget -= 1;
         }
     }
@@ -2648,6 +2686,135 @@ mod tests {
             current.content.is_empty(),
             "image/tool_result payload should remain structurally represented without synthetic user text"
         );
+    }
+
+    #[test]
+    fn test_base64_data_url_image_is_stripped_and_media_type_inferred() {
+        use super::super::types::Message as AnthropicMessage;
+
+        let req = MessagesRequest {
+            model: "claude-sonnet-4".to_string(),
+            max_tokens: 128,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "data": "data:image/png;base64,not-valid-image-data"
+                        }
+                    },
+                    {"type": "text", "text": "describe this image"}
+                ]),
+            }],
+            stream: false,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: None,
+        };
+
+        let result = convert_request(
+            &req,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap();
+        let current = &result.conversation_state.current_message.user_input_message;
+
+        assert_eq!(current.images.len(), 1);
+        assert_eq!(current.images[0].format, "png");
+        assert_eq!(current.images[0].source.bytes, "not-valid-image-data");
+    }
+
+    #[test]
+    fn test_image_with_empty_data_is_not_forwarded_to_kiro() {
+        use super::super::types::Message as AnthropicMessage;
+
+        let req = MessagesRequest {
+            model: "claude-sonnet-4".to_string(),
+            max_tokens: 128,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": ""
+                        }
+                    }
+                ]),
+            }],
+            stream: false,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: None,
+        };
+
+        let result = convert_request(
+            &req,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap();
+        let current = &result.conversation_state.current_message.user_input_message;
+
+        assert!(
+            current.images.is_empty(),
+            "empty image bytes must not be sent to Kiro"
+        );
+        assert_eq!(current.content, ".");
+    }
+
+    #[test]
+    fn test_image_media_type_is_case_and_parameter_tolerant() {
+        use super::super::types::Message as AnthropicMessage;
+
+        let req = MessagesRequest {
+            model: "claude-sonnet-4".to_string(),
+            max_tokens: 128,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": " Image/JPEG; charset=binary ",
+                            "data": "not-valid-image-data"
+                        }
+                    },
+                    {"type": "text", "text": "describe this image"}
+                ]),
+            }],
+            stream: false,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: None,
+        };
+
+        let result = convert_request(
+            &req,
+            &CompressionConfig::default(),
+            &super::super::model_mapper::ModelMapper::default(),
+        )
+        .unwrap();
+        let current = &result.conversation_state.current_message.user_input_message;
+
+        assert_eq!(current.images.len(), 1);
+        assert_eq!(current.images[0].format, "jpeg");
+        assert_eq!(current.images[0].source.bytes, "not-valid-image-data");
     }
 
     #[test]
