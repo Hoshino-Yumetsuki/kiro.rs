@@ -1,5 +1,5 @@
 FROM rust:1.93-alpine AS chef
-RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static perl make
+RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static perl make g++
 RUN cargo install cargo-chef
 WORKDIR /app
 
