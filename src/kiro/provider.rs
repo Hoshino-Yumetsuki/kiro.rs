@@ -771,6 +771,22 @@ impl KiroProvider {
 
                 // 403 且非 bearer token 问题：检查是否配置了自动禁用
                 if status.as_u16() == 403 && config.auto_disable_on_forbidden {
+                    // 如果这是最后一个匹配所需等级的凭据，禁止自动禁用，
+                    // 否则下一轮 acquire_context 会因无匹配凭据而返回误导性的 tier_mismatch。
+                    // 常见场景：Pro 凭据超额消费（未达 -10000 下限），上游 403 为临时状态而非凭据失效。
+                    let is_last_matching = required_tiers
+                        .map(|tiers| self.token_manager.available_count_for_tiers(Some(tiers)) <= 1)
+                        .unwrap_or(false);
+
+                    if is_last_matching {
+                        anyhow::bail!(
+                            "{} API 请求失败（上游 403 Forbidden，当前凭据为唯一匹配凭据，已保留）: {} {}",
+                            api_type,
+                            status,
+                            body
+                        );
+                    }
+
                     tracing::warn!(
                         "API 请求失败（上游 403 Forbidden，自动禁用凭据 #{}）: {}",
                         ctx.id,
