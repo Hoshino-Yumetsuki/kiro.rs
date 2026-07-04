@@ -1,4 +1,4 @@
-# kiro.rs
+# Yet Another Client of Kiro
 
 Rust 编写的 Anthropic Claude API 代理服务。将 Anthropic Messages API 请求转换为 Kiro API 请求，支持多凭据管理、自动故障转移、流式响应和可选的 Web 管理界面。
 
