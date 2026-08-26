@@ -208,10 +208,7 @@ async fn main() {
         std::sync::Arc::new(parking_lot::RwLock::new(config.read().rewriter.clone()));
     let model_mapper = std::sync::Arc::new(parking_lot::RwLock::new({
         let config = config.read();
-        anthropic::model_mapper::ModelMapper::from_config(
-            &config.models,
-            &config.supported_tiers,
-        )
+        anthropic::model_mapper::ModelMapper::from_config(&config.models, &config.supported_tiers)
     }));
     let anthropic_app = anthropic::create_router_with_provider(
         &api_key,
