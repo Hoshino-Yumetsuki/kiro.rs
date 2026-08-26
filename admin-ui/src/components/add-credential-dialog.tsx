@@ -1,74 +1,74 @@
-import { useState } from 'react'
-import { toast } from 'sonner'
+import { useState } from "react";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
   DialogFooter,
-} from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { useAddCredential } from '@/hooks/use-credentials'
-import { extractErrorMessage } from '@/lib/utils'
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useAddCredential } from "@/hooks/use-credentials";
+import { extractErrorMessage } from "@/lib/utils";
 
 interface AddCredentialDialogProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }
 
-type AuthMethod = 'social' | 'idc' | 'api_key'
+type AuthMethod = "social" | "idc" | "api_key";
 
 export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogProps) {
-  const [refreshToken, setRefreshToken] = useState('')
-  const [kiroApiKey, setKiroApiKey] = useState('')
-  const [authMethod, setAuthMethod] = useState<AuthMethod>('social')
-  const [region, setRegion] = useState('')
-  const [apiRegion, setApiRegion] = useState('')
-  const [clientId, setClientId] = useState('')
-  const [clientSecret, setClientSecret] = useState('')
-  const [priority, setPriority] = useState('0')
-  const [machineId, setMachineId] = useState('')
-  const [endpoint, setEndpoint] = useState('')
-  const [proxyUrl, setProxyUrl] = useState('')
-  const [proxyUsername, setProxyUsername] = useState('')
-  const [proxyPassword, setProxyPassword] = useState('')
+  const [refreshToken, setRefreshToken] = useState("");
+  const [kiroApiKey, setKiroApiKey] = useState("");
+  const [authMethod, setAuthMethod] = useState<AuthMethod>("social");
+  const [region, setRegion] = useState("");
+  const [apiRegion, setApiRegion] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [priority, setPriority] = useState("0");
+  const [machineId, setMachineId] = useState("");
+  const [endpoint, setEndpoint] = useState("");
+  const [proxyUrl, setProxyUrl] = useState("");
+  const [proxyUsername, setProxyUsername] = useState("");
+  const [proxyPassword, setProxyPassword] = useState("");
 
-  const { mutate, isPending } = useAddCredential()
-  const isApiKey = authMethod === 'api_key'
+  const { mutate, isPending } = useAddCredential();
+  const isApiKey = authMethod === "api_key";
 
   const resetForm = () => {
-    setRefreshToken('')
-    setKiroApiKey('')
-    setAuthMethod('social')
-    setRegion('')
-    setApiRegion('')
-    setClientId('')
-    setClientSecret('')
-    setPriority('0')
-    setMachineId('')
-    setEndpoint('')
-    setProxyUrl('')
-    setProxyUsername('')
-    setProxyPassword('')
-  }
+    setRefreshToken("");
+    setKiroApiKey("");
+    setAuthMethod("social");
+    setRegion("");
+    setApiRegion("");
+    setClientId("");
+    setClientSecret("");
+    setPriority("0");
+    setMachineId("");
+    setEndpoint("");
+    setProxyUrl("");
+    setProxyUsername("");
+    setProxyPassword("");
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
+    e.preventDefault();
 
     if (isApiKey) {
       if (!kiroApiKey.trim()) {
-        toast.error('请输入 Kiro API Key')
-        return
+        toast.error("请输入 Kiro API Key");
+        return;
       }
     } else {
       if (!refreshToken.trim()) {
-        toast.error('请输入 Refresh Token')
-        return
+        toast.error("请输入 Refresh Token");
+        return;
       }
-      if (authMethod === 'idc' && (!clientId.trim() || !clientSecret.trim())) {
-        toast.error('IdC/Builder-ID/IAM 认证需要填写 Client ID 和 Client Secret')
-        return
+      if (authMethod === "idc" && (!clientId.trim() || !clientSecret.trim())) {
+        toast.error("IdC/Builder-ID/IAM 认证需要填写 Client ID 和 Client Secret");
+        return;
       }
     }
 
@@ -90,16 +90,16 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
       },
       {
         onSuccess: (data) => {
-          toast.success(data.message)
-          onOpenChange(false)
-          resetForm()
+          toast.success(data.message);
+          onOpenChange(false);
+          resetForm();
         },
         onError: (error: unknown) => {
-          toast.error(`添加失败: ${extractErrorMessage(error)}`)
+          toast.error(`添加失败: ${extractErrorMessage(error)}`);
         },
-      }
-    )
-  }
+      },
+    );
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -167,7 +167,9 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
               <label className="text-sm font-medium">Region 配置</label>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label htmlFor="region" className="sr-only">Region</label>
+                  <label htmlFor="region" className="sr-only">
+                    Region
+                  </label>
                   <Input
                     id="region"
                     placeholder="Region"
@@ -177,7 +179,9 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
                   />
                 </div>
                 <div>
-                  <label htmlFor="apiRegion" className="sr-only">API Region</label>
+                  <label htmlFor="apiRegion" className="sr-only">
+                    API Region
+                  </label>
                   <Input
                     id="apiRegion"
                     placeholder="API Region（可选覆盖）"
@@ -188,12 +192,13 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
                 </div>
               </div>
               <p className="text-xs text-muted-foreground">
-                Region 用于 Token 刷新，留空使用全局配置。API Region 可单独覆盖 API 请求所用的 Region
+                Region 用于 Token 刷新，留空使用全局配置。API Region 可单独覆盖 API 请求所用的
+                Region
               </p>
             </div>
 
             {/* IdC/Builder-ID/IAM 额外字段 */}
-            {authMethod === 'idc' && !isApiKey && (
+            {authMethod === "idc" && !isApiKey && (
               <>
                 <div className="space-y-2">
                   <label htmlFor="clientId" className="text-sm font-medium">
@@ -237,9 +242,7 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
                 onChange={(e) => setPriority(e.target.value)}
                 disabled={isPending}
               />
-              <p className="text-xs text-muted-foreground">
-                数字越小优先级越高，默认为 0
-              </p>
+              <p className="text-xs text-muted-foreground">数字越小优先级越高，默认为 0</p>
             </div>
 
             {/* Machine ID */}
@@ -275,15 +278,15 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
                 <option value="ide">ide</option>
                 <option value="cli">cli</option>
               </select>
-              <p className="text-xs text-muted-foreground">
-                留空时回退到全局 defaultEndpoint
-              </p>
+              <p className="text-xs text-muted-foreground">留空时回退到全局 defaultEndpoint</p>
             </div>
 
             {/* 代理配置 */}
             <div className="space-y-2">
               <label className="text-sm font-medium">代理配置</label>
-              <label htmlFor="proxyUrl" className="sr-only">代理 URL</label>
+              <label htmlFor="proxyUrl" className="sr-only">
+                代理 URL
+              </label>
               <Input
                 id="proxyUrl"
                 placeholder='代理 URL（留空使用全局配置，"direct" 不使用代理）'
@@ -293,7 +296,9 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
               />
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label htmlFor="proxyUsername" className="sr-only">代理用户名</label>
+                  <label htmlFor="proxyUsername" className="sr-only">
+                    代理用户名
+                  </label>
                   <Input
                     id="proxyUsername"
                     placeholder="代理用户名"
@@ -303,7 +308,9 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
                   />
                 </div>
                 <div>
-                  <label htmlFor="proxyPassword" className="sr-only">代理密码</label>
+                  <label htmlFor="proxyPassword" className="sr-only">
+                    代理密码
+                  </label>
                   <Input
                     id="proxyPassword"
                     type="password"
@@ -330,11 +337,11 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
               取消
             </Button>
             <Button type="submit" disabled={isPending}>
-              {isPending ? `添加中…` : '添加'}
+              {isPending ? `添加中…` : "添加"}
             </Button>
           </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
-  )
+  );
 }

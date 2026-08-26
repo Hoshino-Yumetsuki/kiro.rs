@@ -1,31 +1,37 @@
-import { MoreHorizontal, Pencil, MapPin, Globe, RotateCcw, RefreshCw, Wallet, Trash2, Loader2 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import {
+  MoreHorizontal,
+  Pencil,
+  MapPin,
+  Globe,
+  RotateCcw,
+  RefreshCw,
+  Wallet,
+  Trash2,
+  Loader2,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-} from '@/components/ui/dropdown-menu'
-import {
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-} from '@/components/ui/tooltip'
-import type { CredentialStatusItem } from '@/types/api'
+} from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import type { CredentialStatusItem } from "@/types/api";
 
 export interface CardActionsMenuProps {
-  credential: CredentialStatusItem
-  onResetFailures: () => void
-  onRefreshToken: () => void
-  onViewBalance: () => void
-  onDelete: () => void
-  onEditPriority: () => void
-  onEditRegion: () => void
-  onEditEndpoint: () => void
-  isResetting?: boolean
-  isRefreshing?: boolean
-  isDeleting?: boolean
+  credential: CredentialStatusItem;
+  onResetFailures: () => void;
+  onRefreshToken: () => void;
+  onViewBalance: () => void;
+  onDelete: () => void;
+  onEditPriority: () => void;
+  onEditRegion: () => void;
+  onEditEndpoint: () => void;
+  isResetting?: boolean;
+  isRefreshing?: boolean;
+  isDeleting?: boolean;
 }
 
 /**
@@ -49,9 +55,9 @@ export function CardActionsMenu({
   isRefreshing = false,
   isDeleting = false,
 }: CardActionsMenuProps) {
-  const resetDisabled = credential.failureCount === 0 && credential.refreshFailureCount === 0
-  const refreshDisabled = credential.authMethod === 'api_key'
-  const deleteDisabled = !credential.disabled
+  const resetDisabled = credential.failureCount === 0 && credential.refreshFailureCount === 0;
+  const refreshDisabled = credential.authMethod === "api_key";
+  const deleteDisabled = !credential.disabled;
 
   return (
     <DropdownMenu>
@@ -81,10 +87,7 @@ export function CardActionsMenu({
         <Tooltip open={resetDisabled ? undefined : false}>
           <TooltipTrigger asChild>
             <span tabIndex={resetDisabled ? 0 : undefined}>
-              <DropdownMenuItem
-                onClick={onResetFailures}
-                disabled={resetDisabled || isResetting}
-              >
+              <DropdownMenuItem onClick={onResetFailures} disabled={resetDisabled || isResetting}>
                 {isResetting ? (
                   <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                 ) : (
@@ -94,20 +97,13 @@ export function CardActionsMenu({
               </DropdownMenuItem>
             </span>
           </TooltipTrigger>
-          {resetDisabled && (
-            <TooltipContent side="right">
-              没有失败的记录需要重置
-            </TooltipContent>
-          )}
+          {resetDisabled && <TooltipContent side="right">没有失败的记录需要重置</TooltipContent>}
         </Tooltip>
 
         <Tooltip open={refreshDisabled ? undefined : false}>
           <TooltipTrigger asChild>
             <span tabIndex={refreshDisabled ? 0 : undefined}>
-              <DropdownMenuItem
-                onClick={onRefreshToken}
-                disabled={refreshDisabled || isRefreshing}
-              >
+              <DropdownMenuItem onClick={onRefreshToken} disabled={refreshDisabled || isRefreshing}>
                 {isRefreshing ? (
                   <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                 ) : (
@@ -118,9 +114,7 @@ export function CardActionsMenu({
             </span>
           </TooltipTrigger>
           {refreshDisabled && (
-            <TooltipContent side="right">
-              API Key 凭据不支持刷新 Token
-            </TooltipContent>
+            <TooltipContent side="right">API Key 凭据不支持刷新 Token</TooltipContent>
           )}
         </Tooltip>
 
@@ -149,13 +143,9 @@ export function CardActionsMenu({
               </DropdownMenuItem>
             </span>
           </TooltipTrigger>
-          {deleteDisabled && (
-            <TooltipContent side="right">
-              需要先禁用凭据才能删除
-            </TooltipContent>
-          )}
+          {deleteDisabled && <TooltipContent side="right">需要先禁用凭据才能删除</TooltipContent>}
         </Tooltip>
       </DropdownMenuContent>
     </DropdownMenu>
-  )
+  );
 }
