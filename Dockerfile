@@ -40,7 +40,7 @@ RUN if [ "$ENABLE_SENSITIVE_LOGS" = "true" ]; then \
         cargo build --release; \
     fi
 
-FROM alpine:3.21
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates
 
