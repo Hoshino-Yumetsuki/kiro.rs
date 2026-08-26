@@ -13,8 +13,8 @@ use crate::http_client::{ProxyConfig, build_client};
 use crate::model::config::TlsBackend;
 use parking_lot::RwLock;
 use std::sync::OnceLock;
-use tokenizers::InputSequence;
-use tokenizers::tokenizer::{EncodeInput, Tokenizer};
+use tokenizers_020::InputSequence;
+use tokenizers_020::tokenizer::{EncodeInput, Tokenizer};
 
 const TOKENS_PER_TOOL: u64 = 150;
 const TOKENS_PER_MESSAGE: u64 = 0;
