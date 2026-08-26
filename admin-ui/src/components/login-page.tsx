@@ -1,32 +1,32 @@
-import { useState, useEffect } from 'react'
-import { KeyRound } from 'lucide-react'
-import { storage } from '@/lib/storage'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
-import { Button } from '@/components/ui/button'
+import { useState, useEffect } from "react";
+import { KeyRound } from "lucide-react";
+import { storage } from "@/lib/storage";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 
 interface LoginPageProps {
-  onLogin: (apiKey: string) => void
+  onLogin: (apiKey: string) => void;
 }
 
 export function LoginPage({ onLogin }: LoginPageProps) {
-  const [apiKey, setApiKey] = useState('')
+  const [apiKey, setApiKey] = useState("");
 
   useEffect(() => {
     // 从 storage 读取保存的 API Key
-    const savedKey = storage.getApiKey()
+    const savedKey = storage.getApiKey();
     if (savedKey) {
-      setApiKey(savedKey)
+      setApiKey(savedKey);
     }
-  }, [])
+  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
+    e.preventDefault();
     if (apiKey.trim()) {
-      storage.setApiKey(apiKey.trim())
-      onLogin(apiKey.trim())
+      storage.setApiKey(apiKey.trim());
+      onLogin(apiKey.trim());
     }
-  }
+  };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
@@ -36,14 +36,14 @@ export function LoginPage({ onLogin }: LoginPageProps) {
             <KeyRound className="h-6 w-6 text-primary" />
           </div>
           <CardTitle className="text-2xl">Kiro Admin</CardTitle>
-          <CardDescription>
-            请输入 Admin API Key 以访问管理面板
-          </CardDescription>
+          <CardDescription>请输入 Admin API Key 以访问管理面板</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
-              <label htmlFor="adminApiKey" className="sr-only">Admin API Key</label>
+              <label htmlFor="adminApiKey" className="sr-only">
+                Admin API Key
+              </label>
               <Input
                 id="adminApiKey"
                 type="password"
@@ -62,5 +62,5 @@ export function LoginPage({ onLogin }: LoginPageProps) {
         </CardContent>
       </Card>
     </div>
-  )
+  );
 }
