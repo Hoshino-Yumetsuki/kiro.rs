@@ -1,0 +1,81 @@
+version: 2
+updates:
+  # Rust dependencies (Cargo.toml / Cargo.lock)
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "rust"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      all:
+        patterns:
+          - "*"
+
+  # Frontend dependencies (admin-ui — pnpm)
+  - package-ecosystem: "npm"
+    directory: "/admin-ui"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "frontend"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      all:
+        patterns:
+          - "*"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # Docker base images
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      all:
+        patterns:
+          - "*"
