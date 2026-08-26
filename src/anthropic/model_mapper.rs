@@ -58,7 +58,9 @@ impl ModelMapper {
 
     fn claude_fallback_key(lower: &str) -> Option<&'static str> {
         if lower.contains("sonnet") {
-            if lower.contains("4-6") || lower.contains("4.6") {
+            if lower.contains("sonnet-5") || lower.contains("sonnet 5") {
+                Some("claude-sonnet-5")
+            } else if lower.contains("4-6") || lower.contains("4.6") {
                 Some("claude-sonnet-4-6")
             } else if lower.contains("4-0") || lower.contains("4.0") {
                 Some("claude-sonnet-4-0-20250904")
@@ -66,7 +68,9 @@ impl ModelMapper {
                 Some("claude-sonnet-4-5-20250929")
             }
         } else if lower.contains("opus") {
-            if lower.contains("4-5") || lower.contains("4.5") {
+            if lower.contains("opus-5") || lower.contains("opus 5") {
+                Some("claude-opus-5")
+            } else if lower.contains("4-5") || lower.contains("4.5") {
                 Some("claude-opus-4-5-20251101")
             } else if lower.contains("4-7") || lower.contains("4.7") {
                 Some("claude-opus-4-7")
@@ -187,6 +191,20 @@ pub fn default_models() -> Vec<ModelConfig> {
             tiers: vec!["pro".to_string(), "pro+".to_string()],
         },
         ModelConfig {
+            id: "claude-sonnet-5".to_string(),
+            display_name: "Claude Sonnet 5".to_string(),
+            created_at: 1782777600, // 2026-06-30
+            kiro_model_id: "claude-sonnet-5".to_string(),
+            tiers: vec!["pro".to_string(), "pro+".to_string()],
+        },
+        ModelConfig {
+            id: "claude-opus-5".to_string(),
+            display_name: "Claude Opus 5".to_string(),
+            created_at: 1782777600, // 2026-06-30
+            kiro_model_id: "claude-opus-5".to_string(),
+            tiers: vec!["pro".to_string(), "pro+".to_string()],
+        },
+        ModelConfig {
             id: "claude-haiku-4-5-20251001".to_string(),
             display_name: "Claude Haiku 4.5".to_string(),
             created_at: 1727740800, // 2025-10-01
@@ -279,6 +297,20 @@ mod tests {
             mapper.map_model("claude-sonnet-4.6"),
             Some("claude-sonnet-4.6".to_string())
         );
+        // sonnet-5
+        assert_eq!(
+            mapper.map_model("claude-sonnet-5"),
+            Some("claude-sonnet-5".to_string())
+        );
+        assert_eq!(
+            mapper.map_model("claude-sonnet-5-thinking"),
+            Some("claude-sonnet-5".to_string())
+        );
+        // sonnet-4-5 不应误匹配为 sonnet-5
+        assert_eq!(
+            mapper.map_model("claude-sonnet-4-5-20250929"),
+            Some("claude-sonnet-4.5".to_string())
+        );
         // opus 默认回退到 4.6
         assert_eq!(
             mapper.map_model("claude-opus-4-20250514"),
@@ -293,9 +325,37 @@ mod tests {
             mapper.map_model("claude-opus-4-5-20250514"),
             Some("claude-opus-4.5".to_string())
         );
+        // opus 4.8
+        assert_eq!(
+            mapper.map_model("claude-opus-4-8"),
+            Some("claude-opus-4.8".to_string())
+        );
+        assert_eq!(
+            mapper.map_model("claude-opus-4-8-thinking"),
+            Some("claude-opus-4.8".to_string())
+        );
+        // opus-5
+        assert_eq!(
+            mapper.map_model("claude-opus-5"),
+            Some("claude-opus-5".to_string())
+        );
+        assert_eq!(
+            mapper.map_model("claude-opus-5-thinking"),
+            Some("claude-opus-5".to_string())
+        );
+        // opus-4-5 不应误匹配为 opus-5
+        assert_eq!(
+            mapper.map_model("claude-opus-4-5-20251101"),
+            Some("claude-opus-4.5".to_string())
+        );
         // haiku
         assert_eq!(
             mapper.map_model("claude-haiku-4-20250514"),
+            Some("claude-haiku-4.5".to_string())
+        );
+        // haiku thinking 后缀不应影响映射
+        assert_eq!(
+            mapper.map_model("claude-haiku-4-5-20251001-thinking"),
             Some("claude-haiku-4.5".to_string())
         );
     }
@@ -317,6 +377,8 @@ mod tests {
             ("claude-opus-4-6", "claude-opus-4.6"),
             ("claude-opus-4-7", "claude-opus-4.7"),
             ("claude-opus-4-8", "claude-opus-4.8"),
+            ("claude-sonnet-5", "claude-sonnet-5"),
+            ("claude-opus-5", "claude-opus-5"),
             ("claude-haiku-4-5-20251001", "claude-haiku-4.5"),
         ];
         for (input, expected) in supported_models {
@@ -363,8 +425,8 @@ mod tests {
     #[test]
     fn test_model_infos_count() {
         let mapper = ModelMapper::default();
-        // 8 Claude + 5 non-Claude = 13 models
-        assert_eq!(mapper.model_infos().len(), 13);
+        // 10 Claude + 5 non-Claude = 15 models
+        assert_eq!(mapper.model_infos().len(), 15);
     }
 
     #[test]

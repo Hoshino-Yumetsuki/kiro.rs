@@ -448,7 +448,9 @@ pub fn get_context_window_size(model: &str) -> i32 {
     }
 
     if model_lower.contains("sonnet")
-        && (model_lower.contains("4-6") || model_lower.contains("4.6"))
+        && (model_lower.contains("sonnet-5")
+            || model_lower.contains("4-6")
+            || model_lower.contains("4.6"))
     {
         return 1_000_000;
     }

@@ -29,7 +29,7 @@ use super::stream::{
 };
 use super::types::{
     CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, ModelsResponse,
-    Thinking,
+    OutputConfig, Thinking,
 };
 use super::websearch;
 
@@ -1350,6 +1350,9 @@ async fn post_messages_inner(
         tracing::info!(stripped, "已剔除空 text content block");
     }
 
+    // 模型名包含 thinking 后缀时，覆写 thinking 配置（兼容 upstream 行为）
+    override_thinking_from_model_name(payload);
+
     let tag_echo_normalizer = extract_tag_echo_normalizer(payload);
     if tag_echo_normalizer.is_some() {
         tracing::info!("检测到 antml test tag 复读请求，启用响应 tag normalizer");
@@ -2345,6 +2348,43 @@ fn additional_thinking_config(thinking: &Thinking) -> serde_json::Value {
         config["display"] = serde_json::json!("summarized");
     }
     config
+}
+
+fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
+    let model_lower = payload.model.to_lowercase();
+    if !model_lower.contains("thinking") {
+        return;
+    }
+
+    let is_adaptive_thinking = (model_lower.contains("opus")
+        && (model_lower.contains("4-6") || model_lower.contains("4.6")))
+        || model_lower.contains("sonnet-5")
+        || model_lower.contains("opus-5");
+
+    let thinking_type = if is_adaptive_thinking {
+        "adaptive"
+    } else {
+        "enabled"
+    };
+
+    tracing::info!(
+        model = %payload.model,
+        thinking_type = thinking_type,
+        "模型名包含 thinking 后缀，覆写 thinking 配置"
+    );
+
+    payload.thinking = Some(Thinking {
+        thinking_type: thinking_type.to_string(),
+        budget_tokens: 20000,
+        display: None,
+    });
+
+    if is_adaptive_thinking {
+        payload.output_config = Some(OutputConfig {
+            effort: "high".to_string(),
+            format: None,
+        });
+    }
 }
 ///
 /// 计算消息的 token 数量。
