@@ -1,13 +1,13 @@
-import { Progress } from '@/components/ui/progress'
-import { cn } from '@/lib/utils'
-import { formatKiroCreditAmount } from '@/lib/format'
+import { Progress } from "@/components/ui/progress";
+import { cn } from "@/lib/utils";
+import { formatKiroCreditAmount } from "@/lib/format";
 
 interface BalanceBarProps {
-  remaining: number | null
-  usageLimit: number | null
-  usagePercentage: number | null
-  subscriptionTitle?: string
-  cachedAt?: string
+  remaining: number | null;
+  usageLimit: number | null;
+  usagePercentage: number | null;
+  subscriptionTitle?: string;
+  cachedAt?: string;
 }
 
 export function BalanceBar({
@@ -28,7 +28,7 @@ export function BalanceBar({
           )}
         </div>
       </div>
-    )
+    );
   }
 
   if (remaining === null) {
@@ -44,22 +44,22 @@ export function BalanceBar({
           )}
         </div>
       </div>
-    )
+    );
   }
 
-  const isOverspent = remaining < 0
+  const isOverspent = remaining < 0;
 
   return (
     <div className="space-y-1">
       <Progress
         value={isOverspent ? 100 : (usagePercentage ?? 0)}
-        className={cn(isOverspent && '[&>div]:!bg-destructive')}
+        className={cn(isOverspent && "[&>div]:!bg-destructive")}
       />
       <div className="flex items-center justify-between text-xs">
         <span
           className={cn(
-            'tabular-nums',
-            isOverspent ? 'font-medium text-destructive' : 'text-muted-foreground'
+            "tabular-nums",
+            isOverspent ? "font-medium text-destructive" : "text-muted-foreground",
           )}
         >
           {formatKiroCreditAmount(remaining)} / {formatKiroCreditAmount(usageLimit)} credits
@@ -72,5 +72,5 @@ export function BalanceBar({
         )}
       </div>
     </div>
-  )
+  );
 }

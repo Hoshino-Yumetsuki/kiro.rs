@@ -1,30 +1,30 @@
-import { useEffect, useState } from 'react'
-import { toast } from 'sonner'
-import { Loader2 } from 'lucide-react'
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
+import { Loader2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Button } from '@/components/ui/button'
-import type { CredentialStatusItem } from '@/types/api'
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import type { CredentialStatusItem } from "@/types/api";
 
 interface CredentialEditDialogProps {
-  field: 'priority' | 'region' | 'endpoint' | null
-  credential: CredentialStatusItem
-  onSave: (field: string, value: string | number | Record<string, string | null>) => void
-  onClose: () => void
-  isPending?: boolean
+  field: "priority" | "region" | "endpoint" | null;
+  credential: CredentialStatusItem;
+  onSave: (field: string, value: string | number | Record<string, string | null>) => void;
+  onClose: () => void;
+  isPending?: boolean;
 }
 
-const FIELD_TITLES: Record<NonNullable<CredentialEditDialogProps['field']>, string> = {
-  priority: '编辑优先级',
-  region: '编辑 Region',
-  endpoint: '编辑 Endpoint',
-}
+const FIELD_TITLES: Record<NonNullable<CredentialEditDialogProps["field"]>, string> = {
+  priority: "编辑优先级",
+  region: "编辑 Region",
+  endpoint: "编辑 Endpoint",
+};
 
 export function CredentialEditDialog({
   field,
@@ -33,66 +33,66 @@ export function CredentialEditDialog({
   onClose,
   isPending = false,
 }: CredentialEditDialogProps) {
-  const [priorityValue, setPriorityValue] = useState(String(credential.priority))
-  const [regionValue, setRegionValue] = useState(credential.region ?? '')
-  const [apiRegionValue, setApiRegionValue] = useState(credential.apiRegion ?? '')
-  const [endpointValue, setEndpointValue] = useState(credential.endpoint ?? '')
+  const [priorityValue, setPriorityValue] = useState(String(credential.priority));
+  const [regionValue, setRegionValue] = useState(credential.region ?? "");
+  const [apiRegionValue, setApiRegionValue] = useState(credential.apiRegion ?? "");
+  const [endpointValue, setEndpointValue] = useState(credential.endpoint ?? "");
 
   useEffect(() => {
     if (field) {
-      setPriorityValue(String(credential.priority))
-      setRegionValue(credential.region ?? '')
-      setApiRegionValue(credential.apiRegion ?? '')
-      setEndpointValue(credential.endpoint ?? '')
+      setPriorityValue(String(credential.priority));
+      setRegionValue(credential.region ?? "");
+      setApiRegionValue(credential.apiRegion ?? "");
+      setEndpointValue(credential.endpoint ?? "");
     }
-  }, [field, credential])
+  }, [field, credential]);
 
   const handleSave = () => {
-    if (!field) return
+    if (!field) return;
     switch (field) {
-      case 'priority': {
-        const parsed = parseFloat(priorityValue)
+      case "priority": {
+        const parsed = parseFloat(priorityValue);
         if (isNaN(parsed) || parsed < 0) {
-          toast.error('优先级必须是非负数')
-          return
+          toast.error("优先级必须是非负数");
+          return;
         }
-        onSave('priority', parsed)
-        break
+        onSave("priority", parsed);
+        break;
       }
-      case 'region': {
-        onSave('region', {
+      case "region": {
+        onSave("region", {
           region: regionValue.trim() || null,
           apiRegion: apiRegionValue.trim() || null,
-        })
-        break
+        });
+        break;
       }
-      case 'endpoint': {
-        const trimmed = endpointValue.trim()
+      case "endpoint": {
+        const trimmed = endpointValue.trim();
         if (!trimmed) {
-          toast.error('Endpoint 不能为空')
-          return
+          toast.error("Endpoint 不能为空");
+          return;
         }
-        onSave('endpoint', trimmed)
-        break
+        onSave("endpoint", trimmed);
+        break;
       }
     }
-  }
+  };
 
   const handleOpenChange = (open: boolean) => {
-    if (!open) onClose()
-  }
+    if (!open) onClose();
+  };
 
-  const isOpen = field !== null
+  const isOpen = field !== null;
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{field ? FIELD_TITLES[field] : ''}</DialogTitle>
+          <DialogTitle>{field ? FIELD_TITLES[field] : ""}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-3">
-          {field === 'priority' && (
+          {field === "priority" && (
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">优先级</label>
               <Input
@@ -108,7 +108,7 @@ export function CredentialEditDialog({
             </div>
           )}
 
-          {field === 'region' && (
+          {field === "region" && (
             <div className="space-y-2">
               <div>
                 <label className="text-xs text-muted-foreground mb-1 block">Auth Region</label>
@@ -132,7 +132,7 @@ export function CredentialEditDialog({
             </div>
           )}
 
-          {field === 'endpoint' && (
+          {field === "endpoint" && (
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Endpoint</label>
               <Input
@@ -147,22 +147,15 @@ export function CredentialEditDialog({
         </div>
 
         <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={onClose}
-            disabled={isPending}
-          >
+          <Button variant="outline" onClick={onClose} disabled={isPending}>
             取消
           </Button>
-          <Button
-            onClick={handleSave}
-            disabled={isPending}
-          >
+          <Button onClick={handleSave} disabled={isPending}>
             {isPending && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
             保存
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
+  );
 }

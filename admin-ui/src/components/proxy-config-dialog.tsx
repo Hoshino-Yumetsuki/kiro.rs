@@ -1,55 +1,55 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
   DialogFooter,
-} from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { useProxyConfig, useUpdateProxyConfig } from '@/hooks/use-credentials'
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useProxyConfig, useUpdateProxyConfig } from "@/hooks/use-credentials";
 
 interface ProxyConfigDialogProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }
 
 export function ProxyConfigDialog({ open, onOpenChange }: ProxyConfigDialogProps) {
-  const { data: config, isLoading } = useProxyConfig()
-  const { mutate, isPending } = useUpdateProxyConfig()
+  const { data: config, isLoading } = useProxyConfig();
+  const { mutate, isPending } = useUpdateProxyConfig();
 
-  const [proxyUrl, setProxyUrl] = useState('')
-  const [proxyUsername, setProxyUsername] = useState('')
-  const [proxyPassword, setProxyPassword] = useState('')
+  const [proxyUrl, setProxyUrl] = useState("");
+  const [proxyUsername, setProxyUsername] = useState("");
+  const [proxyPassword, setProxyPassword] = useState("");
 
   // 当配置加载完成或对话框打开时，同步表单状态
   useEffect(() => {
     if (open && config) {
-      setProxyUrl(config.proxyUrl || '')
-      setProxyUsername('')
-      setProxyPassword('')
+      setProxyUrl(config.proxyUrl || "");
+      setProxyUsername("");
+      setProxyPassword("");
     }
-  }, [open, config])
+  }, [open, config]);
 
   const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
+    e.preventDefault();
 
     const payload: Record<string, string | null> = {
       proxyUrl: proxyUrl.trim() || null,
-    }
+    };
     // 仅当用户填写了认证信息时才发送，留空则保留后端现有认证
     if (proxyUsername.trim() || proxyPassword.trim()) {
-      payload.proxyUsername = proxyUsername.trim() || null
-      payload.proxyPassword = proxyPassword.trim() || null
+      payload.proxyUsername = proxyUsername.trim() || null;
+      payload.proxyPassword = proxyPassword.trim() || null;
     }
 
     mutate(payload, {
       onSuccess: () => {
-        onOpenChange(false)
+        onOpenChange(false);
       },
-    })
-  }
+    });
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -114,12 +114,12 @@ export function ProxyConfigDialog({ open, onOpenChange }: ProxyConfigDialogProps
                 取消
               </Button>
               <Button type="submit" disabled={isPending}>
-                {isPending ? `保存中…` : '保存'}
+                {isPending ? `保存中…` : "保存"}
               </Button>
             </DialogFooter>
           </form>
         )}
       </DialogContent>
     </Dialog>
-  )
+  );
 }
