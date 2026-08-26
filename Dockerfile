@@ -1,4 +1,4 @@
-FROM rust:1.93-alpine AS chef
+FROM rust:1.98-alpine AS chef
 RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static perl make g++
 RUN cargo install cargo-chef
 WORKDIR /app
@@ -9,7 +9,7 @@ COPY build.rs ./
 COPY src ./src
 RUN cargo chef prepare --recipe-path recipe.json
 
-FROM node:22-alpine AS frontend-builder
+FROM node:26-alpine AS frontend-builder
 WORKDIR /app/admin-ui
 COPY admin-ui/package.json admin-ui/pnpm-lock.yaml admin-ui/.npmrc admin-ui/pnpm-workspace.yaml ./
 RUN npm install -g pnpm
@@ -40,7 +40,7 @@ RUN if [ "$ENABLE_SENSITIVE_LOGS" = "true" ]; then \
         cargo build --release; \
     fi
 
-FROM alpine:3.21
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates
 
