@@ -1896,9 +1896,9 @@ dependencies = [
 
 [[package]]
 name = "oxidize-pdf"
-version = "5.5.0"
+version = "5.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b10d71fadd841b51fc1f7549d946831afc56ec1fa5de7fcaf3c100a134bed9a8"
+checksum = "360fa623da3712364af5cdf81645987edab40cb3f1fb2cce50eac1168534fc8d"
 dependencies = [
  "aes",
  "bitflags",
@@ -3329,9 +3329,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.28.0"
+version = "1.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cc1186384beb7dd8eedea376413fd654937285ea6c9cfbb928dc3043ea4b606"
+checksum = "4a0e2d11620c50695fe12bbbfde96b3477fe606e7284c22d505c12ce51214514"
 dependencies = [
  "atomic",
  "getrandom 0.4.3",
